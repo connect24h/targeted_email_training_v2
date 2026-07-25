@@ -1,0 +1,11 @@
+[Unit]
+Description=TET v2 Report Ingest timer (every 5 minutes)
+
+[Timer]
+# 起動2分後に初回、以降5分毎。訓練中の反応を準リアルタイムで反映する。
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

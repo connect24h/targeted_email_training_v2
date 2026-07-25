@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TET v2 — 標的型メール訓練システム</title>
+  <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
+  <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
+  <link href="assets/app.css" rel="stylesheet">
+</head>
+<body>
+
+<!-- ========== ログイン画面 ========== -->
+<div id="loginView" class="login-wrap d-none">
+  <div class="login-card">
+    <div class="text-center mb-4">
+      <i class="bi bi-shield-lock-fill login-logo"></i>
+      <h4 class="mt-2 mb-0">TET v2</h4>
+      <div class="text-muted small">標的型メール訓練システム</div>
+    </div>
+    <form id="loginForm" autocomplete="off">
+      <div class="mb-3">
+        <label class="form-label">メールアドレス</label>
+        <input type="email" class="form-control" id="loginEmail" required autofocus>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">パスワード</label>
+        <input type="password" class="form-control" id="loginPassword" required>
+      </div>
+      <div id="loginError" class="alert alert-danger py-2 d-none" role="alert"></div>
+      <button type="submit" class="btn btn-primary w-100" id="loginBtn">
+        <span class="spinner-border spinner-border-sm d-none" id="loginSpin"></span>
+        ログイン
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ========== アプリ本体 ========== -->
+<div id="appView" class="d-none">
+  <nav class="navbar navbar-dark app-navbar px-3">
+    <div class="d-flex align-items-center">
+      <button class="btn btn-sm btn-outline-light me-2 d-md-none" id="sidebarToggle"><i class="bi bi-list"></i></button>
+      <span class="navbar-brand mb-0"><i class="bi bi-shield-lock-fill me-1"></i>TET v2</span>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <select id="tenantSwitcher" class="form-select form-select-sm d-none" style="width:auto"></select>
+      <span class="text-light small d-none d-sm-inline" id="userLabel"></span>
+      <button class="btn btn-sm btn-outline-light" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
+    </div>
+  </nav>
+
+  <div class="app-body">
+    <aside class="app-sidebar" id="sidebar">
+      <ul class="nav flex-column">
+        <li><a class="nav-link" data-view="dashboard"><i class="bi bi-speedometer2"></i>ダッシュボード</a></li>
+        <li><a class="nav-link" data-view="campaigns"><i class="bi bi-envelope-paper"></i>キャンペーン</a></li>
+        <li><a class="nav-link" data-view="reports"><i class="bi bi-bar-chart"></i>レポート</a></li>
+        <li><a class="nav-link" data-view="targets"><i class="bi bi-people"></i>対象者</a></li>
+        <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
+        <li><a class="nav-link" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
+        <li><a class="nav-link" data-view="masters"><i class="bi bi-window"></i>マスタ管理</a></li>
+        <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>ログ管理</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">セキュリティ教育</li>
+        <li><a class="nav-link" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
+        <li><a class="nav-link" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
+        <li><a class="nav-link" data-view="eduReport"><i class="bi bi-mortarboard"></i>教育レポート</a></li>
+        <li data-role="tenant_admin"><a class="nav-link" data-view="users"><i class="bi bi-person-badge"></i>ユーザ管理</a></li>
+        <li data-role="superadmin"><a class="nav-link" data-view="tenants"><i class="bi bi-building"></i>テナント管理</a></li>
+      </ul>
+    </aside>
+
+    <main class="app-main">
+      <div id="toast" class="toast-box"></div>
+
+      <!-- ダッシュボード -->
+      <section data-panel="dashboard" class="view-panel">
+        <h5 class="mb-3"><i class="bi bi-speedometer2 me-1"></i>ダッシュボード</h5>
+        <div class="row g-3 mb-4" id="kpiRow"></div>
+        <div class="card">
+          <div class="card-header">キャンペーン別 反応状況</div>
+          <div class="card-body"><canvas id="dashChart" height="90"></canvas></div>
+        </div>
+      </section>
+
+      <!-- キャンペーン -->
+      <section data-panel="campaigns" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-envelope-paper me-1"></i>キャンペーン</h5>
+          <button class="btn btn-primary btn-sm" data-perm="operator" id="newCampaignBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr></thead>
+          <tbody id="campaignsBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- レポート -->
+      <section data-panel="reports" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-bar-chart me-1"></i>レポート</h5>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" id="individualsBtn"><i class="bi bi-person-lines-fill"></i> 個人別統計</button>
+            <button class="btn btn-outline-primary btn-sm" data-perm="operator" id="ingestBtn"><i class="bi bi-arrow-repeat"></i> ログ取込</button>
+          </div>
+        </div>
+        <!-- 個人別統計(全キャンペーン横断。よく開封する人ランキング。アーカイブ済み=退職者も含む) -->
+        <div class="card mb-3 d-none" id="individualsCard">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-person-lines-fill me-1"></i>個人別統計（全キャンペーン横断・開封率ワースト順）</span>
+            <button class="btn btn-sm btn-outline-secondary" id="individualsRefreshBtn"><i class="bi bi-arrow-clockwise"></i> 更新</button>
+          </div>
+          <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+            <thead><tr><th>氏名</th><th>会社</th><th>役職</th><th>参加</th><th>開封率</th><th>クリック率</th><th>認証率</th><th>状態</th></tr></thead>
+            <tbody id="individualsBody"></tbody>
+          </table></div>
+          <div class="card-footer small text-muted">「参加」＝対象になったキャンペーン数。率は参加キャンペーンに対する割合。<span class="badge bg-secondary">退職</span>＝アーカイブ済み（履歴として保持）。</div>
+        </div>
+        <div class="card mb-3">
+          <div class="card-header">キャンペーン別 反応率</div>
+          <div class="table-responsive"><table class="table table-hover align-middle mb-0">
+            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th>開封率</th><th>クリック率</th><th>認証率</th><th></th></tr></thead>
+            <tbody id="reportsBody"></tbody>
+          </table></div>
+        </div>
+        <div id="reportDetail" class="d-none">
+          <div class="row g-3">
+            <div class="col-lg-6">
+              <div class="card h-100"><div class="card-header" id="reportDetailTitle">詳細</div>
+                <div class="card-body"><canvas id="reportChart" height="160"></canvas></div></div>
+            </div>
+            <div class="col-lg-6">
+              <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                  <span><i class="bi bi-exclamation-triangle me-1"></i>防衛失敗者</span>
+                  <button class="btn btn-sm btn-warning d-none" data-perm="operator" id="toGroupBtn"><i class="bi bi-folder-plus"></i> グループ化</button>
+                </div>
+                <div class="table-responsive" style="max-height:320px;overflow:auto">
+                  <table class="table table-sm mb-0"><thead><tr><th>メール</th><th>氏名</th><th>部署</th><th>重度</th></tr></thead>
+                    <tbody id="failuresBody"></tbody></table>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- P7: v1同等 詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン) -->
+          <div class="row g-3 mt-1">
+            <div class="col-12">
+              <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                  <span><i class="bi bi-bar-chart-line me-1"></i>詳細レポート <span id="reportCommitBadge"></span></span>
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="datetime-local" class="form-control form-control-sm" id="reportStartDate" style="width:auto">
+                    <span class="text-muted">〜</span>
+                    <input type="datetime-local" class="form-control form-control-sm" id="reportEndDate" style="width:auto">
+                    <button class="btn btn-sm btn-outline-primary" id="reportPeriodBtn"><i class="bi bi-funnel"></i> 期間で絞込</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="reportPeriodClearBtn">クリア</button>
+                    <button class="btn btn-sm btn-success" data-perm="operator" id="reportCommitBtn"><i class="bi bi-lock"></i> 確定</button>
+                    <button class="btn btn-sm btn-outline-danger d-none" data-perm="tenant_admin" id="reportUncommitBtn"><i class="bi bi-unlock"></i> 確定解除</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="mb-3"><canvas id="reportTimelineChart" height="90"></canvas></div>
+                  <div class="row g-3">
+                    <div class="col-lg-4">
+                      <h6 class="text-muted"><i class="bi bi-building me-1"></i>会社別</h6>
+                      <div class="table-responsive" style="max-height:300px;overflow:auto">
+                        <table class="table table-sm mb-0"><thead><tr><th>会社</th><th>数</th><th>開封</th><th>ｸﾘｯｸ</th><th>認証</th></tr></thead>
+                          <tbody id="reportByCompany"></tbody></table>
+                      </div>
+                    </div>
+                    <div class="col-lg-4">
+                      <h6 class="text-muted"><i class="bi bi-person-badge me-1"></i>役職別</h6>
+                      <div class="table-responsive" style="max-height:300px;overflow:auto">
+                        <table class="table table-sm mb-0"><thead><tr><th>役職</th><th>数</th><th>開封率</th><th>認証率</th></tr></thead>
+                          <tbody id="reportByPosition"></tbody></table>
+                      </div>
+                    </div>
+                    <div class="col-lg-4">
+                      <h6 class="text-muted"><i class="bi bi-files me-1"></i>コンテンツ別</h6>
+                      <div class="table-responsive" style="max-height:300px;overflow:auto">
+                        <table class="table table-sm mb-0"><thead><tr><th>No</th><th>数</th><th>開封率</th><th>認証率</th></tr></thead>
+                          <tbody id="reportByContent"></tbody></table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 対象者 -->
+      <section data-panel="targets" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-people me-1"></i>対象者</h5>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" id="exportCsvBtn"><i class="bi bi-download"></i> CSV出力</button>
+            <button class="btn btn-outline-secondary btn-sm" data-perm="operator" id="importCsvBtn"><i class="bi bi-upload"></i> CSV取込</button>
+            <button class="btn btn-primary btn-sm" data-perm="operator" id="newTargetBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+          </div>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>操作</th></tr></thead>
+          <tbody id="targetsBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- グループ -->
+      <section data-panel="groups" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-diagram-3 me-1"></i>グループ</h5>
+          <button class="btn btn-primary btn-sm" data-perm="operator" id="newGroupBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>名称</th><th>種別</th><th>人数</th><th>操作</th></tr></thead>
+          <tbody id="groupsBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- テンプレート -->
+      <section data-panel="templates" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0"><i class="bi bi-file-earmark-text me-1"></i>テンプレート</h5>
+          <div class="d-flex gap-2 flex-wrap">
+            <button class="btn btn-outline-secondary btn-sm" id="tplExportBtn"><i class="bi bi-download"></i> CSV出力（現タブ）</button>
+            <button class="btn btn-outline-secondary btn-sm" data-perm="tenant_admin" id="tplImportAddBtn"><i class="bi bi-upload"></i> CSV追加</button>
+            <button class="btn btn-outline-secondary btn-sm" data-perm="tenant_admin" id="tplImportUpsertBtn"><i class="bi bi-arrow-repeat"></i> CSV上書き更新</button>
+            <button class="btn btn-primary btn-sm" data-perm="operator" id="newTemplateBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+          </div>
+        </div>
+        <ul class="nav nav-pills mb-3" id="tplKindTabs"></ul>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead id="templatesHead"></thead>
+          <tbody id="templatesBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- マスタ管理 -->
+      <section data-panel="masters" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-window me-1"></i>マスタ管理</h5>
+        </div>
+        <div id="mastersBody"></div>
+      </section>
+
+      <!-- ログ管理 (P8) -->
+      <section data-panel="logs" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0"><i class="bi bi-journal-text me-1"></i>ログ管理</h5>
+          <div class="d-flex align-items-center gap-2">
+            <select class="form-select form-select-sm" id="logsCampaignFilter" style="width:auto"><option value="">全キャンペーン</option></select>
+            <button class="btn btn-sm btn-outline-secondary" id="logsRefreshBtn"><i class="bi bi-arrow-clockwise"></i> 更新</button>
+          </div>
+        </div>
+        <ul class="nav nav-pills mb-3 flex-wrap" id="logsTabs">
+          <li class="nav-item"><a class="nav-link active" data-log="delivery" href="#">送信ログ</a></li>
+          <li class="nav-item"><a class="nav-link" data-log="events" href="#">訓練イベント</a></li>
+          <li class="nav-item"><a class="nav-link" data-log="schedule" href="#">スケジュール</a></li>
+          <li class="nav-item"><a class="nav-link" data-log="replies" href="#">返信者</a></li>
+          <li class="nav-item"><a class="nav-link" data-log="training_results" href="#">訓練結果</a></li>
+          <li class="nav-item"><a class="nav-link" data-log="training_log_detail" href="#">訓練結果ログ(明細)</a></li>
+          <li class="nav-item"><a class="nav-link" data-log="campaign_files" href="#">リンク/ビーコンファイル</a></li>
+          <li class="nav-item" data-perm="operator"><a class="nav-link" data-log="audit" href="#">操作ログ</a></li>
+          <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="raw_mail" href="#">生メールログ</a></li>
+          <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="raw_web" href="#">生Webログ</a></li>
+          <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="webaccess" href="#">WebアクセスLog</a></li>
+          <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="reply_maildir" href="#">返信者(受信メール)</a></li>
+        </ul>
+        <!-- 訓練結果/生ログ/WebアクセスLog用の追加フィルタ -->
+        <div class="d-flex gap-2 mb-2 flex-wrap align-items-center" id="logsExtraFilter" style="display:none">
+          <select class="form-select form-select-sm" id="logsStatusFilter" style="width:auto;display:none">
+            <option value="">全状況</option><option value="opened">開封のみ</option>
+            <option value="clicked">クリックのみ</option><option value="authed">認証のみ</option>
+            <option value="none">未反応のみ</option>
+          </select>
+          <select class="form-select form-select-sm" id="logsTypeFilter" style="width:auto;display:none">
+            <option value="">全タイプ</option>
+          </select>
+          <select class="form-select form-select-sm" id="logsSenderFilter" style="width:auto;display:none">
+            <option value="">全送信元アカウント</option>
+          </select>
+          <label class="small text-muted mb-0" id="logsStartLabel" style="display:none">開始
+            <input type="datetime-local" class="form-control form-control-sm d-inline-block" id="logsStartDate" style="width:auto"></label>
+          <label class="small text-muted mb-0" id="logsEndLabel" style="display:none">終了
+            <input type="datetime-local" class="form-control form-control-sm d-inline-block" id="logsEndDate" style="width:auto"></label>
+          <input type="text" class="form-control form-control-sm" id="logsPathFilter" placeholder="Path (例: /link-)" style="width:auto;display:none">
+          <input type="text" class="form-control form-control-sm" id="logsKeyword" placeholder="キーワードで絞込" style="width:auto;display:none">
+          <button class="btn btn-sm btn-outline-primary" id="logsApplyBtn" style="display:none"><i class="bi bi-arrow-clockwise"></i> 更新</button>
+          <button class="btn btn-sm btn-outline-secondary" id="logsCsvBtn" style="display:none"><i class="bi bi-download"></i> CSV出力</button>
+          <button class="btn btn-sm btn-outline-secondary" id="logsRawDlBtn" style="display:none"><i class="bi bi-file-earmark-arrow-down"></i> ログ全件DL</button>
+          <span class="badge bg-light text-dark border" id="logsFileInfo" style="display:none"></span>
+        </div>
+        <div class="table-responsive" id="logsTableWrap"><table class="table table-sm table-hover align-middle">
+          <thead id="logsHead"></thead>
+          <tbody id="logsBody"></tbody>
+        </table></div>
+        <pre id="logsRaw" class="border rounded p-2 bg-light small d-none" style="max-height:60vh;overflow:auto;white-space:pre-wrap"></pre>
+        <div class="d-flex justify-content-between align-items-center" id="logsPager">
+          <span class="text-muted small" id="logsInfo"></span>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary" id="logsPrevBtn"><i class="bi bi-chevron-left"></i> 前</button>
+            <button class="btn btn-outline-secondary" id="logsNextBtn">次 <i class="bi bi-chevron-right"></i></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 教育配信 -->
+      <section data-panel="eduDeliveries" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-send me-1"></i>教育配信</h5>
+          <button class="btn btn-primary btn-sm" data-perm="operator" id="newEduDeliveryBtn"><i class="bi bi-plus-lg"></i> 新規配信</button>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>タイトル</th><th>種別</th><th>状態</th><th>割当</th><th>完了</th><th>受講率</th><th>平均</th><th>操作</th></tr></thead>
+          <tbody id="eduDeliveriesBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- 教材バンク -->
+      <section data-panel="eduQuestions" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-collection me-1"></i>教材バンク</h5>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary btn-sm" data-perm="operator" onclick="newEduCategory()"><i class="bi bi-folder-plus me-1"></i>新規カテゴリ</button>
+            <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduQuestion()"><i class="bi bi-plus-lg me-1"></i>新規設問</button>
+          </div>
+        </div>
+        <ul class="nav nav-pills mb-2 flex-wrap" id="eduCatTabs"></ul>
+        <div class="mb-3" id="eduCatToolbar"></div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>設問</th><th>種別</th><th>難易度</th><th>操作</th></tr></thead>
+          <tbody id="eduQuestionsBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- 教育レポート -->
+      <section data-panel="eduReport" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-mortarboard me-1"></i>教育レポート</h5>
+        </div>
+        <div class="row g-3 mb-3" id="eduReportKpi"></div>
+        <div class="card mb-3">
+          <div class="card-header py-2 small fw-bold d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-graph-up me-1"></i>リテラシースコアの推移</span>
+            <span class="text-muted fw-normal" id="eduTrendNote"></span>
+          </div>
+          <div class="card-body"><canvas id="eduTrendChart" height="90"></canvas></div>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="card"><div class="card-header py-2 small fw-bold">部署別ランキング</div>
+              <div class="table-responsive"><table class="table table-sm mb-0">
+                <thead><tr><th>部署</th><th>平均</th><th>人数</th></tr></thead>
+                <tbody id="eduReportDeptBody"></tbody>
+              </table></div></div>
+          </div>
+          <div class="col-md-6">
+            <div class="card"><div class="card-header py-2 small fw-bold">カテゴリ別正答率</div>
+              <div class="table-responsive"><table class="table table-sm mb-0">
+                <thead><tr><th>カテゴリ</th><th>正答率</th><th>回答数</th></tr></thead>
+                <tbody id="eduReportCatBody"></tbody>
+              </table></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ユーザ管理 -->
+      <section data-panel="users" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-person-badge me-1"></i>ユーザ管理</h5>
+          <button class="btn btn-primary btn-sm" id="newUserBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>操作</th></tr></thead>
+          <tbody id="usersBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- テナント管理 -->
+      <section data-panel="tenants" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-building me-1"></i>テナント管理</h5>
+          <button class="btn btn-primary btn-sm" id="newTenantBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>名称</th><th>slug</th><th>状態</th><th>操作</th></tr></thead>
+          <tbody id="tenantsBody"></tbody>
+        </table></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- 汎用モーダル -->
+<div class="modal fade" id="appModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="appModalTitle"></h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body" id="appModalBody"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">閉じる</button>
+      <button type="button" class="btn btn-primary" id="appModalSave">保存</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- 返信メール本文表示モーダル(Maildir) -->
+<div class="modal fade" id="mailBodyModal" tabindex="-1">
+  <div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="mailBodyTitle">受信メール</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <dl class="row small mb-2" id="mailBodyMeta"></dl>
+      <pre id="mailBodyText" class="border rounded p-2 bg-light small" style="max-height:55vh;overflow:auto;white-space:pre-wrap"></pre>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">閉じる</button>
+    </div>
+  </div></div>
+</div>
+
+<script src="assets/vendor/bootstrap.bundle.min.js"></script>
+<script src="assets/vendor/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+[Unit]
+Description=TET v2 Report Ingest (Apache access.log -> phishing open/click/auth events)
+After=network.target
+
+[Service]
+Type=oneshot
+User=training
+Group=www-data
+# access.log (root:adm 640) を読むため adm 補助グループを付与する。
+SupplementaryGroups=adm
+ExecStart=/usr/bin/php /var/www/html/tet2/db/report_ingest.php
+StandardOutput=append:/opt/training/tet2-data/report-ingest.log
+StandardError=append:/opt/training/tet2-data/report-ingest.log

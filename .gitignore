@@ -1,0 +1,72 @@
+# ===========================================
+# TET v2 (標的型メール訓練 + セキュリティ教育) .gitignore
+# ===========================================
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# ----- ログ -----
+*.log
+*.log.*
+operation.log*
+
+# ----- バックアップ / 一時 -----
+*.bak
+*.bak-*
+*.backup_*
+*~
+*.tmp
+*.temp
+*.swp
+.DS_Store
+Thumbs.db
+
+# ----- 運用データ（機密・個人情報を含む） -----
+# Web 側
+web/data/*.json
+web/data/logs/
+web/data/rate_limits/
+web/data/Bak/
+# メール送信側（本リポジトリでは bin/data 自体を持たない方針。念のため除外）
+bin/data/
+bin/Attachment/
+
+# ----- DB 実体（個人情報。スキーマ db/*.sql / *.php のみ管理） -----
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# ----- 認証・機密 -----
+.htdigest
+.htpasswd
+*.pem
+*.key
+.env
+.env.*
+
+# ----- ベンダーライブラリ（必要なら include を検討） -----
+# assets/vendor はローカル配置方針（CSP対応）のため *コミットする*。
+# node_modules 等は除外。
+node_modules/
+web/vendor/
+web/api/vendor/
+
+# ----- デバッグ用一時スクリプト -----
+web/diagnose_*.php
+web/test_debug_*.php
+
+# ----- IDE / エディタ -----
+.idea/
+.vscode/
+*.sublime-*
+.claude/
+
+# ----- キャッシュ -----
+*.cache
+.cache/

@@ -1,0 +1,120 @@
+:root {
+  --tet-primary: #1b3a5b;
+  --tet-accent: #2c6fbb;
+  --tet-sidebar: #17293d;
+  --tet-danger: #d64545;
+  --tet-warning: #e0a136;
+  --tet-success: #3a9d5d;
+}
+
+body { background: #f4f6f9; }
+
+/* ===== ログイン ===== */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--tet-primary), var(--tet-sidebar));
+  padding: 1rem;
+}
+.login-card {
+  background: #fff;
+  border-radius: .75rem;
+  padding: 2rem;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.25);
+}
+.login-logo { font-size: 2.5rem; color: var(--tet-accent); }
+
+/* ===== ナビ・レイアウト ===== */
+.app-navbar {
+  background: var(--tet-primary);
+  height: 52px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.app-body { display: flex; min-height: calc(100vh - 52px); }
+.app-sidebar {
+  width: 220px;
+  background: var(--tet-sidebar);
+  flex-shrink: 0;
+  padding-top: .5rem;
+}
+.app-sidebar .nav-link {
+  color: #c3d0dd;
+  padding: .6rem 1.2rem;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: .93rem;
+}
+.app-sidebar .nav-link i { width: 1.4rem; }
+.app-sidebar .nav-link:hover { background: rgba(255,255,255,.06); color: #fff; }
+.app-sidebar .nav-link.active {
+  background: var(--tet-accent);
+  color: #fff;
+  border-left: 3px solid #fff;
+}
+.app-main { flex: 1; padding: 1.5rem; overflow-x: auto; min-width: 0; }
+
+@media (max-width: 767px) {
+  .app-sidebar {
+    position: fixed;
+    top: 52px; left: 0; bottom: 0;
+    z-index: 1030;
+    transform: translateX(-100%);
+    transition: transform .2s;
+  }
+  .app-sidebar.open { transform: translateX(0); }
+}
+
+/* ===== KPIカード ===== */
+.kpi-card {
+  border-radius: .6rem;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+.kpi-card .kpi-value { font-size: 1.9rem; font-weight: 700; line-height: 1.1; }
+.kpi-card .kpi-label { font-size: .8rem; color: #6c757d; }
+.kpi-card .kpi-icon { font-size: 1.6rem; opacity: .3; }
+.val-danger { color: var(--tet-danger) !important; }
+.val-warning { color: var(--tet-warning) !important; }
+.val-success { color: var(--tet-success) !important; }
+
+/* ===== 状態バッジ ===== */
+.st-draft { background:#adb5bd; }
+.st-scheduled { background:#4a90d9; }
+.st-running { background:#e0a136; }
+.st-paused { background:#8e8e8e; }
+.st-done { background:#3a9d5d; }
+.st-cancelled { background:#d64545; }
+
+/* ===== トースト ===== */
+.toast-box {
+  position: fixed;
+  top: 62px; right: 1rem;
+  z-index: 1080;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.toast-box .app-toast {
+  min-width: 240px;
+  padding: .7rem 1rem;
+  border-radius: .4rem;
+  color: #fff;
+  box-shadow: 0 3px 12px rgba(0,0,0,.2);
+  font-size: .9rem;
+  animation: toastIn .2s;
+}
+@keyframes toastIn { from { opacity:0; transform: translateY(-8px);} to {opacity:1;transform:none;} }
+.app-toast.ok { background: var(--tet-success); }
+.app-toast.err { background: var(--tet-danger); }
+.app-toast.info { background: var(--tet-accent); }
+
+.card-header { font-weight: 600; background:#fff; }
+.view-panel { animation: fade .15s; }
+@keyframes fade { from {opacity:0;} to {opacity:1;} }
+.table td, .table th { font-size: .9rem; }

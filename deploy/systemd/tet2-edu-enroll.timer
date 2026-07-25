@@ -1,0 +1,9 @@
+[Unit]
+Description=Run TET v2 education auto-enroll hourly
+
+[Timer]
+OnCalendar=*-*-* *:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

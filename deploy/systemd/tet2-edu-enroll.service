@@ -1,0 +1,11 @@
+[Unit]
+Description=TET v2 Education Auto-Enroll (phishing failures -> education deliveries)
+After=network.target
+
+[Service]
+Type=oneshot
+User=training
+Group=www-data
+ExecStart=/usr/bin/php /var/www/html/tet2/db/edu_auto_enroll.php
+StandardOutput=append:/opt/training/tet2-data/edu-enroll.log
+StandardError=append:/opt/training/tet2-data/edu-enroll.log

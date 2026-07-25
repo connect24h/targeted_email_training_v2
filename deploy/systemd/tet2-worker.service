@@ -1,0 +1,16 @@
+[Unit]
+Description=TET v2 Send Scheduler Worker
+After=network.target
+
+[Service]
+Type=simple
+User=training
+Group=www-data
+ExecStart=/usr/bin/python3 /opt/training/bin/tet2-worker.py
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/opt/training/tet2-data/worker.log
+StandardError=append:/opt/training/tet2-data/worker.log
+
+[Install]
+WantedBy=multi-user.target

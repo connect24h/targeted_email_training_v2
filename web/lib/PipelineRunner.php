@@ -1,0 +1,352 @@
+<?php
+/**
+ * DB のキャンペーン情報から、既存 Python パイプライン（create_beacon_files.py / send_email.py）が
+ * 読む CSV 群をテナント別ディレクトリに生成するアダプタ。
+ *
+ * 既存スクリプトは list.csv(20列) / kenmei.csv / honbun.csv / URL.csv / Attachment.csv を読む。
+ * 本アダプタは DB を単一の正とし、それらを一時 CSV として書き出す（既存スクリプトは無改修で流用）。
+ */
+declare(strict_types=1);
+
+require_once __DIR__ . '/Db.php';
+
+final class PipelineRunner
+{
+    /** list.csv の列順（既存 send_email.py / create_beacon_files.py が参照する20列）。 */
+    private const LIST_HEADER = [
+        '項番', '送信先情報', '件名定型文No', '本文定型文No',
+        '本文差し込み1 #$1$#', '本文差し込み2 #$2$#', '本文差し込み3 #$3$#',
+        '認証フラグ', '添付ファイル番号', '送信元メールアドレス',
+        '苗字', '表示氏名（姓名）', 'メールアドレス（会社）', '会社名', '略称',
+        '本務役職名称', '役職カテゴリ', '乱数列', '送信フラグ', '添付ファイル',
+    ];
+
+    /**
+     * キャンペーンの CSV 群を data_dir に生成する。生成した data_dir を返す。
+     * @throws RuntimeException
+     */
+    public static function generateCsv(int $campaignId): string
+    {
+        $c = Db::one('SELECT * FROM campaigns WHERE id = ?', [$campaignId]);
+        if ($c === null) {
+            throw new RuntimeException('キャンペーンが見つかりません');
+        }
+        $dir = (string) $c['data_dir'];
+        if ($dir === '') {
+            throw new RuntimeException('data_dir が未設定です');
+        }
+        self::ensureDir($dir);
+        self::ensureDir($dir . '/logs');
+        self::ensureDir($dir . '/Attachment');
+
+        // campaign_contents が存在するかをチェック
+        $contentCount = Db::one(
+            'SELECT COUNT(*) AS cnt FROM campaign_contents WHERE campaign_id = ?',
+            [$campaignId]
+        );
+        $hasContents = (int) ($contentCount['cnt'] ?? 0) > 0;
+
+        if ($hasContents) {
+            // 新経路：複数コンテンツ対応
+            self::generateCsvMultiContent($campaignId, $c, $dir);
+        } else {
+            // 旧経路：単一コンテンツ（後方互換）
+            self::generateCsvSingleContent($c, $dir);
+        }
+
+        return $dir;
+    }
+
+    /**
+     * 旧経路：campaign の単一テンプレ設定で CSV を生成（後方互換）。
+     */
+    private static function generateCsvSingleContent(array $c, string $dir): void
+    {
+        // テンプレート取得
+        $subject = self::templateContent($c['subject_template_id']);
+        $body    = self::templateContent($c['body_template_id']);
+        $phish   = $c['phish_template_id'] !== null
+            ? Db::one('SELECT * FROM templates WHERE id = ?', [(int) $c['phish_template_id']])
+            : null;
+        $authFlag = $phish !== null && $phish['auth_flag'] !== null ? (int) $phish['auth_flag'] : 0;
+
+        // kenmei.csv（件名は1テンプレ = No.1）
+        self::writeCsv($dir . '/kenmei.csv', [
+            ['項番', '件名'],
+            [1, $subject],
+        ]);
+        // honbun.csv（本文は1テンプレ = No.1）
+        self::writeCsv($dir . '/honbun.csv', [
+            ['項番', '本文定型文', 'Unnamed: 2', 'Unnamed: 3', 'Unnamed: 4'],
+            [1, $body, '', '', ''],
+        ]);
+        // URL.csv（件名No.1 のリンク先 = beacon_url_base）
+        $urlBase = self::beaconUrlBase($c);
+        self::writeCsv($dir . '/URL.csv', [
+            ['件名定型文No', 'URL'],
+            [1, $urlBase],
+        ]);
+        // Attachment.csv（添付 = No.1）
+        $ext = (string) ($c['attachment_ext'] ?? 'html');
+        $zip = (int) ($c['attachment_zip'] ?? 0);
+        self::writeCsv($dir . '/Attachment.csv', [
+            ['項番', '添付ファイル名', '拡張子', 'zipフラグ'],
+            [1, 'kunren', $ext, $zip],
+        ]);
+
+        // list.csv（対象者ごとに1行）
+        $targets = Db::all(
+            'SELECT ct.*, t.email AS to_email, t.name AS to_name, t.company, t.department, t.title, t.position_category
+             FROM campaign_targets ct
+             JOIN targets t ON t.id = ct.target_id
+             WHERE ct.campaign_id = ?
+             ORDER BY ct.koban',
+            [(int) $c['id']]
+        );
+        $rows = [self::LIST_HEADER];
+        $fromAddr = (string) ($c['from_address'] ?? '');
+        // link_mode で「リンク型 or 添付型」を排他にする。
+        //  - link / form : 本文URL = {base}/link-{tracking_id}.html(クリック追跡)、添付なし
+        //  - attachment  : 添付あり、本文URLはトップ(#$1$# には誘い文だけで追跡は添付ビーコン)
+        $linkMode = (string) ($c['link_mode'] ?? 'link');
+        $base = rtrim($urlBase, '/');
+        foreach ($targets as $t) {
+            $surname = self::surname((string) $t['to_name']);
+            $tid = (string) $t['tracking_id'];
+            if ($linkMode === 'attachment') {
+                $bodyUrl = $base . '/';         // 添付型: 本文はトップ。追跡は添付内ビーコン(kunren-beacon-{tid}.png)
+                $attachNo = 1;                   // 添付を付ける
+            } else {
+                $bodyUrl = $base . '/link-' . $tid . '.html'; // リンク型/フォーム型: 個別追跡URL
+                $attachNo = '';                  // 添付を付けない(排他)
+            }
+            $rows[] = [
+                (int) $t['koban'],                 // 項番
+                (string) $t['to_email'],           // 送信先情報
+                1,                                  // 件名定型文No
+                1,                                  // 本文定型文No
+                $bodyUrl,                           // 本文差し込み1 #$1$#
+                $surname,                           // 本文差し込み2 #$2$#（宛名の姓）
+                '',                                 // 本文差し込み3 #$3$#
+                $authFlag,                          // 認証フラグ
+                $attachNo,                          // 添付ファイル番号(link/form型は空=添付なし)
+                $fromAddr,                          // 送信元メールアドレス
+                $surname,                           // 苗字
+                (string) $t['to_name'],             // 表示氏名（姓名）
+                (string) $t['to_email'],            // メールアドレス（会社）
+                (string) ($t['company'] ?? ''),     // 会社名
+                '',                                 // 略称
+                (string) ($t['title'] ?? ''),       // 本務役職名称
+                (string) ($t['position_category'] ?? ''), // 役職カテゴリ
+                (string) $t['tracking_id'],         // 乱数列
+                '',                                 // 送信フラグ
+                '',                                 // 添付ファイル（生成後に埋まる）
+            ];
+        }
+        self::writeCsv($dir . '/list.csv', $rows);
+    }
+
+    /**
+     * 新経路：campaign_contents により、コンテンツ単位で複数行 CSV を生成。
+     */
+    private static function generateCsvMultiContent(int $campaignId, array $c, string $dir): void
+    {
+        $urlBase = self::beaconUrlBase($c);
+        $base = rtrim($urlBase, '/');
+
+        // campaign_contents をcontent_no順で取得（各content単位でマスタCSV行を生成）
+        $contents = Db::all(
+            'SELECT * FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no',
+            [$campaignId]
+        );
+
+        // kenmei.csv: [項番, 件名]
+        $kenMeiRows = [['項番', '件名']];
+        foreach ($contents as $content) {
+            $contentNo = (int) $content['content_no'];
+            $subjectContent = self::templateContent($content['subject_template_id']);
+            $kenMeiRows[] = [$contentNo, $subjectContent];
+        }
+        self::writeCsv($dir . '/kenmei.csv', $kenMeiRows);
+
+        // honbun.csv: [項番, 本文定型文, Unnamed: 2, Unnamed: 3, Unnamed: 4]
+        $honbunRows = [['項番', '本文定型文', 'Unnamed: 2', 'Unnamed: 3', 'Unnamed: 4']];
+        foreach ($contents as $content) {
+            $contentNo = (int) $content['content_no'];
+            $bodyContent = self::templateContent($content['body_template_id']);
+            $honbunRows[] = [$contentNo, $bodyContent, '', '', ''];
+        }
+        self::writeCsv($dir . '/honbun.csv', $honbunRows);
+
+        // URL.csv: [content_no, URL]。コンテンツ別のビーコンURLを優先し、無ければキャンペーン既定。
+        $urlRows = [['件名定型文No', 'URL']];
+        foreach ($contents as $content) {
+            $contentNo = (int) $content['content_no'];
+            // content.beacon_base があればそれ、無ければ campaign($c)の beacon_base、無ければ config.ini。
+            $contentUrlBase = self::beaconUrlBase(['beacon_base' => $content['beacon_base'] ?? ($c['beacon_base'] ?? null)]);
+            $urlRows[] = [$contentNo, $contentUrlBase];
+        }
+        self::writeCsv($dir . '/URL.csv', $urlRows);
+
+        // Attachment.csv: [項番, 添付ファイル名, 拡張子, zipフラグ]
+        $attachRows = [['項番', '添付ファイル名', '拡張子', 'zipフラグ']];
+        foreach ($contents as $content) {
+            $contentNo = (int) $content['content_no'];
+            // QR型は拡張子 'qr' にする（create_beacon_files.py が QR画像PNGを生成するトリガー）。
+            // それ以外の添付型は attachment_ext を使う。
+            $linkMode = (string) ($content['link_mode'] ?? 'link');
+            $ext = $linkMode === 'qr' ? 'qr' : (string) ($content['attachment_ext'] ?? 'html');
+            $zip = (int) ($content['attachment_zip'] ?? 0);
+            $attachRows[] = [$contentNo, 'kunren', $ext, $zip];
+        }
+        self::writeCsv($dir . '/Attachment.csv', $attachRows);
+
+        // list.csv: 対象者ごとに、割り当てられた content_no に基づいて行を生成
+        $targets = Db::all(
+            'SELECT ct.*, t.email AS to_email, t.name AS to_name, t.company, t.department, t.title, t.position_category
+             FROM campaign_targets ct
+             JOIN targets t ON t.id = ct.target_id
+             WHERE ct.campaign_id = ?
+             ORDER BY ct.koban',
+            [$campaignId]
+        );
+
+        // campaign_contentsを連想配列でキャッシュ（content_noをキー）
+        $contentMap = [];
+        foreach ($contents as $content) {
+            $contentMap[(int) $content['content_no']] = $content;
+        }
+
+        $rows = [self::LIST_HEADER];
+        $fromAddr = (string) ($c['from_address'] ?? '');
+
+        foreach ($targets as $t) {
+            $targetContentNo = (int) ($t['content_no'] ?? 1); // デフォルトは1
+            $targetContent = $contentMap[$targetContentNo] ?? null;
+
+            if ($targetContent === null) {
+                // フォールバック: content_no が無い、または無効なら content_no=1 を用いる
+                $targetContent = $contentMap[1] ?? null;
+                if ($targetContent === null) {
+                    continue; // コンテンツ不在なら skip
+                }
+                $targetContentNo = 1;
+            }
+
+            $authFlag = 0;
+            if ($targetContent['phish_template_id'] !== null) {
+                $phish = Db::one('SELECT auth_flag FROM templates WHERE id = ?', [(int) $targetContent['phish_template_id']]);
+                if ($phish !== null && $phish['auth_flag'] !== null) {
+                    $authFlag = (int) $phish['auth_flag'];
+                }
+            }
+
+            // link_mode で分岐（attachment型か否か）
+            $linkMode = (string) ($targetContent['link_mode'] ?? 'link');
+            $surname = self::surname((string) $t['to_name']);
+            $tid = (string) $t['tracking_id'];
+
+            // コンテンツ別のビーコンURL/送信元(無ければキャンペーン既定にフォールバック)。
+            $contentBase = rtrim(self::beaconUrlBase(['beacon_base' => $targetContent['beacon_base'] ?? ($c['beacon_base'] ?? null)]), '/');
+            $contentFromAddr = (string) ($targetContent['from_address'] ?? $fromAddr);
+
+            if ($linkMode === 'attachment' || $linkMode === 'qr') {
+                // 添付型/QR型: 本文はトップ、添付を付ける(添付番号=content_no)。
+                //  - attachment: 添付HTML(偽ログイン)。追跡は添付内ビーコン。
+                //  - qr: 添付はQR画像PNG。QRの中身が link-{tid}.html なので、スキャン→追跡URL→click記録。
+                $bodyUrl = $contentBase . '/';
+                $attachNo = $targetContentNo;
+            } else {
+                $bodyUrl = $contentBase . '/link-' . $tid . '.html'; // リンク型/フォーム型: 個別追跡URL
+                $attachNo = '';                  // 添付を付けない
+            }
+            // 本文URL抑制フラグが立っていれば #$1$# を空にする(添付/QR型で本文に半端なURLを残さない)。
+            // 追跡は添付内ビーコン/QRで行うので本文URLは不要。
+            if (!empty($targetContent['suppress_body_url'])) {
+                $bodyUrl = '';
+            }
+
+            $rows[] = [
+                (int) $t['koban'],                 // 項番
+                (string) $t['to_email'],           // 送信先情報
+                $targetContentNo,                  // 件名定型文No = content_no
+                $targetContentNo,                  // 本文定型文No = content_no
+                $bodyUrl,                           // 本文差し込み1 #$1$#
+                $surname,                           // 本文差し込み2 #$2$#（宛名の姓）
+                '',                                 // 本文差し込み3 #$3$#
+                $authFlag,                          // 認証フラグ
+                $attachNo,                          // 添付ファイル番号(link/form型は空=添付なし、attachment型はcontent_no)
+                $contentFromAddr,                   // 送信元メールアドレス(コンテンツ別)
+                $surname,                           // 苗字
+                (string) $t['to_name'],             // 表示氏名（姓名）
+                (string) $t['to_email'],            // メールアドレス（会社）
+                (string) ($t['company'] ?? ''),     // 会社名
+                '',                                 // 略称
+                (string) ($t['title'] ?? ''),       // 本務役職名称
+                (string) ($t['position_category'] ?? ''), // 役職カテゴリ
+                (string) $t['tracking_id'],         // 乱数列
+                '',                                 // 送信フラグ
+                '',                                 // 添付ファイル（生成後に埋まる）
+            ];
+        }
+        self::writeCsv($dir . '/list.csv', $rows);
+    }
+
+    private static function templateContent($id): string
+    {
+        if ($id === null) {
+            return '';
+        }
+        $t = Db::one('SELECT content FROM templates WHERE id = ?', [(int) $id]);
+        return $t !== null ? (string) $t['content'] : '';
+    }
+
+    private static function surname(string $fullname): string
+    {
+        // 「田中 太郎」「田中　太郎」→「田中」。空白が無ければ全体を返す。
+        $parts = preg_split('/[\s　]+/u', trim($fullname), 2);
+        return $parts !== false && $parts[0] !== '' ? $parts[0] : $fullname;
+    }
+
+    /**
+     * ビーコン/リンクページのベース URL を返す（末尾スラッシュ付き）。
+     * キャンペーンに beacon_base 指定があればそれを優先し、無ければ config.ini
+     * の beacon_url_base、それも無ければ既定 IP にフォールバックする（後方互換）。
+     * ログ管理のファイル一覧(api/logs.php)からも同じ解決を使うため public。
+     */
+    public static function beaconUrlBase(?array $c = null): string
+    {
+        // キャンペーン別 base URL（P6）。指定があれば最優先。
+        if ($c !== null && !empty($c['beacon_base'])) {
+            return rtrim((string) $c['beacon_base'], '/') . '/';
+        }
+        // 既存 config.ini の beacon_url_base を踏襲。
+        $ini = '/opt/training/bin/config.ini';
+        if (is_readable($ini)) {
+            $conf = parse_ini_file($ini);
+            if ($conf !== false && !empty($conf['beacon_url_base'])) {
+                return rtrim((string) $conf['beacon_url_base'], '/') . '/';
+            }
+        }
+        return 'http://85.131.251.224/';
+    }
+
+    private static function ensureDir(string $dir): void
+    {
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException("ディレクトリ作成に失敗: {$dir}");
+        }
+    }
+
+    private static function writeCsv(string $path, array $rows): void
+    {
+        $fp = fopen($path, 'w');
+        if ($fp === false) {
+            throw new RuntimeException("CSV 書き込みに失敗: {$path}");
+        }
+        foreach ($rows as $row) {
+            fputcsv($fp, $row);
+        }
+        fclose($fp);
+    }
+}
