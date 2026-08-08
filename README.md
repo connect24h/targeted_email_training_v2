@@ -56,4 +56,6 @@ deploy/systemd/  systemd unit 8本（worker + edu enroll/reminder/snapshot + rep
 ## 関連
 
 - v1: `connect24h/targeted_email_training`（`/tet`, `/opt/training/git-repo`）— 当面共存
+- 将来の機能候補と判断記録: [`docs/product-roadmap.md`](docs/product-roadmap.md)
+- 第1期実装計画: [`plans/tet2-phase1-campaign-automation.md`](plans/tet2-phase1-campaign-automation.md)
 - 詳細な到達点はメモリ `project_tet_v2` を参照
