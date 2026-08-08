@@ -154,6 +154,25 @@ function logs_format_bytes(int $size): string
     return round($size / (1024 ** $i), 2) . ' ' . $units[$i];
 }
 
+/** actionごとの最低権限を返す。全テナント混在ログはsuperadminに限定する。 */
+function logs_min_role_for_action(string $action): string
+{
+    $superadminActions = [
+        'raw_mail',
+        'raw_web',
+        'reply_maildir',
+        'reply_maildir_view',
+        'reply_maildir_csv',
+        'webaccess',
+        'webaccess_geoip',
+        'webaccess_csv',
+    ];
+    if (in_array($action, $superadminActions, true)) {
+        return 'superadmin';
+    }
+    return $action === 'audit' ? 'operator' : 'viewer';
+}
+
 /**
  * ログファイルの末尾を読み、キーワードで絞って行配列を返す。
  * 大きいログでもメモリを食わないよう、末尾から一定バイトだけ読む。
@@ -1279,15 +1298,7 @@ try {
         json_error('不正なアクション', 400);
     }
     // 生ログ・Maildir・WebAccessLog(全テナント混在)は superadmin 限定、操作ログは operator 以上、他は viewer。
-    $superadminActions = ['raw_mail', 'raw_web', 'reply_maildir', 'reply_maildir_view', 'reply_maildir_csv', 'webaccess', 'webaccess_csv'];
-    if (in_array($action, $superadminActions, true)) {
-        $minRole = 'superadmin';
-    } elseif ($action === 'audit') {
-        $minRole = 'operator';
-    } else {
-        $minRole = 'viewer';
-    }
-    $user = require_role($minRole);
+    $user = require_role(logs_min_role_for_action($action));
 
     // 生ログ・Maildir・WebAccessLog(全テナント混在)は tenant_id を使わない。effective_tenant_id
     // (superadmin で tenant_id 未指定だと 400)を呼ぶ前に処理する。

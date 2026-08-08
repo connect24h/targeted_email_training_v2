@@ -13,6 +13,14 @@ load_api('logs');
 
 $tenantId = current_user()['tenant_id'];
 
+// 全テナントのWeb access logを書き換えるGeoIP更新はsuperadmin限定。
+check(logs_min_role_for_action('webaccess_geoip') === 'superadmin',
+    'webaccess_geoip → superadmin限定');
+check(logs_min_role_for_action('audit') === 'operator',
+    'audit → operator以上');
+check(logs_min_role_for_action('delivery') === 'viewer',
+    'delivery → viewer以上');
+
 // 他テナントを1つ確保(越境検証用)。
 $otherTenant = Db::one('SELECT id FROM tenants WHERE id != ? LIMIT 1', [$tenantId]);
 $otherTid = $otherTenant ? (int) $otherTenant['id'] : null;
