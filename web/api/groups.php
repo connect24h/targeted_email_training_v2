@@ -218,6 +218,26 @@ function groups_handle_remove_targets(array $actor): never
     json_out(['success' => true]);
 }
 
+/** グループの現在のメンバー(対象者)一覧を返す。メンバー管理UI用。 */
+function groups_handle_members(array $actor): never
+{
+    $tenantId = effective_tenant_id($actor, groups_query_int('tenant_id'));
+    $groupId = groups_query_int('group_id');
+    if ($groupId === null) {
+        json_error('group_id が不正です', 400);
+    }
+    groups_assert_owned($groupId, $tenantId);
+    $members = Db::all(
+        "SELECT t.id, t.email, t.name, t.company, t.department
+         FROM target_group tg
+         JOIN targets t ON t.id = tg.target_id
+         WHERE tg.group_id = ? AND t.tenant_id = ? AND t.status != 'archived'
+         ORDER BY t.tenant_no",
+        [$groupId, $tenantId]
+    );
+    json_out(['success' => true, 'members' => $members]);
+}
+
 try {
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -237,6 +257,9 @@ try {
     }
     if ($action === 'add_targets' && $method === 'POST') {
         groups_handle_add_targets($actor);
+    }
+    if ($action === 'members' && $method === 'GET') {
+        groups_handle_members($actor);
     }
     if ($action === 'remove_targets' && $method === 'POST') {
         groups_handle_remove_targets($actor);

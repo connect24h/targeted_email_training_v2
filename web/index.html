@@ -89,8 +89,10 @@
           <h5 class="mb-0"><i class="bi bi-envelope-paper me-1"></i>キャンペーン</h5>
           <button class="btn btn-primary btn-sm" data-perm="operator" id="newCampaignBtn"><i class="bi bi-plus-lg"></i> 新規</button>
         </div>
+        <!-- メール送信制御パネル（送信ステータス＋アラート）。renderSendControl が描画。 -->
+        <div id="sendControlPanel" class="mb-3"></div>
         <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr></thead>
+          <thead id="campaignsHead"><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr></thead>
           <tbody id="campaignsBody"></tbody>
         </table></div>
       </section>
@@ -117,7 +119,10 @@
           <div class="card-footer small text-muted">「参加」＝対象になったキャンペーン数。率は参加キャンペーンに対する割合。<span class="badge bg-secondary">退職</span>＝アーカイブ済み（履歴として保持）。</div>
         </div>
         <div class="card mb-3">
-          <div class="card-header">キャンペーン別 反応率</div>
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>キャンペーン別 反応率</span>
+            <span id="reportFilterBar"></span>
+          </div>
           <div class="table-responsive"><table class="table table-hover align-middle mb-0">
             <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th>開封率</th><th>クリック率</th><th>認証率</th><th></th></tr></thead>
             <tbody id="reportsBody"></tbody>
@@ -226,7 +231,8 @@
             <button class="btn btn-outline-secondary btn-sm" id="tplExportBtn"><i class="bi bi-download"></i> CSV出力（現タブ）</button>
             <button class="btn btn-outline-secondary btn-sm" data-perm="tenant_admin" id="tplImportAddBtn"><i class="bi bi-upload"></i> CSV追加</button>
             <button class="btn btn-outline-secondary btn-sm" data-perm="tenant_admin" id="tplImportUpsertBtn"><i class="bi bi-arrow-repeat"></i> CSV上書き更新</button>
-            <button class="btn btn-primary btn-sm" data-perm="operator" id="newTemplateBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+            <button class="btn btn-primary btn-sm" data-perm="operator" id="newScenarioBtn"><i class="bi bi-plus-lg"></i> 新規シナリオ（件名＋本文）</button>
+            <button class="btn btn-outline-primary btn-sm" data-perm="operator" id="newTemplateBtn"><i class="bi bi-plus-lg"></i> 新規（単体）</button>
           </div>
         </div>
         <ul class="nav nav-pills mb-3" id="tplKindTabs"></ul>
@@ -288,6 +294,7 @@
           <input type="text" class="form-control form-control-sm" id="logsKeyword" placeholder="キーワードで絞込" style="width:auto;display:none">
           <button class="btn btn-sm btn-outline-primary" id="logsApplyBtn" style="display:none"><i class="bi bi-arrow-clockwise"></i> 更新</button>
           <button class="btn btn-sm btn-outline-secondary" id="logsCsvBtn" style="display:none"><i class="bi bi-download"></i> CSV出力</button>
+          <button class="btn btn-sm btn-outline-info" id="webGeoipBtn" style="display:none" onclick="refreshWebAccessGeoip()"><i class="bi bi-geo-alt"></i> GeoIP取得</button>
           <button class="btn btn-sm btn-outline-secondary" id="logsRawDlBtn" style="display:none"><i class="bi bi-file-earmark-arrow-down"></i> ログ全件DL</button>
           <span class="badge bg-light text-dark border" id="logsFileInfo" style="display:none"></span>
         </div>

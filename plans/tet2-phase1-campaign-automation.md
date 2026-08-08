@@ -1,8 +1,9 @@
 ---
 project: /root/tet2
 created: 2026-08-08
-status: proposed
-execution_requires_user_confirmation: true
+status: active
+approved: 2026-08-08
+execution_requires_user_confirmation: false
 ---
 
 # TET v2 第1期実装計画 — 安全な開発基盤とキャンペーン半自動化
@@ -34,8 +35,9 @@ execution_requires_user_confirmation: true
 ## 調査済みの前提
 
 - Git正本 `/root/tet2` は2026-07-25の初回commit以降、本番変更を取り込んでいない
-- 追跡済み16ファイルが本番と異なり、`api/send_control.php` と
-  `tests/pipeline_qr_extension_test.php` は本番にのみ存在する
+- 追跡済み16ファイルが本番と異なり、`api/send_control.php`、
+  `tests/pipeline_qr_extension_test.php`、QR文書生成・物理パージscript、生成用HTML/画像の
+  合計9ファイルは本番にのみ存在する
 - `schema.sql` は本番の22テーブルと追加columnを再現できない
 - 現行test helperは本番DBを一時copyするため、GitHub CIや独立環境では実行できない
 - GitHub remoteは設定済みだが、2026-08-08時点で`gh`の認証tokenが失効している
@@ -86,7 +88,7 @@ Step 3と4、Step 6と7は論理上は並行可能。ただし現在は一人運
 ### Tasks
 
 - 追跡済み16ファイルの差分を個別reviewしてGit側へ反映する
-- 本番のみの`api/send_control.php`と`tests/pipeline_qr_extension_test.php`を確認して追加する
+- 本番のみのAPI/test、QR文書生成・物理パージscript、生成用HTML/画像を確認して追加する
 - `*.bak-*`、`*.BROKEN-*`、DB、data、Attachment、log、`.ssh`、`.claude`を除外する
 - 本番schemaとGit schemaの差分一覧をdataなしで保存する
 - READMEのAPI/test件数など、古くなった現況記述を更新する

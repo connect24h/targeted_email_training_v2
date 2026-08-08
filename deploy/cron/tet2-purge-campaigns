@@ -1,0 +1,6 @@
+# TET v2: 論理削除から90日経過したキャンペーンを毎日03:00に物理削除する。
+# 配備先: /etc/cron.d/tet2-purge-campaigns
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+0 3 * * * root /usr/bin/python3 /opt/training/bin/tet2-purge-campaigns.py >> /opt/training/tet2-data/purge.log 2>&1

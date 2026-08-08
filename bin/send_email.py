@@ -31,7 +31,10 @@ from email.mime.base import MIMEBase
 from email import encoders
 from email.utils import formataddr, formatdate, make_msgid
 
-# 停止ファイルとアラートファイルのパス
+# グローバルのステータス/アラートファイル(後方互換用)。
+# 並列送信では複数キャンペーンが同時に走るため、正となるのは
+# 各キャンペーンの data_dir 配下(self.status_file / self.alert_file)。
+# グローバルは「最後に更新したもの」が残る互換用にも書き続ける。
 STOP_FILE = "/opt/training/bin/data/stop_sending.flag"
 ALERT_FILE = "/opt/training/bin/data/send_alerts.json"
 STATUS_FILE = "/opt/training/bin/data/send_status.json"
@@ -56,6 +59,10 @@ class TargetedEmailSender:
                  attachment_dir="/opt/training/bin/Attachment"):
         self.data_dir = data_dir
         self.attachment_dir = attachment_dir
+        # キャンペーン別のステータス/アラート/停止フラグ(並列送信で相互上書きを防ぐ正)。
+        self.status_file = os.path.join(data_dir, "send_status.json")
+        self.alert_file = os.path.join(data_dir, "send_alerts.json")
+        self.stop_file = os.path.join(data_dir, "stop_sending.flag")
         self.setup_logging()
         self.setup_operation_logging()
         
@@ -95,48 +102,65 @@ class TargetedEmailSender:
         self.operation_logger.addHandler(operation_handler)
 
     def check_stop_file(self):
-        """停止ファイルをチェック"""
-        if os.path.exists(STOP_FILE):
+        """停止ファイルをチェック(キャンペーン別の data_dir 配下)"""
+        if os.path.exists(self.stop_file):
             self.logger.warning("🛑 停止ファイルが検出されました。送信を中止します。")
             self.operation_logger.warning("停止ファイル検出 - 送信中止")
             return True
         return False
 
+    def _append_alert(self, path, alert):
+        """指定ファイルにアラートを追記(最新100件保持)。"""
+        alerts = []
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                try:
+                    alerts = json.load(f)
+                except json.JSONDecodeError:
+                    alerts = []
+        alerts.append(alert)
+        if len(alerts) > 100:
+            alerts = alerts[-100:]
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(alerts, f, ensure_ascii=False, indent=2)
+
     def write_alert(self, alert_type, message, to_email="", details=""):
-        """アラートをJSONファイルに記録"""
+        """アラートをJSONファイルに記録。
+
+        正: キャンペーン別 self.alert_file(並列送信で混ざらない)。
+        互換: グローバル ALERT_FILE にも追記(既存の集約参照が壊れないように)。
+        """
+        alert = {
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "type": alert_type,
+            "message": message,
+            "to_email": to_email,
+            "details": details,
+        }
         try:
-            alerts = []
-            if os.path.exists(ALERT_FILE):
-                with open(ALERT_FILE, 'r', encoding='utf-8') as f:
-                    try:
-                        alerts = json.load(f)
-                    except json.JSONDecodeError:
-                        alerts = []
-
-            alert = {
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                "type": alert_type,
-                "message": message,
-                "to_email": to_email,
-                "details": details
-            }
-            alerts.append(alert)
-
-            # 最新100件のみ保持
-            if len(alerts) > 100:
-                alerts = alerts[-100:]
-
-            with open(ALERT_FILE, 'w', encoding='utf-8') as f:
-                json.dump(alerts, f, ensure_ascii=False, indent=2)
-
-            self.logger.warning(f"🚨 アラート記録: [{alert_type}] {message}")
-            self.operation_logger.warning(f"アラート: [{alert_type}] {message} - {to_email}")
-
+            self._append_alert(self.alert_file, alert)
         except Exception as e:
-            self.logger.error(f"アラート記録エラー: {str(e)}")
+            self.logger.error(f"アラート記録エラー(campaign): {str(e)}")
+        try:
+            self._append_alert(ALERT_FILE, alert)  # 後方互換(グローバル)
+        except Exception:
+            pass
+        self.logger.warning(f"🚨 アラート記録: [{alert_type}] {message}")
+        self.operation_logger.warning(f"アラート: [{alert_type}] {message} - {to_email}")
 
     def update_status(self, status, processed=0, total=0, success=0, error=0, current_email=""):
-        """送信ステータスをJSONファイルに記録"""
+        """送信ステータスをJSONファイルに記録。
+
+        正: キャンペーン別 self.status_file(並列送信で上書きし合わない)。
+        互換: グローバル STATUS_FILE にも書く(最後に更新したものが残る)。
+        data_dir 名(campaign_{id})から campaign_id を推定して埋め、集約API側で識別できるようにする。
+        """
+        campaign_id = None
+        base = os.path.basename(os.path.normpath(self.data_dir))
+        if base.startswith("campaign_"):
+            suffix = base[len("campaign_"):]
+            if suffix.isdigit():
+                campaign_id = int(suffix)
         try:
             status_data = {
                 "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -145,11 +169,17 @@ class TargetedEmailSender:
                 "total": total,
                 "success": success,
                 "error": error,
-                "current_email": current_email
+                "current_email": current_email,
+                "campaign_id": campaign_id,
             }
 
-            with open(STATUS_FILE, 'w', encoding='utf-8') as f:
+            with open(self.status_file, 'w', encoding='utf-8') as f:
                 json.dump(status_data, f, ensure_ascii=False, indent=2)
+            try:
+                with open(STATUS_FILE, 'w', encoding='utf-8') as f:  # 後方互換(グローバル)
+                    json.dump(status_data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
 
         except Exception as e:
             self.logger.error(f"ステータス更新エラー: {str(e)}")
@@ -199,7 +229,9 @@ class TargetedEmailSender:
         try:
             # リストファイル読み込み
             list_file = os.path.join(self.data_dir, "list.csv")
-            self.email_list = pd.read_csv(list_file)
+            # 乱数列(tracking_id)は先頭ゼロを含む10桁ID。数値推定させると
+            # 先頭ゼロが落ちてDB同期・追跡が壊れるため、全列を文字列で読む。
+            self.email_list = pd.read_csv(list_file, dtype=str)
             self.logger.info(f"リストファイル読み込み完了: {len(self.email_list)} 件")
             
             # 件名定型文読み込み
@@ -520,13 +552,17 @@ class TargetedEmailSender:
             self.logger.error(f"メールログ確認エラー: {str(e)}")
             return False
 
-    def update_send_flag(self, row_index, flag_value=1):
-        """list.csvの送信フラグを更新"""
+    def update_send_flag(self, row_index, flag_value="1"):
+        """list.csvの送信フラグを更新
+
+        dtype=str で読むため flag_value も文字列で統一する
+        (数値を混ぜると列型が乱れ、書き戻し時の表記が揺れる)。
+        """
         try:
             list_file = os.path.join(self.data_dir, "list.csv")
 
             # CSVを読み込み
-            df = pd.read_csv(list_file)
+            df = pd.read_csv(list_file, dtype=str)  # 乱数列の先頭ゼロ保持
 
             # 送信フラグ列がなければ追加
             if '送信フラグ' not in df.columns:
@@ -550,7 +586,7 @@ class TargetedEmailSender:
         """送信フラグから再開行を特定（最後に送信済みの次の行）"""
         try:
             list_file = os.path.join(self.data_dir, "list.csv")
-            df = pd.read_csv(list_file)
+            df = pd.read_csv(list_file, dtype=str)  # 乱数列の先頭ゼロ保持
 
             if '送信フラグ' not in df.columns:
                 self.logger.info("送信フラグ列がありません。最初から開始します。")
@@ -579,24 +615,36 @@ class TargetedEmailSender:
             self.logger.error(f"再開行検索エラー: {str(e)}")
             return 0
 
-    def get_row_by_koban(self, koban):
-        """項番から行インデックスを取得"""
+    def get_row_by_koban(self, koban, last=False):
+        """項番から行インデックスを取得
+
+        last=False: その項番が最初に現れる行（開始行用）
+        last=True : その項番が最後に現れる行（終了行用）
+        全員に全コンテンツ配信では1項番が複数行になるため、終了行は
+        最終出現行を返さないと末尾のコンテンツ行が送信範囲から漏れる。
+        """
         try:
             list_file = os.path.join(self.data_dir, "list.csv")
-            df = pd.read_csv(list_file)
+            df = pd.read_csv(list_file, dtype=str)  # 乱数列の先頭ゼロ保持
 
             if '項番' not in df.columns:
                 self.logger.warning("項番列が見つかりません")
                 return None
 
+            matched = None
             for index, row in df.iterrows():
                 row_koban = row.get('項番')
                 if pd.notna(row_koban):
                     try:
                         if int(float(row_koban)) == koban:
-                            return index
+                            if not last:
+                                return index
+                            matched = index  # 最終出現を追い続ける
                     except (ValueError, TypeError):
                         continue
+
+            if matched is not None:
+                return matched
 
             self.logger.warning(f"項番 {koban} が見つかりません")
             return None
@@ -609,7 +657,7 @@ class TargetedEmailSender:
         """送信状況のサマリーを取得"""
         try:
             list_file = os.path.join(self.data_dir, "list.csv")
-            df = pd.read_csv(list_file)
+            df = pd.read_csv(list_file, dtype=str)  # 乱数列の先頭ゼロ保持
 
             total = len(df)
             sent = 0
@@ -663,9 +711,9 @@ class TargetedEmailSender:
         self.logger.info("一括メール送信開始")
         self.operation_logger.info(f"一括メール送信開始 (送信間隔: {interval}秒, 開始行: {(start_row or 0) + 1}, 終了行: {(end_row + 1) if end_row is not None else '最後まで'})")
 
-        # 停止ファイルを削除（新規開始時）
-        if os.path.exists(STOP_FILE):
-            os.remove(STOP_FILE)
+        # 停止ファイルを削除（新規開始時）。キャンペーン別の data_dir 配下。
+        if os.path.exists(self.stop_file):
+            os.remove(self.stop_file)
             self.logger.info("停止ファイルをクリアしました")
 
         # データ検証
@@ -758,6 +806,10 @@ class TargetedEmailSender:
                     if not subject or subject == "件名なし":
                         self.logger.warning(f"行 {index + 1}: 件名テンプレートが見つかりません (No: {subject_template_no})")
                         subject = f"件名テンプレート{subject_template_no}"
+                    # (2026-08-06) 件名にも本文と同じ差し込み処理を適用する。
+                    # 件名テンプレートに #$1$#〜#$4$#(例: #$2$#=氏名)が含まれる場合、
+                    # 従来は未置換のまま送信されていた(本文だけ replace_placeholders していた)。
+                    subject = self.replace_placeholders(subject, row)
                 except Exception as e:
                     self.logger.error(f"行 {index + 1}: 件名作成エラー: {str(e)}")
                     subject = "件名エラー"
@@ -802,7 +854,7 @@ class TargetedEmailSender:
                         self.logger.info(f"📤 SMTP送信完了、メールログ確認中... {to_email}")
                         if self.check_mail_delivery(to_email, max_wait=15, check_interval=2):
                             # 送信フラグを更新
-                            self.update_send_flag(index, 1)
+                            self.update_send_flag(index, "1")
                             success_count += 1
                             self.logger.info(f"✅ 送信成功・確認済 ({success_count}/{valid_count}): {to_email}")
                             deferred_count = 0  # 正常配信でリセット
@@ -870,11 +922,11 @@ class TargetedEmailSender:
                                     self.update_status("running", processed_count, valid_count, success_count, error_count, "")
 
                                 # SMTP送信自体は成功しているのでフラグは立てる
-                                self.update_send_flag(index, 1)
+                                self.update_send_flag(index, "1")
                                 success_count += 1
                             else:
                                 # メールログで確認できなかったがSMTP送信は成功
-                                self.update_send_flag(index, 1)
+                                self.update_send_flag(index, "1")
                                 success_count += 1
                                 self.logger.warning(f"⚠️ SMTP送信成功（ログ未確認）({success_count}/{valid_count}): {to_email}")
                                 deferred_count = 0  # リセット
@@ -984,7 +1036,7 @@ class TargetedEmailSender:
             # 終了行の決定
             actual_end_row = None
             if end_koban is not None:
-                end_row_index = self.get_row_by_koban(end_koban)
+                end_row_index = self.get_row_by_koban(end_koban, last=True)
                 if end_row_index is not None:
                     actual_end_row = end_row_index
                     self.logger.info(f"🏁 終了項番 {end_koban} → 行 {end_row_index + 1} まで送信")

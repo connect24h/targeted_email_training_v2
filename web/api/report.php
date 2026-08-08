@@ -102,8 +102,16 @@ function report_handle_summary(): never
     json_out(['success' => true, 'summary' => report_summary_from_counts(report_summary_row($campaignId, $tenantId))]);
 }
 
-function report_campaign_rows(int $tenantId): array
+function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
 {
+    // test_filter: 'prod'(既定)=本番のみ(is_test=0) / 'test'=テストのみ(is_test=1) / 'all'=全部。
+    // 本番統計にテスト送信が混ざらないよう、既定は本番のみを返す。
+    $testWhere = '';
+    if ($testFilter === 'prod') {
+        $testWhere = ' AND c.is_test = 0';
+    } elseif ($testFilter === 'test') {
+        $testWhere = ' AND c.is_test = 1';
+    }
     return Db::all(
         "SELECT c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test, c.created_at,
                 COALESCE(ct.target_count, 0) AS target_count,
@@ -130,7 +138,7 @@ function report_campaign_rows(int $tenantId): array
              WHERE e.tenant_id = ? AND e.event_type IN ('open', 'click', 'auth')
              GROUP BY e.campaign_id
          ) ev ON ev.campaign_id = c.id
-         WHERE c.tenant_id = ?
+         WHERE c.tenant_id = ? AND c.deleted_at IS NULL" . $testWhere . "
          ORDER BY c.id DESC",
         [$tenantId, $tenantId, $tenantId]
     );
@@ -140,8 +148,11 @@ function report_handle_campaigns(): never
 {
     $user = require_role('viewer');
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    // test_filter: prod(既定,本番のみ) / test(テストのみ) / all(全部)。本番統計にテストを混ぜない。
+    $tf = $_GET['test_filter'] ?? 'prod';
+    if (!in_array($tf, ['prod', 'test', 'all'], true)) { $tf = 'prod'; }
     $campaigns = [];
-    foreach (report_campaign_rows($tenantId) as $row) {
+    foreach (report_campaign_rows($tenantId, $tf) as $row) {
         $summary = report_summary_from_counts($row);
         $campaigns[] = array_merge([
             'id' => (int) $row['id'],

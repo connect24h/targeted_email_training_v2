@@ -303,11 +303,12 @@ function logs_handle_training_results_csv(int $tenantId): never
     $out = fopen('php://temp', 'r+');
     fputcsv($out, ['キャンペーン', '項番', 'メール', '氏名', '会社', '部署', '役職カテゴリ', '送信', '開封', 'クリック', '認証']);
     foreach ($rows as $r) {
+        // CSVインジェクション対策: ユーザ由来のテキスト列を tet2_csv_sanitize() で無害化。
         fputcsv($out, [
-            (string) $r['campaign_name'], (string) $r['koban'], (string) $r['email'],
-            (string) ($r['target_name'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['department'] ?? ''),
-            (string) ($r['position_category'] ?? ''),
-            $r['send_status'] === 'sent' ? '済' : (string) $r['send_status'],
+            tet2_csv_sanitize($r['campaign_name']), (string) $r['koban'], tet2_csv_sanitize($r['email']),
+            tet2_csv_sanitize($r['target_name'] ?? ''), tet2_csv_sanitize($r['company'] ?? ''), tet2_csv_sanitize($r['department'] ?? ''),
+            tet2_csv_sanitize($r['position_category'] ?? ''),
+            $r['send_status'] === 'sent' ? '済' : tet2_csv_sanitize($r['send_status']),
             (int) $r['opened'] ? '○' : '', (int) $r['clicked'] ? '○' : '', (int) $r['authed'] ? '○' : '',
         ]);
     }
@@ -452,11 +453,12 @@ function logs_handle_training_log_detail_csv(int $tenantId): never
                    'メールアドレス（会社）', '会社名', '略称', '本務役職名称', '役職カテゴリ',
                    '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent']);
     foreach ($rows as $r) {
+        // CSVインジェクション対策: 入力Email/Password/UserAgent 等の攻撃者由来値を含むため全列を無害化。
         fputcsv($out, [
-            $r['timestamp'], $r['random'], ($r['duplicate'] ? $r['duplicate_count'] . '回' : ''),
-            $r['type'], $r['recipient_email'], $r['fullname'], $r['company_email'], $r['company'],
-            $r['abbreviation'], $r['position'], $r['position_category'], $r['email'], $r['password'],
-            $r['ip'], $r['country'], $r['location'], $r['isp'], $r['org'], $r['as'], $r['hostname'], $r['useragent'],
+            tet2_csv_sanitize($r['timestamp']), tet2_csv_sanitize($r['random']), ($r['duplicate'] ? $r['duplicate_count'] . '回' : ''),
+            tet2_csv_sanitize($r['type']), tet2_csv_sanitize($r['recipient_email']), tet2_csv_sanitize($r['fullname']), tet2_csv_sanitize($r['company_email']), tet2_csv_sanitize($r['company']),
+            tet2_csv_sanitize($r['abbreviation']), tet2_csv_sanitize($r['position']), tet2_csv_sanitize($r['position_category']), tet2_csv_sanitize($r['email']), tet2_csv_sanitize($r['password']),
+            tet2_csv_sanitize($r['ip']), tet2_csv_sanitize($r['country']), tet2_csv_sanitize($r['location']), tet2_csv_sanitize($r['isp']), tet2_csv_sanitize($r['org']), tet2_csv_sanitize($r['as']), tet2_csv_sanitize($r['hostname']), tet2_csv_sanitize($r['useragent']),
         ]);
     }
     rewind($out);
@@ -579,9 +581,10 @@ function logs_handle_campaign_files_csv(int $tenantId): never
     fputcsv($out, ['項番', '乱数(tracking_id)', '送信先メールアドレス', '表示氏名', '会社名', '送信状況',
                    'リンクHTMLファイル名', 'リンクHTML URL', 'ビーコン画像ファイル名', 'ビーコン画像 URL']);
     foreach ($data['rows'] as $r) {
+        // CSVインジェクション対策: メール/氏名/会社名等のユーザ由来列を無害化。
         fputcsv($out, [
-            $r['koban'], $r['tracking_id'], $r['recipient_email'], $r['fullname'], $r['company'], $r['send_status'],
-            $r['link_file'], $r['link_url'], $r['beacon_file'], $r['beacon_url'],
+            (string) $r['koban'], tet2_csv_sanitize($r['tracking_id']), tet2_csv_sanitize($r['recipient_email']), tet2_csv_sanitize($r['fullname']), tet2_csv_sanitize($r['company']), tet2_csv_sanitize($r['send_status']),
+            tet2_csv_sanitize($r['link_file']), tet2_csv_sanitize($r['link_url']), tet2_csv_sanitize($r['beacon_file']), tet2_csv_sanitize($r['beacon_url']),
         ]);
     }
     rewind($out);
@@ -1132,8 +1135,12 @@ function weblog_parse_access(?string $start, ?string $end, ?string $pathFilter, 
 }
 
 /** ログ配列に GeoIP を付与(キャッシュ優先, 1回40件までAPI)。参照渡し。 */
-function weblog_enrich_geoip(array &$logs): void
+function weblog_enrich_geoip(array &$logs, bool $allowApi = false): void
 {
+    // $allowApi=false(既定): 外部GeoIP API を一切呼ばず、キャッシュ済み情報だけ付与する。
+    //   一覧表示のたびに ip-api.com へ問い合わせると、未知IPが多い時に
+    //   「3秒×IP数」でリクエストがタイムアウトするため、一覧は必ずキャッシュのみ。
+    // $allowApi=true: CSV出力や明示的な「GeoIP更新」操作でのみ外部APIを許可する。
     $cache = weblog_load_ip_cache();
     $updated = false;
     $apiCalls = 0;
@@ -1142,7 +1149,7 @@ function weblog_enrich_geoip(array &$logs): void
         $ip = $log['ip'];
         $needs = (!isset($cache[$ip]) && $ip !== 'unknown')
               || (isset($cache[$ip]) && ($cache[$ip]['country'] ?? '') === 'Unknown');
-        if ($needs && $apiCalls < $maxApi) {
+        if ($allowApi && $needs && $apiCalls < $maxApi) {
             $cache[$ip] = weblog_ip_info($ip);
             $updated = true;
             $apiCalls++;
@@ -1199,6 +1206,32 @@ function weblog_handle_list(): never
                                'total_pages' => max(1, (int) ceil($total / $perPage))]]);
 }
 
+/**
+ * WebAccessLog の GeoIP を後追い補完する。一覧と同じ条件で対象ログを取得し、
+ * 未知IPだけ外部API(最大40件)で解決してキャッシュに保存、補完後の一覧を返す。
+ * 一覧表示のタイムアウトを避けるため、外部通信はこの明示操作でのみ行う。
+ */
+function weblog_handle_geoip_refresh(): never
+{
+    $start = isset($_GET['start_date']) ? (string) $_GET['start_date'] : null;
+    $end = isset($_GET['end_date']) ? (string) $_GET['end_date'] : null;
+    $pathFilter = isset($_GET['path']) ? (string) $_GET['path'] : null;
+    $search = isset($_GET['search']) ? (string) $_GET['search'] : null;
+    $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+    $perPage = isset($_GET['per_page']) ? (int) $_GET['per_page'] : 5000;
+    if ($perPage > 5000 || $perPage < 1) { $perPage = 5000; }
+    weblog_validate_date($start, '開始日時');
+    weblog_validate_date($end, '終了日時');
+
+    $res = weblog_parse_access($start, $end, $pathFilter, $search, $page, $perPage);
+    $logs = $res['logs'];
+    weblog_enrich_geoip($logs, true); // 明示操作なので外部APIを許可(最大40件/回)
+    audit('logs.weblog_geoip', 'page=' . $page);
+    json_out(['success' => true, 'logs' => $logs,
+              'pagination' => ['page' => $page, 'per_page' => $perPage, 'total_count' => $res['total_count'],
+                               'total_pages' => max(1, (int) ceil($res['total_count'] / $perPage))]]);
+}
+
 /** WebAccessLog を CSV でダウンロード(全件, GeoIP付き)。 */
 function weblog_handle_csv(): never
 {
@@ -1210,13 +1243,10 @@ function weblog_handle_csv(): never
 
     $res = weblog_parse_access($start, $end, $pathFilter, null, 1, 0); // 全件
     $logs = $res['logs'];
-    weblog_enrich_geoip($logs);
+    weblog_enrich_geoip($logs, true); // CSV は時間をかけてよいので外部GeoIP APIを許可
 
-    $san = function ($v): string {
-        $v = (string) $v;
-        if ($v !== '' && in_array($v[0], ['=', '+', '-', '@', "\t", "\r"], true)) { return "'" . $v; }
-        return $v;
-    };
+    // CSVインジェクション対策は共通関数 tet2_csv_sanitize() に集約(bootstrap.php)。
+    $san = 'tet2_csv_sanitize';
     $out = fopen('php://temp', 'r+');
     fputcsv($out, ['IP', 'Timestamp', 'Method', 'Path', 'Protocol', 'Status', 'Size', 'Referer',
                    'User-Agent', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'ログファイル']);
@@ -1267,6 +1297,7 @@ try {
     if ($action === 'reply_maildir_view') { logs_handle_reply_maildir_view(); }
     if ($action === 'reply_maildir_csv') { logs_handle_reply_maildir_csv(); }
     if ($action === 'webaccess')         { weblog_handle_list(); }
+    if ($action === 'webaccess_geoip')   { weblog_handle_geoip_refresh(); }
     if ($action === 'webaccess_csv')     { weblog_handle_csv(); }
 
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);

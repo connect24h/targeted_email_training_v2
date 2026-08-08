@@ -47,6 +47,21 @@ function json_error(string $message, int $code = 400): never
     json_out(['success' => false, 'error' => $message], $code);
 }
 
+/**
+ * CSVインジェクション対策。CSVの1セルとして出力する値を無害化する。
+ * 先頭が =, +, -, @, TAB, CR で始まる値は、Excel/Sheets等が数式・コマンドとして
+ * 評価し得るため、先頭にシングルクオートを付与してテキスト扱いに強制する。
+ * (logs.php weblog_handle_csv の既存 $san と同一ロジックを共通化したもの。)
+ */
+function tet2_csv_sanitize($v): string
+{
+    $v = (string) $v;
+    if ($v !== '' && in_array($v[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+        return "'" . $v;
+    }
+    return $v;
+}
+
 function json_body(): array
 {
     $raw = file_get_contents('php://input');
@@ -155,7 +170,9 @@ function edu_effective_tenant_id(array $user, ?int $requested = null): int
 /** 指定 campaign_id がテナントに属することを確認し、行を返す（IDOR 防止）。 */
 function assert_campaign_owned(int $campaignId, int $tenantId): array
 {
-    $c = Db::one('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ?', [$campaignId, $tenantId]);
+    // 論理削除済み(deleted_at IS NOT NULL)は操作対象から除外する。
+    // 物理パージ(cron)は削除済みを対象にするため、この関数を使わず直接SQLで引く。
+    $c = Db::one('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL', [$campaignId, $tenantId]);
     if ($c === null) {
         json_error('キャンペーンが見つかりません', 404);
     }

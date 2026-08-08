@@ -109,7 +109,10 @@ async function setupTenantSwitcher() {
   State.tenants = data.tenants || [];
   sw.innerHTML = State.tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   if (State.tenants.length) {
-    State.activeTenantId = Number(sw.value || State.tenants[0].id);
+    // 初期選択は「そのsuperadminの所属テナント(users.tenant_id)」を優先する。
+    // 該当テナントが一覧にあればそれを、なければ一覧の先頭を既定にする。
+    const preferred = State.tenants.find((t) => Number(t.id) === Number(State.user.tenant_id));
+    State.activeTenantId = preferred ? Number(preferred.id) : Number(State.tenants[0].id);
     sw.value = State.activeTenantId;
     sw.classList.remove('d-none');
   }
@@ -179,18 +182,39 @@ async function renderDashboard() {
 /* ========== キャンペーン ========== */
 const STATUS_LABEL = { draft:'下書き', scheduled:'予約', running:'実行中', paused:'一時停止', done:'完了', cancelled:'中止' };
 let campaignsRefreshTimer = null;
+let campaignSortDesc = true;  // 並び順: true=降順(最新が上, 既定) / false=昇順(古い順が上)
+function toggleCampaignSort() { campaignSortDesc = !campaignSortDesc; renderCampaigns(); }
 async function renderCampaigns() {
+  renderSendControl();  // 送信制御パネル(ステータス+アラート)を描画・ポーリング開始
   const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
-  $('#campaignsBody').innerHTML = campaigns.length ? campaigns.map((c) => `
+  // #列は表示上の通し番号(作成順=古い順に固定で1,2,3…)。並び順を変えても番号は変わらない。
+  // 古い順(id昇順)でordinalを確定 → id→番号 のマップを作る。
+  const campaignsAsc = campaigns.slice().sort((a, b) => a.id - b.id);
+  const numById = {};
+  campaignsAsc.forEach((c, i) => { numById[c.id] = i + 1; });
+  // 表示順は選択された方向。降順(既定)は最新が上。番号は上記マップで固定。
+  const shown = campaignSortDesc ? campaignsAsc.slice().reverse() : campaignsAsc;
+  // 並び順トグルUI(ヘッダの#列に矢印ボタン)。
+  const sortArrow = campaignSortDesc ? 'bi-sort-down' : 'bi-sort-up';
+  const sortLabel = campaignSortDesc ? '最新が上(降順)' : '古い順が上(昇順)';
+  const head = document.getElementById('campaignsHead');
+  if (head) {
+    head.innerHTML = `<tr><th><button class="btn btn-sm btn-link p-0 text-decoration-none" onclick="toggleCampaignSort()" title="${sortLabel}・クリックで切替">#<i class="bi ${sortArrow}"></i></button></th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr>`;
+  }
+  $('#campaignsBody').innerHTML = shown.length ? shown.map((c) => `
     <tr>
-      <td>${c.id}</td>
+      <td>${numById[c.id]}</td>
       <td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td>
       <td><span class="badge st-${c.status}">${STATUS_LABEL[c.status] || c.status}</span></td>
       <td>${c.target_count}</td>
       <td class="small text-muted">${fmtDate(c.start_at)}</td>
       <td class="text-nowrap">
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
+          ? `<button class="btn btn-sm btn-outline-primary" onclick="editCampaign(${c.id})" title="修正（下書きを編集）"><i class="bi bi-pencil"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
           ? `<button class="btn btn-sm btn-outline-info" onclick="generateCampaign(${c.id})" title="生成確認"><i class="bi bi-file-earmark-check"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator') && (c.status === 'scheduled' || c.status === 'paused')
+          ? `<button class="btn btn-sm btn-outline-warning" onclick="toDraftCampaign(${c.id})" title="下書きに戻す（送信予約を取り消して編集可能に）"><i class="bi bi-arrow-counterclockwise"></i></button>` : ''}
         ${['scheduled','running','paused','done'].includes(c.status)
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="showCampaignData(${c.id})" title="データ確認"><i class="bi bi-table"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
@@ -201,8 +225,12 @@ async function renderCampaigns() {
           ? `<button class="btn btn-sm btn-danger" onclick="stopCampaign(${c.id})" title="緊急停止"><i class="bi bi-stop-circle"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'paused'
           ? `<button class="btn btn-sm btn-success" onclick="resumeCampaign(${c.id})" title="停止点から再開"><i class="bi bi-play-circle"></i></button>` : ''}
-        ${roleAtLeast(State.user.role, 'operator') && (c.status === 'draft' || c.status === 'cancelled')
-          ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})"><i class="bi bi-trash"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator') && ['done','paused','cancelled'].includes(c.status)
+          ? `<button class="btn btn-sm btn-outline-success" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-primary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
       </td>
     </tr>`).join('') : emptyRow(6);
   // 進行中(実行中/予約)のキャンペーンがあれば、送信完了→done 遷移を画面に反映するため
@@ -213,6 +241,125 @@ async function renderCampaigns() {
     campaignsRefreshTimer = setTimeout(() => { if (State.view === 'campaigns') renderCampaigns(); }, 15000);
   }
 }
+
+/* ========== メール送信制御パネル（送信ステータス＋アラート） ========== */
+let sendControlTimer = null;
+let sendControlAlertsOpen = false;
+const SEND_STATUS_LABEL = {
+  idle: '待機', running: '送信中', paused: '一時停止',
+  stopped: '停止', completed: '完了', error: 'エラー',
+};
+// アラート種別ごとの深刻度（色分け）。
+const ALERT_SEVERITY = {
+  MULTIPLE_DEFERRED: 'danger', AUTO_STOP: 'danger', SEND_FAILED: 'danger',
+  SEND_EXCEPTION: 'danger', BOUNCED: 'danger',
+  AUTO_PAUSE: 'warning', RATE_LIMITED: 'warning', GREYLISTED: 'warning',
+  CONNECTION_REFUSED: 'warning', CONNECTION_TIMEOUT: 'warning',
+  TEMPORARILY_REJECTED: 'warning', DEFERRED: 'warning',
+};
+
+async function renderSendControl() {
+  const el = $('#sendControlPanel');
+  if (!el) return;
+  let statusData, alertsData;
+  try {
+    statusData = await api('api/send_control.php', { query: { action: 'status' } });
+    alertsData = await api('api/send_control.php', { query: { action: 'alerts' } });
+  } catch (e) {
+    el.innerHTML = '';  // 取得失敗時はパネルを出さない（画面を壊さない）
+    return;
+  }
+  const statuses = statusData.statuses || [];
+  const alerts = alertsData.data || [];
+  const activeCount = statusData.active_count || 0;
+
+  // 実行中（running系）のキャンペーンを優先表示。無ければ直近の完了を1件見せる。
+  const running = statuses.filter((s) => ['running', 'scheduled', 'paused'].includes(s.campaign_status));
+  const shown = running.length ? running : statuses.slice(0, 1);
+
+  const statusRows = shown.map((s) => {
+    const rate = s.total > 0 ? Math.round((s.processed * 100) / s.total) : 0;
+    const stLabel = SEND_STATUS_LABEL[s.status] || s.status;
+    const stColor = s.status === 'running' ? 'primary'
+      : s.status === 'completed' ? 'success'
+      : (s.status === 'error' || s.status === 'stopped') ? 'danger'
+      : s.status === 'paused' ? 'warning' : 'secondary';
+    const stopBadge = s.is_stopped ? '<span class="badge bg-danger ms-1">停止フラグ</span>' : '';
+    const stopBtn = (roleAtLeast(State.user.role, 'operator') && s.status === 'running')
+      ? `<button class="btn btn-sm btn-danger ms-2" onclick="stopCampaign(${s.campaign_id})" title="緊急停止"><i class="bi bi-stop-circle"></i> 停止</button>` : '';
+    return `
+      <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+        <span class="badge bg-${stColor}">${stLabel}</span>
+        <span class="fw-bold">${esc(s.campaign_name)}</span>
+        <span class="small text-muted">${s.success}/${s.total} 送信（失敗 ${s.error}）</span>
+        ${stopBadge}
+        <div class="progress flex-grow-1" style="height:16px;min-width:120px;max-width:280px">
+          <div class="progress-bar bg-${stColor}" style="width:${rate}%">${rate}%</div>
+        </div>
+        ${s.current_email ? `<span class="small text-muted">送信中: ${esc(s.current_email)}</span>` : ''}
+        <span class="small text-muted">更新 ${esc(s.timestamp || '—')}</span>
+        ${stopBtn}
+      </div>`;
+  }).join('');
+
+  const dangerCount = alerts.filter((a) => ALERT_SEVERITY[a.type] === 'danger').length;
+  const alertBadge = alerts.length
+    ? `<button class="btn btn-sm btn-outline-${dangerCount ? 'danger' : 'warning'}" onclick="toggleSendAlerts()">
+         <i class="bi bi-exclamation-triangle"></i> アラート ${alerts.length}
+         <i class="bi bi-chevron-${sendControlAlertsOpen ? 'up' : 'down'}"></i>
+       </button>`
+    : '<span class="small text-success"><i class="bi bi-check-circle"></i> アラートなし</span>';
+
+  const alertList = (sendControlAlertsOpen && alerts.length) ? `
+    <div class="border rounded p-2 mt-2" style="max-height:240px;overflow-y:auto">
+      ${roleAtLeast(State.user.role, 'operator')
+        ? `<div class="text-end mb-1"><button class="btn btn-sm btn-outline-secondary" onclick="clearSendAlerts()"><i class="bi bi-trash"></i> アラートをクリア</button></div>` : ''}
+      ${alerts.map((a) => {
+        const sev = ALERT_SEVERITY[a.type] || 'secondary';
+        return `<div class="small border-start border-3 border-${sev} ps-2 mb-1">
+          <span class="badge bg-${sev}">${esc(a.type)}</span>
+          <span>${esc(a.message)}</span>
+          ${a.to_email ? `<span class="text-muted">- ${esc(a.to_email)}</span>` : ''}
+          ${a.campaign_name ? `<span class="text-muted">[${esc(a.campaign_name)}]</span>` : ''}
+          <span class="text-muted float-end">${esc(a.timestamp || '')}</span>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-header py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="fw-bold"><i class="bi bi-broadcast me-1"></i>メール送信制御
+          ${activeCount ? `<span class="badge bg-primary ms-1">実行中 ${activeCount}</span>` : ''}</span>
+        ${alertBadge}
+      </div>
+      <div class="card-body py-2">
+        ${statusRows || '<span class="small text-muted">送信中のキャンペーンはありません</span>'}
+        ${alertList}
+      </div>
+    </div>`;
+
+  // 送信中は3秒ポーリング。無ければ止める（idle/completed は手動更新）。
+  if (sendControlTimer) { clearTimeout(sendControlTimer); sendControlTimer = null; }
+  if (activeCount > 0 && State.view === 'campaigns') {
+    sendControlTimer = setTimeout(() => { if (State.view === 'campaigns') renderSendControl(); }, 3000);
+  }
+}
+
+function toggleSendAlerts() {
+  sendControlAlertsOpen = !sendControlAlertsOpen;
+  renderSendControl();
+}
+
+async function clearSendAlerts() {
+  if (!confirm('アラート履歴をクリアします。よろしいですか？')) return;
+  try {
+    await api('api/send_control.php', { method: 'POST', query: { action: 'clear_alerts' }, body: {} });
+    toast('アラートをクリアしました', 'ok');
+    renderSendControl();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
 async function launchCampaign(id) {
   if (!confirm('このキャンペーンを開始します。よろしいですか？')) return;
   try { const r = await api('api/campaign_launch.php', { method: 'POST', query: { action: 'launch' }, body: { id } });
@@ -255,9 +402,32 @@ async function showCampaignProgress(id) {
   }, 3000);
 }
 async function deleteCampaign(id) {
-  if (!confirm('キャンペーンを削除します。よろしいですか？')) return;
+  if (!confirm('キャンペーンを削除します。\n\n削除後 90日間はデータを保持し、その後に自動で完全削除（ビーコン・追跡ファイル含む）されます。\n実行中の場合は送信も停止します。よろしいですか？')) return;
   try { await api('api/campaigns.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
-    toast('削除しました', 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
+    toast('削除しました（90日間はデータ保持）', 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
+}
+async function editCampaign(id) {
+  // 下書きキャンペーンの編集モーダルを開く（既存値をプリフィル）。
+  try {
+    await openCampaignModal(id);
+  } catch (e) { toast(e.message || '編集フォームを開けませんでした', 'err'); }
+}
+async function toDraftCampaign(id) {
+  if (!confirm('このキャンペーンを下書きに戻します。\n\n送信予約（未実行分）を取り消し、編集できる状態にします。\n送信済みの宛先はそのまま残ります。よろしいですか？')) return;
+  try {
+    await api('api/campaign_launch.php', { method: 'POST', query: { action: 'to_draft' }, body: { id } });
+    toast('下書きに戻しました', 'ok'); renderCampaigns();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function duplicateCampaign(id) {
+  if (!confirm('このキャンペーンを複製して新しい下書きを作成します。\n設定・対象者を引き継ぎます（送信履歴は引き継ぎません）。よろしいですか？')) return;
+  try { const r = await api('api/campaigns.php', { method: 'POST', query: { action: 'duplicate' }, body: { id } });
+    toast(`複製しました（下書き #${r.campaign.id}）`, 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
+}
+async function relaunchCampaign(id) {
+  if (!confirm('このキャンペーンを複製して再送信の下書きを作成します。\n同じ対象者に新しい tracking_id で再送できます。\n複製後、送信日時を設定して開始してください。よろしいですか？')) return;
+  try { const r = await api('api/campaigns.php', { method: 'POST', query: { action: 'duplicate' }, body: { id } });
+    toast(`再送信用の下書き #${r.campaign.id} を作成しました。日時を設定して開始してください`, 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
 }
 async function generateCampaign(id) {
   toast('生成中…', 'info');
@@ -403,16 +573,26 @@ function logStatusBadge(v) {
 }
 const logsState = { type: 'delivery', offset: 0, limit: 100 };
 async function renderLogs() {
-  // キャンペーン絞込セレクトを(初回のみ)埋める。
+  // キャンペーン絞込セレクトは画面を開くたびに毎回作り直す。
+  // キャンペーンは随時追加されるためキャッシュしない(新規作成分がすぐ出るように)。
+  // 選択中のキャンペーンは維持するが、テナントを切り替えた時だけは破棄する。
   const sel = $('#logsCampaignFilter');
-  if (sel && sel.options.length <= 1) {
+  const tenantKey = String(State.activeTenantId ?? State.user?.tenant_id ?? '');
+  if (sel) {
+    const tenantChanged = sel.dataset.tenantKey !== undefined && sel.dataset.tenantKey !== tenantKey;
+    const prev = tenantChanged ? '' : sel.value;
     try {
       const { campaigns } = await api('api/report.php', { query: { action: 'campaigns' } });
+      // 先頭の「すべて」を残して以降を破棄してから詰め直す。
+      while (sel.options.length > 1) sel.remove(1);
       for (const c of campaigns) {
         const o = document.createElement('option');
         o.value = c.id; o.textContent = `#${c.id} ${c.name}`;
         sel.appendChild(o);
       }
+      // 選択中の値が新しい一覧にも存在すれば復元する。無ければ「すべて」に戻す。
+      sel.value = prev && [...sel.options].some((o) => o.value === prev) ? prev : '';
+      sel.dataset.tenantKey = tenantKey;
     } catch { /* 一覧取得失敗は絞込なしで続行 */ }
   }
   await loadLogs();
@@ -483,12 +663,15 @@ async function loadTrainingLogDetail() {
   let data;
   try { data = await api('api/logs.php', { query }); }
   catch (e) { $('#logsBody').innerHTML = `<tr><td colspan="${def.headers.length}" class="text-center text-danger py-3">${esc(e.message)}</td></tr>`; return; }
-  // タイプフィルタの選択肢を(初回のみ)埋める。
+  // タイプフィルタの選択肢は毎回作り直す(新しい種別がすぐ出るように)。選択中の値は維持。
   const sel = $('#logsTypeFilter');
-  if (sel && sel.options.length <= 1 && data.by_type) {
+  if (sel && data.by_type) {
+    const prev = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
     for (const t of Object.keys(data.by_type)) {
       const o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o);
     }
+    sel.value = prev && [...sel.options].some((o) => o.value === prev) ? prev : '';
   }
   const rows = data.rows || [];
   $('#logsBody').innerHTML = rows.length
@@ -567,6 +750,25 @@ async function loadWebAccessLog() {
     $('#logsFileInfo').textContent = `ログ ${data.log_files.length} ファイル / 合計 ${formatBytesJs(total)}`;
   }
 }
+// GeoIP を後追い補完する（未知IPだけ外部APIで解決。一覧は即座に返すのでタイムアウトしない）。
+async function refreshWebAccessGeoip() {
+  const btn = document.getElementById('webGeoipBtn');
+  if (btn) { btn.disabled = true; btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> GeoIP取得中…'; }
+  const query = { action: 'webaccess_geoip', page: logsState.webPage || 1, per_page: 5000 };
+  const sd = logDateVal('#logsStartDate'); if (sd) query.start_date = sd;
+  const ed = logDateVal('#logsEndDate'); if (ed) query.end_date = ed;
+  const pf = $('#logsPathFilter')?.value.trim(); if (pf) query.path = pf;
+  const kw = $('#logsKeyword')?.value.trim(); if (kw) query.search = kw;
+  try {
+    await api('api/logs.php', { query });
+    toast('GeoIP情報を更新しました（未知IPは最大40件/回）', 'ok');
+    await loadWebAccessLog();  // キャッシュが埋まった状態で再表示
+  } catch (e) {
+    toast(e.message || 'GeoIP更新に失敗しました', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; if (btn.dataset.orig) btn.innerHTML = btn.dataset.orig; }
+  }
+}
 // WebアクセスLog CSV(全件, GeoIP付き)ダウンロード。
 function downloadWebAccessCsv() {
   const qs = new URLSearchParams({ action: 'webaccess_csv' });
@@ -637,15 +839,18 @@ async function loadReplyMaildir() {
   let data;
   try { data = await api('api/logs.php', { query }); }
   catch (e) { $('#logsBody').innerHTML = `<tr><td colspan="${def.headers.length}" class="text-center text-danger py-3">${esc(e.message)}</td></tr>`; return; }
-  // 送信元アカウントのセレクトを(初回のみ)埋める。件数つき。
+  // 送信元アカウントのセレクトは毎回作り直す(件数も最新化される)。選択中の値は維持。
   const sel = $('#logsSenderFilter');
-  if (sel && sel.options.length <= 1 && data.accounts) {
+  if (sel && data.accounts) {
+    const prevSender = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
     for (const [key, email] of Object.entries(data.accounts)) {
       const n = (data.counts && data.counts[key]) || 0;
       const o = document.createElement('option');
       o.value = key; o.textContent = `${key} <${email}> (${n})`;
       sel.appendChild(o);
     }
+    sel.value = prevSender && [...sel.options].some((o) => o.value === prevSender) ? prevSender : '';
   }
   const rows = data.rows || [];
   $('#logsBody').innerHTML = rows.length
@@ -712,6 +917,8 @@ function switchLogTab(type) {
   show('#logsApplyBtn', hasFilter);
   // CSV 出力: 訓練結果/訓練結果ログ明細/WebアクセスLog/返信者Maildir/リンク・ビーコンファイル一覧。
   show('#logsCsvBtn', isTr || isTld || isWeb || isMd || isCf);
+  // GeoIP取得: WebアクセスLog のみ(一覧はキャッシュのみ表示、未知IPはこのボタンで後追い解決)。
+  show('#webGeoipBtn', isWeb);
   // 「更新」ボタンは campaign_files では上部キャンペーン選択で再読込するため隠す(専用フィルタなし)。
   if (isCf) show('#logsApplyBtn', false);
   // ログ全件DL: 生ログ(mail/web)のみ。
@@ -847,16 +1054,29 @@ async function loadCampaignFile(file, btn) {
   }
 }
 
-async function openCampaignModal() {
+async function openCampaignModal(campaignId = null) {
+  const isEdit = campaignId !== null;
   const [tpls, tgts, grps, beacons] = await Promise.all([
     api('api/templates.php', { query: { action: 'list' } }),
     api('api/targets.php', { query: { action: 'list' } }),
     api('api/groups.php', { query: { action: 'list' } }),
     api('api/campaigns.php', { query: { action: 'beacon_bases' } }),
   ]);
+  // 編集時は既存キャンペーンの値を取得してプリフィルする。
+  let editData = null;
+  if (isEdit) {
+    editData = await api('api/campaigns.php', { query: { action: 'get', id: campaignId } });
+  }
   const beaconList = beacons.beacon_bases || ['http://85.131.251.224/'];
   const byKind = (k) => (tpls.templates || []).filter((t) => t.kind === k);
   const opt = (arr) => arr.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  // 偽ログイン専用: 認証種別(auth_flag)をラベルに出す。
+  // QR型/リンク型で「認証画面を出すか(=auth_flag 1/2/3)、種明かし直行か(=0)」を選択者が区別できるように。
+  const AUTH_LABEL = { 0: '認証なし・種明かし直行', 1: 'Box認証', 2: 'Microsoft365認証', 3: 'デジタルアーツ認証' };
+  const optPhish = (arr) => arr.map((t) => {
+    const af = Number(t.auth_flag) || 0;
+    return `<option value="${t.id}">${esc(t.name)}（${AUTH_LABEL[af] || '認証なし'}）</option>`;
+  }).join('');
   // プレビュー用: テンプレート id → {name, content, format}
   const tplById = {};
   for (const t of (tpls.templates || [])) tplById[t.id] = t;
@@ -911,7 +1131,18 @@ async function openCampaignModal() {
           <button type="button" class="btn btn-sm btn-outline-secondary" id="weekdayPreviewBtn"><i class="bi bi-calendar-week"></i> 対象日を確認</button></div>
       </div>
       <div class="mb-2 d-none" id="weekdayPreview"></div>
+      <div class="mb-2"><label class="form-label">配信方式</label>
+        <select class="form-select" name="content_delivery">
+          <option value="distribute">均等割り（各対象者に1コンテンツを均等配分）</option>
+          <option value="all">全員に全コンテンツ（テスト対象者に全パターン送付）</option>
+        </select>
+        <div class="form-text">「全員に全コンテンツ」は各対象者へ登録した全コンテンツを送ります。コンテンツごとに個別追跡されます。</div></div>
       <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_test" id="cbTest"><label class="form-check-label" for="cbTest">テスト送信（is_test）</label></div>
+      <div class="mb-2" id="testRedirectWrap" style="display:none">
+        <label class="form-label">テスト宛先（リダイレクト先メール・カンマ区切り）</label>
+        <textarea class="form-control" name="test_redirect_emails" rows="2" placeholder="test1@example.com, test2@example.com"></textarea>
+        <div class="form-text">テスト送信時、本番の宛先リスト分のメールを、ここに入力したアドレスへ<strong>均等分配</strong>して送ります（例: 1000名分を4アドレスに各250通）。差し込みデータ・追跡は本番のまま。空なら本番の宛先にそのまま送ります。</div>
+      </div>
       <hr>
       <div class="mb-2"><label class="form-label">対象グループ</label>
         <select class="form-select" name="group_ids" multiple size="3">${(grps.groups||[]).map((g)=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select></div>
@@ -935,7 +1166,7 @@ async function openCampaignModal() {
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">件名</label><select class="form-select form-select-sm c-subject">${opt(byKind('subject'))}</select></div>
         <div class="col-md-4"><label class="form-label small">本文</label><select class="form-select form-select-sm c-body">${opt(byKind('body'))}</select></div>
-        <div class="col-md-4"><label class="form-label small">偽ログイン</label><select class="form-select form-select-sm c-phish">${opt(byKind('phish_login'))}</select></div>
+        <div class="col-md-4"><label class="form-label small">偽ログイン（認証画面）</label><select class="form-select form-select-sm c-phish">${optPhish(byKind('phish_login'))}</select></div>
       </div>
       <div class="text-end mt-1">
         <button type="button" class="btn btn-sm btn-outline-info c-preview"><i class="bi bi-eye"></i> 内容プレビュー</button>
@@ -960,7 +1191,7 @@ async function openCampaignModal() {
           <input class="form-control form-control-sm c-beacon" list="beaconBaseList" placeholder="このコンテンツ専用の追跡URL"></div>
       </div>
     </div>`;
-  showModal('新規キャンペーン', body, async () => {
+  showModal(isEdit ? 'キャンペーン編集' : '新規キャンペーン', body, async () => {
     const f = $('#campaignForm');
     // コンテンツ収集
     const contents = Array.from(document.querySelectorAll('#contentsList .content-row')).map((row) => {
@@ -989,6 +1220,8 @@ async function openCampaignModal() {
       send_mode: f.send_mode.value,
       weekdays_only: f.weekdays_only.checked,
       is_test: f.is_test.checked,
+      content_delivery: f.content_delivery ? f.content_delivery.value : 'distribute',
+      test_redirect_emails: f.test_redirect_emails ? f.test_redirect_emails.value.trim() : '',
       start_at: f.start_at.value.replace('T', ' '),
       end_at: f.end_at.value.replace('T', ' '),
       target_ids: multiVals(f.target_ids),
@@ -1000,8 +1233,15 @@ async function openCampaignModal() {
     if (f.business_end.value.trim()) payload.business_end = f.business_end.value.trim();
     if (f.beacon_base && f.beacon_base.value.trim()) payload.beacon_base = f.beacon_base.value.trim();
     if (!payload.target_ids.length && !payload.group_ids.length) throw new Error('対象者かグループを選択してください');
-    await api('api/campaigns.php', { method: 'POST', query: { action: 'create' }, body: payload });
-    toast('作成しました', 'ok'); renderCampaigns();
+    if (isEdit) {
+      payload.id = campaignId;
+      await api('api/campaigns.php', { method: 'POST', query: { action: 'update' }, body: payload });
+      toast('更新しました', 'ok');
+    } else {
+      await api('api/campaigns.php', { method: 'POST', query: { action: 'create' }, body: payload });
+      toast('作成しました', 'ok');
+    }
+    renderCampaigns();
   });
   // モーダル表示後: コンテンツリストを初期化（1行）+ 追加/削除ボタン配線
   let contentIdx = 0;
@@ -1061,7 +1301,7 @@ async function openCampaignModal() {
       ${block('偽ログイン画面', tplById[pid])}`;
     area.classList.remove('d-none');
   };
-  const addRow = () => {
+  const addRow = (prefill = null) => {
     const wrap = document.createElement('div');
     wrap.innerHTML = contentRow(contentIdx++);
     const row = wrap.firstElementChild;
@@ -1082,15 +1322,62 @@ async function openCampaignModal() {
     row.querySelector('.c-subject').addEventListener('change', clearScenario);
     row.querySelector('.c-body').addEventListener('change', clearScenario);
     listEl.appendChild(row);
-    syncAttachment(row); // 初期状態(link)で添付を無効化
-    // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
-    if (scenarios.length) { scenSel.value = scenarios[0].key; scenSel.dispatchEvent(new Event('change')); }
+    if (prefill) {
+      // 編集時: 既存コンテンツの値を復元。
+      if (prefill.subject_template_id) row.querySelector('.c-subject').value = prefill.subject_template_id;
+      if (prefill.body_template_id) row.querySelector('.c-body').value = prefill.body_template_id;
+      if (prefill.phish_template_id) row.querySelector('.c-phish').value = prefill.phish_template_id;
+      if (prefill.link_mode) row.querySelector('.c-linkmode').value = prefill.link_mode;
+      row.querySelector('.c-scenario').value = '';  // 個別指定として復元
+      syncAttachment(row);  // link_mode に応じて添付欄の有効/無効を先に整える
+      if (prefill.attachment_ext) row.querySelector('.c-ext').value = prefill.attachment_ext;
+      row.querySelector('.c-zip').checked = Number(prefill.attachment_zip) === 1;
+      row.querySelector('.c-suppress-url').checked = Number(prefill.suppress_body_url) === 1;
+      if (prefill.from_address) row.querySelector('.c-from').value = prefill.from_address;
+      if (prefill.beacon_base) row.querySelector('.c-beacon').value = prefill.beacon_base;
+    } else {
+      syncAttachment(row); // 初期状態(link)で添付を無効化
+      // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
+      if (scenarios.length) { scenSel.value = scenarios[0].key; scenSel.dispatchEvent(new Event('change')); }
+    }
     renumber();
   };
   if (listEl) {
-    addRow(); // 初期1行
+    const editContents = (isEdit && editData && editData.contents && editData.contents.length) ? editData.contents : null;
+    if (editContents) {
+      editContents.forEach((c) => addRow(c));  // 既存コンテンツを行として復元
+    } else {
+      addRow(); // 初期1行(新規)
+    }
     const addBtn = document.getElementById('addContentBtn');
-    if (addBtn) addBtn.addEventListener('click', addRow);
+    if (addBtn) addBtn.addEventListener('click', () => addRow());
+  }
+  // 編集時: キャンペーン本体フィールドをプリフィル。
+  if (isEdit && editData && editData.campaign) {
+    const c = editData.campaign;
+    const f = document.getElementById('campaignForm');
+    const setVal = (name, val) => { if (f[name] !== undefined && val !== null && val !== undefined) f[name].value = val; };
+    setVal('name', c.name);
+    setVal('from_address', c.from_address);
+    if (c.beacon_base) setVal('beacon_base', c.beacon_base);
+    setVal('send_mode', c.send_mode || 'normal');
+    if (c.split_count) setVal('split_count', c.split_count);
+    if (c.split_interval_min) setVal('split_interval_min', c.split_interval_min);
+    // datetime-local は "YYYY-MM-DDTHH:MM" 形式。DBは "YYYY-MM-DD HH:MM:SS"。
+    if (c.start_at) f.start_at.value = String(c.start_at).replace(' ', 'T').slice(0, 16);
+    if (c.end_at) f.end_at.value = String(c.end_at).replace(' ', 'T').slice(0, 16);
+    if (c.business_start) setVal('business_start', c.business_start);
+    if (c.business_end) setVal('business_end', c.business_end);
+    f.weekdays_only.checked = Number(c.weekdays_only) === 1;
+    f.is_test.checked = Number(c.is_test) === 1;
+    if (f.content_delivery) f.content_delivery.value = c.content_delivery || 'distribute';
+    if (f.test_redirect_emails && c.test_redirect_emails) f.test_redirect_emails.value = c.test_redirect_emails;
+    toggleTestRedirect();  // is_test の状態に応じてテスト宛先欄の表示を更新
+    // 対象者を選択状態にする。
+    const tids = (editData.target_ids || []).map(String);
+    if (f.target_ids && tids.length) {
+      Array.from(f.target_ids.options).forEach((o) => { o.selected = tids.includes(o.value); });
+    }
   }
   // P6: ビーコンベースURLの疎通確認ボタン
   const checkBtn = document.getElementById('beaconCheckBtn');
@@ -1098,6 +1385,16 @@ async function openCampaignModal() {
   // 対象日プレビュー(平日限定の可視化)
   const wpBtn = document.getElementById('weekdayPreviewBtn');
   if (wpBtn) wpBtn.addEventListener('click', showWeekdayPreview);
+  // テスト送信チェックに応じてテスト宛先(リダイレクト先)欄の表示を切り替える。
+  const cbTest = document.getElementById('cbTest');
+  if (cbTest) cbTest.addEventListener('change', toggleTestRedirect);
+  toggleTestRedirect();  // 初期表示
+}
+// is_test チェック時のみテスト宛先(リダイレクト先メール)入力欄を表示する。
+function toggleTestRedirect() {
+  const cb = document.getElementById('cbTest');
+  const wrap = document.getElementById('testRedirectWrap');
+  if (wrap) wrap.style.display = (cb && cb.checked) ? '' : 'none';
 }
 // 開始〜終了の期間の各日をカレンダー表示。平日限定ONなら土日を配信対象外として色分けする。
 function showWeekdayPreview() {
@@ -1160,13 +1457,27 @@ let reportSelectedId = null;
 let reportCommitCampaignId = null;
 function pct(v) { return `${(Number(v) || 0).toFixed(1)}%`; }
 function rateClass(v, warn, danger) { const n = Number(v) || 0; return n >= danger ? 'val-danger' : n >= warn ? 'val-warning' : 'val-success'; }
+let reportTestFilter = 'prod';  // prod=本番のみ / test=テストのみ / all=全部
+function setReportFilter(v) { reportTestFilter = v; renderReports(); }
 async function renderReports() {
-  const { campaigns } = await api('api/report.php', { query: { action: 'campaigns' } });
+  // 本番統計にテスト送信が混ざらないよう、既定は本番のみ(prod)。フィルタで切替。
+  const { campaigns } = await api('api/report.php', { query: { action: 'campaigns', test_filter: reportTestFilter } });
   Cache.reports = {}; for (const c of campaigns) Cache.reports[c.id] = c;
-  $('#reportsBody').innerHTML = campaigns.length ? campaigns.map((c) => {
+  // フィルタUI(本番/テスト/全部)を一覧上部に描画。
+  const filterBar = document.getElementById('reportFilterBar');
+  if (filterBar) {
+    const btn = (v, label) => `<button class="btn btn-sm ${reportTestFilter === v ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setReportFilter('${v}')">${label}</button>`;
+    filterBar.innerHTML = `<div class="btn-group btn-group-sm">${btn('prod', '本番のみ')}${btn('test', 'テストのみ')}${btn('all', '全部')}</div>`;
+  }
+  // #列は作成順(古い順)で固定の通し番号。表示は降順(最新が上)。onclick は内部ID(c.id)を保持。
+  const reportsAsc = campaigns.slice().sort((a, b) => a.id - b.id);
+  const numById = {};
+  reportsAsc.forEach((c, i) => { numById[c.id] = i + 1; });
+  const shown = reportsAsc.slice().reverse();  // 最新が一番上
+  $('#reportsBody').innerHTML = shown.length ? shown.map((c) => {
     const s = c.summary || c;
     return `<tr style="cursor:pointer" onclick="showReportDetail(${c.id})">
-      <td>${c.id}</td><td>${esc(c.name)}</td><td>${s.target_count}</td>
+      <td>${numById[c.id]}</td><td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td><td>${s.target_count}</td>
       <td>${pct(s.sent_rate)}</td>
       <td class="${rateClass(s.open_rate,25,50)}">${pct(s.open_rate)}</td>
       <td class="${rateClass(s.click_rate,15,35)}">${pct(s.click_rate)}</td>
@@ -1355,9 +1666,11 @@ async function openToGroupModal() {
 async function renderTargets() {
   const { targets } = await api('api/targets.php', { query: { action: 'list' } });
   cacheRows('targets', targets);
-  $('#targetsBody').innerHTML = targets.length ? targets.map((t) => `
+  // #列は表示上の通し番号(古い順に1,2,3…)。他の一覧と統一。削除しても詰まる。
+  // list は tenant_no 順(=作成順)で返るため、その並びのまま連番を振る。
+  $('#targetsBody').innerHTML = targets.length ? targets.map((t, i) => `
     <tr>
-      <td>${t.id}</td><td>${esc(t.email)}</td><td>${esc(t.name)}</td>
+      <td>${i + 1}</td><td>${esc(t.email)}</td><td>${esc(t.name)}</td>
       <td>${esc(t.company)}</td><td>${esc(t.department)}</td><td>${esc(t.title)}</td>
       <td>${t.position_category ? `<span class="badge bg-light text-dark">${esc(t.position_category)}</span>` : ''}</td>
       <td class="text-nowrap">
@@ -1447,15 +1760,19 @@ async function exportTargetsCsv() {
 async function renderGroups() {
   const { groups } = await api('api/groups.php', { query: { action: 'list' } });
   cacheRows('groups', groups);
-  $('#groupsBody').innerHTML = groups.length ? groups.map((g) => {
+  // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
+  const groupsAsc = groups.slice().sort((a, b) => a.id - b.id);
+  $('#groupsBody').innerHTML = groupsAsc.length ? groupsAsc.map((g, i) => {
     const n = Number(g.target_count || 0);
     const memberCell = n === 0
       ? '<span class="badge bg-warning text-dark">空（0名）</span>'
       : `<span class="badge bg-light text-dark">${n} 名</span>`;
     return `
-    <tr><td>${g.id}</td><td>${esc(g.name)}</td><td>${g.kind === 'department' ? '部署' : 'カスタム'}</td>
+    <tr><td>${i + 1}</td><td>${esc(g.name)}</td><td>${g.kind === 'department' ? '部署' : 'カスタム'}</td>
       <td>${memberCell}</td>
-      <td class="text-nowrap">${roleAtLeast(State.user.role,'operator')?`
+      <td class="text-nowrap">
+        <button class="btn btn-sm btn-outline-primary" onclick="manageGroupMembers(${g.id})" title="メンバー管理（対象者の追加・削除）"><i class="bi bi-people"></i> メンバー</button>
+        ${roleAtLeast(State.user.role,'operator')?`
         <button class="btn btn-sm btn-outline-secondary" onclick="editGroup(${g.id})"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-sm btn-outline-danger" onclick="deleteGroup(${g.id})"><i class="bi bi-trash"></i></button>`:''}
       </td></tr>`;
@@ -1489,10 +1806,53 @@ async function deleteGroup(id) {
   try { await api('api/groups.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
     toast('削除しました', 'ok'); renderGroups(); } catch (e) { toast(e.message, 'err'); }
 }
+// グループのメンバー管理: 現メンバーと全対象者を一覧し、チェックで追加/削除する。
+async function manageGroupMembers(groupId) {
+  const g = Cache.groups[groupId];
+  let members, targets;
+  try {
+    [members, targets] = await Promise.all([
+      api('api/groups.php', { query: { action: 'members', group_id: groupId } }),
+      api('api/targets.php', { query: { action: 'list' } }),
+    ]);
+  } catch (e) { toast(e.message, 'err'); return; }
+  const memberIds = new Set((members.members || []).map((m) => m.id));
+  const allTargets = targets.targets || [];
+  if (!allTargets.length) {
+    showInfoModal('メンバー管理', '<p class="text-muted">対象者が1人も登録されていません。先に「対象者」画面で登録してください。</p>');
+    return;
+  }
+  // チェックボックス一覧(現メンバーは初期チェック済み)。
+  const rows = allTargets.map((t) => `
+    <div class="form-check">
+      <input class="form-check-input gm-chk" type="checkbox" value="${t.id}" id="gm-${t.id}" ${memberIds.has(t.id) ? 'checked' : ''}>
+      <label class="form-check-label" for="gm-${t.id}">${esc(t.email)}${t.name ? '（' + esc(t.name) + '）' : ''}${t.department ? ' <span class="text-muted small">' + esc(t.department) + '</span>' : ''}</label>
+    </div>`).join('');
+  const body = `
+    <p class="small text-muted mb-2">グループ「${esc(g ? g.name : '')}」のメンバーを選びます。チェックした対象者がメンバーになります（現メンバーは初期選択済み）。</p>
+    <div class="mb-2"><button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.gm-chk').forEach(c=>c.checked=true)">全選択</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.gm-chk').forEach(c=>c.checked=false)">全解除</button></div>
+    <div style="max-height:340px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:8px">${rows}</div>`;
+  showModal(`メンバー管理: ${g ? g.name : ''}`, body, async () => {
+    const checked = new Set(Array.from(document.querySelectorAll('.gm-chk')).filter((c) => c.checked).map((c) => Number(c.value)));
+    // 追加 = チェックあり かつ 元メンバーでない / 削除 = チェックなし かつ 元メンバー
+    const toAdd = [...checked].filter((id) => !memberIds.has(id));
+    const toRemove = [...memberIds].filter((id) => !checked.has(id));
+    if (toAdd.length) await api('api/groups.php', { method: 'POST', query: { action: 'add_targets' }, body: { group_id: groupId, target_ids: toAdd } });
+    if (toRemove.length) await api('api/groups.php', { method: 'POST', query: { action: 'remove_targets' }, body: { group_id: groupId, target_ids: toRemove } });
+    toast(`メンバーを更新しました（追加${toAdd.length}・削除${toRemove.length}）`, 'ok');
+    renderGroups();
+  });
+}
 
 /* ========== テンプレート ========== */
 // 件名・本文は「シナリオ」タブに統合(連動・連番共通)。偽ログイン/ネタバラシ/eラーニングは種別ごと。
+// タブの表示区分。'scenario' は「件名＋本文」を1タブに統合するための表示専用の擬似種別で、
+// DB 上の kind ではない(実体は subject と body の2レコード)。
 const TPL_KINDS = [['scenario','件名＋本文'],['phish_login','偽ログイン'],['debrief','ネタバラシ'],['elearning','eラーニング']];
+// テンプレート登録フォームの種別。バックエンドの TEMPLATE_KINDS と一致させること。
+// (2026-08-04) ここに TPL_KINDS を流用していたため 'scenario' が送られ「kind が不正です」で保存できなかった。
+const TPL_FORM_KINDS = [['subject','件名'],['body','本文'],['phish_login','偽ログイン'],['debrief','ネタバラシ'],['elearning','eラーニング']];
 const KIND_LABELS = { subject:'件名', body:'本文', phish_login:'偽ログイン', debrief:'ネタバラシ', elearning:'eラーニング' };
 const AUTH_FLAG_NAME = { '0':'通常（汎用）', '1':'Box', '2':'Microsoft365', '3':'Digital Arts' };
 let tplKindFilter = 'scenario';
@@ -1571,7 +1931,7 @@ function templateForm(t = {}) {
     <div class="mb-2"><label class="form-label">名称</label><input class="form-control" name="name" value="${esc(t.name)}" required></div>
     <div class="row g-2">
       <div class="col-md-6 mb-2"><label class="form-label">種別</label>
-        <select class="form-select" name="kind">${TPL_KINDS.map(([k,l])=>`<option value="${k}"${(t.kind||tplKindFilter)===k?' selected':''}>${l}</option>`).join('')}</select></div>
+        <select class="form-select" name="kind">${TPL_FORM_KINDS.map(([k,l])=>`<option value="${k}"${(t.kind||(tplKindFilter==='scenario'?'body':tplKindFilter))===k?' selected':''}>${l}</option>`).join('')}</select></div>
       <div class="col-md-6 mb-2"><label class="form-label">形式</label>
         <select class="form-select" name="format"><option value="html"${t.format==='html'?' selected':''}>HTML</option><option value="text"${t.format==='text'?' selected':''}>テキスト</option></select></div>
     </div>
@@ -1586,6 +1946,24 @@ function templateForm(t = {}) {
 // テンプレートフォームの差込ボタン/プレビューを配線(showModal 後に呼ぶ)。
 function bindTemplateForm() {
   const ta = document.getElementById('tplContent');
+  // (2026-08-05) 件名テンプレートは「名称＝そのまま件名」なので、名称を打つと内容欄へ複写する。
+  // 内容を直接編集した後は追随しない(手で書いたものを名称の変更で消さないため)。
+  // 種別が「件名」以外のときは何もしない(本文などは名称と中身が別物のため)。
+  const nameInput = document.querySelector('#tplForm [name=name]');
+  const kindSel = document.querySelector('#tplForm [name=kind]');
+  if (nameInput && kindSel && ta) {
+    // 空、または直前に名称から複写した値のままなら「未編集」とみなす。
+    let mirrored = ta.value === '' ? '' : null;
+    ta.addEventListener('input', () => { mirrored = null; });   // 手編集された時点で同期を止める
+    const syncNameToContent = () => {
+      if (kindSel.value !== 'subject') return;
+      if (mirrored === null && ta.value !== '') return;
+      ta.value = nameInput.value;
+      mirrored = ta.value;
+    };
+    nameInput.addEventListener('input', syncNameToContent);
+    kindSel.addEventListener('change', syncNameToContent);
+  }
   document.querySelectorAll('.tpl-ph-btn').forEach((btn) => btn.addEventListener('click', () => {
     const ph = btn.dataset.ph;
     const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? ta.value.length;
@@ -1608,6 +1986,41 @@ function bindTemplateForm() {
     }
     area.classList.remove('d-none');
   });
+}
+// 件名と本文は 1 つの訓練シナリオを構成する対なので、1 画面でまとめて登録する。
+// scenario_key はサーバ側で自動採番されるため利用者には見せない。
+function scenarioForm() {
+  const phButtons = TPL_PLACEHOLDERS.map((p) =>
+    `<button type="button" class="btn btn-sm btn-outline-secondary me-1 mb-1 tpl-ph-btn" data-ph="${esc(p.ph)}">${esc(p.label)} <code>${esc(p.ph)}</code></button>`).join('');
+  return `<form id="scenForm">
+    <div class="mb-2"><label class="form-label">シナリオ名</label>
+      <input class="form-control" name="name" placeholder="例: 人事部からのマイナンバー確認" required>
+      <div class="form-text">件名・本文の管理名として使われます。</div></div>
+    <div class="mb-2"><label class="form-label">件名</label>
+      <textarea class="form-control" name="subject_content" id="scenSubject" rows="2" required></textarea></div>
+    <div class="mb-2"><label class="form-label">本文の形式</label>
+      <select class="form-select" name="format"><option value="html">HTML</option><option value="text">テキスト</option></select></div>
+    <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
+    <div class="mb-2"><label class="form-label">本文</label>
+      <textarea class="form-control" name="body_content" id="tplContent" rows="10" required></textarea></div>
+  </form>`;
+}
+function newScenario() {
+  showModal('新規シナリオ（件名＋本文）', scenarioForm(), async () => {
+    const f = $('#scenForm');
+    await api('api/templates.php', { method: 'POST', query: { action: 'create_scenario' },
+      body: {
+        name: f.name.value.trim(),
+        subject_content: f.subject_content.value.trim(),
+        body_content: f.body_content.value,
+        format: f.format.value,
+      } });
+    toast('シナリオを作成しました', 'ok');
+    tplKindFilter = 'scenario';
+    renderTemplates();
+  });
+  // 差し込みボタンは本文(#tplContent)に挿す。既存フォームと同じ id を使うため流用できる。
+  bindTemplateForm();
 }
 function newTemplate() {
   showModal('新規テンプレート', templateForm(), async () => {
@@ -1827,8 +2240,10 @@ const EDU_DTYPE = { elearning: 'eラーニング', awareness_quiz: 'アウェア
 async function renderEduDeliveries() {
   const { deliveries } = await api('api/edu_report.php', { query: { action: 'deliveries' } });
   cacheRows('eduDeliveries', deliveries || []);
-  $('#eduDeliveriesBody').innerHTML = (deliveries && deliveries.length) ? deliveries.map((d) => `
-    <tr><td>${d.id}</td><td>${esc(d.title)}</td><td>${EDU_DTYPE[d.delivery_type] || esc(d.delivery_type)}</td>
+  // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
+  const deliveriesAsc = (deliveries || []).slice().sort((a, b) => a.id - b.id);
+  $('#eduDeliveriesBody').innerHTML = deliveriesAsc.length ? deliveriesAsc.map((d, i) => `
+    <tr><td>${i + 1}</td><td>${esc(d.title)}</td><td>${EDU_DTYPE[d.delivery_type] || esc(d.delivery_type)}</td>
       <td><span class="badge bg-${d.status==='running'?'success':d.status==='done'?'secondary':'light text-dark'}">${esc(d.status)}</span></td>
       <td>${d.assigned}</td><td>${d.completed}</td><td>${d.completion_rate}%</td><td>${d.average_score}%</td>
       <td class="text-nowrap">
@@ -1924,10 +2339,12 @@ async function renderEduQuestions() {
   if (eduCatFilter === null) { $('#eduQuestionsBody').innerHTML = emptyRow(5); return; }
   const { questions } = await api('api/edu_questions.php', { query: { action: 'list', category_id: eduCatFilter } });
   cacheRows('eduQuestions', questions || []);
+  // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
+  const questionsAsc = (questions || []).slice().sort((a, b) => a.id - b.id);
   const typeName = { single_choice: '単一選択', true_false: '正誤', multiple_choice: '複数選択' };
   const canEdit = (q) => Number(q.is_shared) !== 1 || State.user.role === 'superadmin';
-  $('#eduQuestionsBody').innerHTML = (questions && questions.length) ? questions.map((q) => `
-    <tr><td>${q.id}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
+  $('#eduQuestionsBody').innerHTML = questionsAsc.length ? questionsAsc.map((q, i) => `
+    <tr><td>${i + 1}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
       <td class="text-nowrap">${canEdit(q) ? `
         <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-sm btn-outline-danger" onclick="deleteEduQuestion(${q.id})"><i class="bi bi-trash"></i></button>`
@@ -2128,8 +2545,10 @@ async function renderEduTrend() {
 async function renderUsers() {
   const { users } = await api('api/users.php', { query: { action: 'list' } });
   cacheRows('users', users);
-  $('#usersBody').innerHTML = users.length ? users.map((u) => `
-    <tr><td>${u.id}</td><td>${esc(u.email)}</td><td>${esc(u.name)}</td><td>${roleLabel(u.role)}</td>
+  // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
+  const usersAsc = users.slice().sort((a, b) => a.id - b.id);
+  $('#usersBody').innerHTML = usersAsc.length ? usersAsc.map((u, i) => `
+    <tr><td>${i + 1}</td><td>${esc(u.email)}</td><td>${esc(u.name)}</td><td>${roleLabel(u.role)}</td>
       <td>${u.status==='active'?'<span class="badge bg-success">有効</span>':'<span class="badge bg-secondary">停止</span>'}</td>
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-secondary" onclick="editUser(${u.id})"><i class="bi bi-pencil"></i></button>
@@ -2181,8 +2600,10 @@ async function renderTenants() {
   const { tenants } = await api('api/tenants.php', { query: { action: 'list' } });
   State.tenants = tenants;
   cacheRows('tenants', tenants);
-  $('#tenantsBody').innerHTML = tenants.length ? tenants.map((t) => `
-    <tr><td>${t.id}</td><td>${esc(t.name)}</td><td><code>${esc(t.slug)}</code></td>
+  // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
+  const tenantsAsc = tenants.slice().sort((a, b) => a.id - b.id);
+  $('#tenantsBody').innerHTML = tenantsAsc.length ? tenantsAsc.map((t, i) => `
+    <tr><td>${i + 1}</td><td>${esc(t.name)}</td><td><code>${esc(t.slug)}</code></td>
       <td>${t.status==='active'?'<span class="badge bg-success">有効</span>':'<span class="badge bg-secondary">停止</span>'}</td>
       <td><button class="btn btn-sm btn-outline-secondary" onclick="editTenant(${t.id})"><i class="bi bi-pencil"></i></button></td>
     </tr>`).join('') : emptyRow(5);
@@ -2254,7 +2675,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#logoutBtn').addEventListener('click', () => logout());
   $('#sidebarToggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
   $$('.app-sidebar .nav-link').forEach((a) => a.addEventListener('click', () => navigate(a.dataset.view)));
-  $('#newCampaignBtn').addEventListener('click', openCampaignModal);
+  // 引数なしで呼ぶ(click Event が campaignId に渡ると編集モードと誤判定されるため)。
+  $('#newCampaignBtn').addEventListener('click', () => openCampaignModal());
   $('#ingestBtn').addEventListener('click', ingestLogs);
   $('#individualsBtn')?.addEventListener('click', toggleIndividuals);
   $('#individualsRefreshBtn')?.addEventListener('click', renderIndividuals);
@@ -2318,7 +2740,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#importCsvBtn').addEventListener('click', importCsv);
   $('#exportCsvBtn')?.addEventListener('click', exportTargetsCsv);
   $('#newGroupBtn').addEventListener('click', newGroup);
-  $('#newTemplateBtn').addEventListener('click', newTemplate);
+  $('#newScenarioBtn').addEventListener('click', newScenario);
+$('#newTemplateBtn').addEventListener('click', newTemplate);
   $('#tplExportBtn')?.addEventListener('click', exportTemplatesCsv);
   $('#tplImportAddBtn')?.addEventListener('click', () => importTemplatesCsv('add'));
   $('#tplImportUpsertBtn')?.addEventListener('click', () => importTemplatesCsv('upsert'));

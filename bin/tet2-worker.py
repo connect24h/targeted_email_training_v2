@@ -62,15 +62,31 @@ def next_window(now, campaign):
     return candidate
 
 
-def claim_batch(conn):
-    """queued かつ scheduled_at 到来のバッチを1件、排他クレームして返す。"""
+def claim_batch(conn, busy_campaign_ids=None):
+    """queued かつ scheduled_at 到来のバッチを1件、排他クレームして返す。
+
+    busy_campaign_ids: 現在このワーカーで送信中のキャンペーンID集合。
+    同一キャンペーンの多重送信を防ぐため、これらのキャンペーンのバッチは
+    クレームしない(1キャンペーン=1プロセスを保証)。
+    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = conn.execute(
-        """SELECT * FROM send_schedule
-           WHERE status='queued' AND scheduled_at <= ?
-           ORDER BY scheduled_at LIMIT 1""",
-        (now,),
-    ).fetchone()
+    busy = list(busy_campaign_ids or [])
+    if busy:
+        placeholders = ",".join("?" * len(busy))
+        sql = (
+            f"SELECT * FROM send_schedule "
+            f"WHERE status='queued' AND scheduled_at <= ? "
+            f"AND campaign_id NOT IN ({placeholders}) "
+            f"ORDER BY scheduled_at LIMIT 1"
+        )
+        row = conn.execute(sql, (now, *busy)).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT * FROM send_schedule
+               WHERE status='queued' AND scheduled_at <= ?
+               ORDER BY scheduled_at LIMIT 1""",
+            (now,),
+        ).fetchone()
     if row is None:
         return None
     # 排他: status が queued のままの行のみ running に遷移
@@ -85,12 +101,20 @@ def claim_batch(conn):
     return row
 
 
-def run_batch(conn, batch):
+def start_batch(conn, batch):
+    """バッチの前処理(CSV/ビーコン生成、同期)を行い、send_email.py を
+    非同期(Popen)で起動する。起動できたら実行中ジョブ dict を返す。
+    起動しなかった(窓外/停止/前処理失敗)場合は None を返す。
+
+    前処理は短時間で、data_dir 別・tracking_id 別ファイルのため並列でも
+    衝突しない。実送信(send_email)だけを非同期化して複数キャンペーンを
+    並行送信する。
+    """
     cid = batch["campaign_id"]
     campaign = conn.execute("SELECT * FROM campaigns WHERE id=?", (cid,)).fetchone()
     if campaign is None:
         _fail(conn, batch, "campaign not found")
-        return
+        return None
 
     now = datetime.now()
     if not in_business_window(now, campaign):
@@ -102,20 +126,19 @@ def run_batch(conn, batch):
         )
         conn.commit()
         log(f"batch {batch['id']} 窓外 → {nxt} に繰り延べ")
-        return
+        return None
 
     data_dir = campaign["data_dir"]
     if not data_dir:
         _fail(conn, batch, "data_dir 未設定")
-        return
-    # data_dir は PipelineRunner が CSV 生成時に作成する（未存在でよい）。
+        return None
 
     # 緊急停止フラグ: あればこのバッチを cancelled にして送信しない
     if os.path.isdir(data_dir) and os.path.isfile(os.path.join(data_dir, "stop_sending.flag")):
         conn.execute("UPDATE send_schedule SET status='cancelled' WHERE id=?", (batch["id"],))
         conn.commit()
         log(f"batch {batch['id']} 停止フラグ検出 → cancelled")
-        return
+        return None
 
     interval = str(batch["interval_sec"] or 3)
     args = [
@@ -127,24 +150,51 @@ def run_batch(conn, batch):
         "--auto-pause",
     ]
     log(f"送信開始 campaign={cid} batch={batch['batch_no']} koban {batch['koban_from']}-{batch['koban_to']}")
+    # 前処理(CSV・ビーコン・リンク・添付生成)は launch 時に実施済み。
+    # ここでは再生成せず、生成物が揃っているかだけ確認して送信のみ行う。
+    list_csv = os.path.join(data_dir, "list.csv")
+    if not os.path.isfile(list_csv):
+        _fail(conn, batch, f"送信データ未生成(list.csv なし)。launch をやり直してください: {list_csv}")
+        return None
     try:
-        # 前処理1: DB→CSV 生成（PipelineRunner を PHP CLI で実行。冪等）
-        subprocess.run(
-            ["/usr/bin/php", "-r",
-             f'require "/var/www/html/tet2/lib/PipelineRunner.php"; PipelineRunner::generateCsv({cid});'],
-            check=True, capture_output=True, timeout=300,
-        )
-        # 前処理2: ビーコン/リンク/添付を生成（冪等）
-        subprocess.run(
-            [PY, f"{BIN}/create_beacon_files.py", "--data-dir", data_dir],
-            check=True, capture_output=True, timeout=600,
-        )
-        subprocess.run(args, check=True, capture_output=True, timeout=7200)
-    except subprocess.CalledProcessError as e:
-        _fail(conn, batch, f"send_email 失敗: {e.stderr.decode('utf-8', 'ignore')[:300]}")
-        return
+        # 実送信は非同期起動(並行送信の要)。完了は main ループが poll で回収する。
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception as e:  # noqa: BLE001
-        _fail(conn, batch, f"実行例外: {e}")
+        _fail(conn, batch, f"起動例外: {e}")
+        return None
+
+    # 送信開始と同時にキャンペーンを running にする(送信制御パネルで「送信中」と
+    # 表示させるため)。従来は finish_batch(完了時)で running にしていたが、それだと
+    # 送信中はずっと scheduled のままで、パネルに送信中が出なかった。
+    conn.execute(
+        "UPDATE campaigns SET status='running' WHERE id=? AND status IN ('scheduled','draft')",
+        (cid,),
+    )
+    conn.commit()
+
+    return {
+        "proc": proc,
+        "batch": batch,
+        "cid": cid,
+        "data_dir": data_dir,
+        "batch_no": batch["batch_no"],
+    }
+
+
+def finish_batch(conn, job):
+    """非同期送信プロセスの完了後処理: done 遷移・send_status 同期・delivery_log。"""
+    proc = job["proc"]
+    batch = job["batch"]
+    cid = job["cid"]
+    data_dir = job["data_dir"]
+    rc = proc.returncode
+    if rc != 0:
+        stderr = b""
+        try:
+            stderr = proc.stderr.read() if proc.stderr else b""
+        except Exception:  # noqa: BLE001
+            pass
+        _fail(conn, batch, f"send_email 失敗(rc={rc}): {stderr.decode('utf-8', 'ignore')[:300]}")
         return
 
     conn.execute("UPDATE send_schedule SET status='done' WHERE id=?", (batch["id"],))
@@ -163,7 +213,7 @@ def run_batch(conn, batch):
     if remaining == 0:
         conn.execute("UPDATE campaigns SET status='done' WHERE id=?", (cid,))
     conn.commit()
-    log(f"送信完了 campaign={cid} batch={batch['batch_no']}")
+    log(f"送信完了 campaign={cid} batch={job['batch_no']}")
 
 
 def _sync_send_status(conn, cid, data_dir):
@@ -237,17 +287,44 @@ def _fail(conn, batch, reason):
 
 
 def main():
-    log("tet2-worker 起動")
+    max_concurrent = int(os.environ.get("TET2_MAX_CONCURRENT", "3"))
+    log(f"tet2-worker 起動 (最大同時送信数={max_concurrent})")
+    running_jobs = []  # [{proc, batch, cid, data_dir, batch_no}, ...]
+    # 完了回収は頻繁に、新規クレームは POLL_SEC ごとに行う。
+    loop_sec = 2
+    since_poll = POLL_SEC  # 起動直後に一度クレームを試す
     while True:
         try:
             conn = db()
-            batch = claim_batch(conn)
-            if batch is not None:
-                run_batch(conn, batch)
+            # 1. 完了したジョブを回収
+            still_running = []
+            for job in running_jobs:
+                if job["proc"].poll() is None:
+                    still_running.append(job)  # まだ送信中
+                else:
+                    try:
+                        finish_batch(conn, job)
+                    except Exception as e:  # noqa: BLE001
+                        log(f"finish_batch 例外 campaign={job['cid']}: {e}")
+            running_jobs = still_running
+
+            # 2. 空きがあれば新規バッチをクレームして起動(POLL_SEC 間隔)
+            if since_poll >= POLL_SEC:
+                since_poll = 0
+                while len(running_jobs) < max_concurrent:
+                    busy = {j["cid"] for j in running_jobs}
+                    batch = claim_batch(conn, busy)
+                    if batch is None:
+                        break  # 実行可能なバッチが無い
+                    job = start_batch(conn, batch)
+                    if job is not None:
+                        running_jobs.append(job)
+                    # start_batch が None(窓外/停止/失敗)でも次のバッチを試す
             conn.close()
         except Exception as e:  # noqa: BLE001
             log(f"ループ例外: {e}")
-        time.sleep(POLL_SEC)
+        time.sleep(loop_sec)
+        since_poll += loop_sec
 
 
 if __name__ == "__main__":

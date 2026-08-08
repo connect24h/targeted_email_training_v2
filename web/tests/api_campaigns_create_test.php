@@ -123,6 +123,12 @@ function cancel_campaign(array $body): array
     return call_handler('campaigns_handle_cancel', $body, 'operator', [actor99()]);
 }
 
+/** campaigns_handle_duplicate を actor99() で呼ぶショートカット。 */
+function duplicate_campaign(array $body): array
+{
+    return call_handler('campaigns_handle_duplicate', $body, 'operator', [actor99()]);
+}
+
 /** create() を実行して作成済みキャンペーン ID を返す。失敗なら例外。 */
 function create_draft(array $overrides = []): int
 {
@@ -351,11 +357,32 @@ Db::run('UPDATE campaigns SET status = ? WHERE id = ?', ['cancelled', $cid_del2]
 $res = delete_campaign(['id' => $cid_del2]);
 check($res['code'] === 200, 'DEL-2 cancelled → delete → 200');
 
-// DEL-3: scheduled → delete → 409
+// DEL-3: scheduled → delete → 200(論理削除。全状態から削除可能に変更)
 $cid_del3 = create_draft(['name' => '削除用-scheduled']);
 Db::run('UPDATE campaigns SET status = ? WHERE id = ?', ['scheduled', $cid_del3]);
 $res = delete_campaign(['id' => $cid_del3]);
-check($res['code'] === 409, 'DEL-3 scheduled → delete → 409');
+check($res['code'] === 200, 'DEL-3 scheduled → delete → 200(論理削除)');
+
+// DEL-4: 論理削除後は deleted_at がセットされ、get(assert_campaign_owned)から引けない
+$deletedRow = Db::one('SELECT deleted_at FROM campaigns WHERE id = ?', [$cid_del3]);
+check($deletedRow !== null && $deletedRow['deleted_at'] !== null, 'DEL-4 論理削除で deleted_at がセットされる');
+$stillExists = Db::one('SELECT id FROM campaigns WHERE id = ?', [$cid_del3]);
+check($stillExists !== null, 'DEL-5 実データは残る(パージまで保持)');
+
+// DEL-6: 複製 → 新draftが作られ、tracking_id は新規・status=draft
+$cid_dup_src = create_draft(['name' => '複製元']);
+$res = duplicate_campaign(['id' => $cid_dup_src]);
+check($res['code'] === 200, 'DEL-6 duplicate → 200');
+$newCid = $res['payload']['campaign']['id'] ?? 0;
+check($newCid > 0 && $newCid !== $cid_dup_src, 'DEL-7 複製で新しいキャンペーンIDが返る');
+$dupRow = Db::one('SELECT status, deleted_at, name, data_dir FROM campaigns WHERE id = ?', [$newCid]);
+check($dupRow !== null && $dupRow['status'] === 'draft', 'DEL-8 複製先は draft');
+check($dupRow['deleted_at'] === null, 'DEL-9 複製先は deleted_at=NULL(生存)');
+// DEL-10: 複製先の data_dir が新IDで設定される(空だと送信時に「data_dir 未設定」で失敗する回帰)
+check(
+    !empty($dupRow['data_dir']) && strpos((string) $dupRow['data_dir'], 'campaign_' . $newCid) !== false,
+    'DEL-10 複製先の data_dir が新IDで設定される'
+);
 
 // CANCEL-1: draft → cancel → 200
 $cid_can1 = create_draft(['name' => 'キャンセル用-draft']);

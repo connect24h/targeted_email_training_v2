@@ -18,6 +18,42 @@ const TARGET_CSV_HEADERS = [
     'position_category' => 'position_category',
 ];
 
+// name/company/department/title 等の自由入力テキストの共通サニタイズ検証。
+// 格納型XSS対策として、値に < > や制御文字(改行・タブ以外)を含むものを拒否し、長さ上限も課す。
+// これらの値はメール本文・HTML(reveal/link ページ、CSV等)に差し込まれ得るため、
+// 入力段階で危険文字を弾く(create/update/CSV取込の全INSERT経路で共用)。
+const TARGET_TEXT_MAX_LEN = 255;
+
+function targets_assert_safe_text(?string $value, string $label): ?string
+{
+    if ($value === null) {
+        return null;
+    }
+    // 文字数(マルチバイト対応)で上限判定。
+    if (mb_strlen($value) > TARGET_TEXT_MAX_LEN) {
+        json_error($label . ' が長すぎます（最大' . TARGET_TEXT_MAX_LEN . '文字）', 400);
+    }
+    // < > を含む値は拒否(HTMLタグ注入の遮断)。
+    if (strpbrk($value, '<>') !== false) {
+        json_error($label . ' に使用できない文字（< >）が含まれています', 400);
+    }
+    // 制御文字(改行・タブ含む)を拒否。ログ/CSV/ヘッダ混入を防ぐ。
+    if (preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+        json_error($label . ' に制御文字は使用できません', 400);
+    }
+    return $value;
+}
+
+// email の簡易検証。FILTER_VALIDATE_EMAIL は quoted-local-part("..."@ex.com)等を
+// 通してしまうため、空白・引用符・山括弧を含まない単純形式のみ許可する。
+function targets_assert_safe_email(string $email): string
+{
+    if (!preg_match('/^[^@\s"\'<>]+@[^@\s"\'<>]+$/', $email)) {
+        json_error('email が不正です', 400);
+    }
+    return $email;
+}
+
 function targets_string(array $body, string $key): string
 {
     if (!array_key_exists($key, $body) || !is_string($body[$key]) || trim($body[$key]) === '') {
@@ -45,7 +81,9 @@ function targets_optional_nullable_string(array $body, string $key): ?string
     if (!is_string($body[$key])) {
         json_error($key . ' が不正です', 400);
     }
-    return trim($body[$key]) === '' ? null : trim($body[$key]);
+    $value = trim($body[$key]) === '' ? null : trim($body[$key]);
+    // name/company/department/title 等の自由入力テキストを安全検証(< > /制御文字/長さ)。
+    return targets_assert_safe_text($value, $key);
 }
 
 function targets_int(array $body, string $key): int
@@ -161,12 +199,12 @@ function targets_handle_list(array $actor): never
     if ($groupId !== null) {
         targets_assert_group_owned($groupId, $tenantId);
         $targets = Db::all(
-            'SELECT t.id, t.tenant_id, t.email, t.name, t.company, t.department, t.title, t.position_category, t.status, t.created_at
+            'SELECT t.id, t.tenant_no, t.tenant_id, t.email, t.name, t.company, t.department, t.title, t.position_category, t.status, t.created_at
              FROM targets t
              INNER JOIN target_group tg ON tg.target_id = t.id
              INNER JOIN groups g ON g.id = tg.group_id
              WHERE t.tenant_id = ? AND g.tenant_id = ? AND tg.group_id = ? AND (? IS NULL OR t.email LIKE ? OR t.name LIKE ?)' . $archiveClause . '
-             ORDER BY t.id',
+             ORDER BY t.tenant_no',
             [$tenantId, $tenantId, $groupId, $q, $q, $q]
         );
         json_out(['success' => true, 'targets' => targets_attach_groups($targets, $tenantId)]);
@@ -175,10 +213,10 @@ function targets_handle_list(array $actor): never
     // 非グループ経路は別名 t を使わないので status 条件を素の列名で組む。
     $archiveClause2 = $includeArchived ? '' : " AND status != 'archived'";
     $targets = Db::all(
-        'SELECT id, tenant_id, email, name, company, department, title, position_category, status, created_at
+        'SELECT id, tenant_no, tenant_id, email, name, company, department, title, position_category, status, created_at
          FROM targets
          WHERE tenant_id = ? AND (? IS NULL OR email LIKE ? OR name LIKE ?)' . $archiveClause2 . '
-         ORDER BY id',
+         ORDER BY tenant_no',
         [$tenantId, $q, $q, $q]
     );
     json_out(['success' => true, 'targets' => targets_attach_groups($targets, $tenantId)]);
@@ -218,6 +256,8 @@ function targets_handle_create(array $actor): never
     if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
         json_error('email が不正です', 400);
     }
+    // quoted-local-part 等を弾く簡易検証を追加。
+    targets_assert_safe_email($email);
     $groupIds = targets_int_array($body, 'group_ids') ?? [];
     targets_assert_groups_owned($groupIds, $tenantId);
 
@@ -227,7 +267,9 @@ function targets_handle_create(array $actor): never
     }
     $id = Db::tx(function () use ($tenantId, $email, $body, $groupIds, $positionCategory): int {
         $targetId = Db::insert(
-            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            // tenant_no はテナント単位の連番(表示用)。グローバルな id とは別に採番する。
+            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, tenant_no)'
+            . ' VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
             [
                 $tenantId,
                 $email,
@@ -236,6 +278,7 @@ function targets_handle_create(array $actor): never
                 targets_optional_nullable_string($body, 'department'),
                 targets_optional_nullable_string($body, 'title'),
                 $positionCategory,
+                $tenantId,
             ]
         );
         targets_insert_groups($targetId, $groupIds, $tenantId);
@@ -363,24 +406,49 @@ function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId
     if ($email === null || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
         throw new InvalidArgumentException('email が不正です');
     }
+    // quoted-local-part 等を弾く簡易検証(create経路と同一ルール)。
+    if (!preg_match('/^[^@\s"\'<>]+@[^@\s"\'<>]+$/', $email)) {
+        throw new InvalidArgumentException('email が不正です');
+    }
     $existing = Db::one('SELECT id FROM targets WHERE tenant_id = ? AND email = ?', [$tenantId, $email]);
     // 役職カテゴリは正規値(役員/管理職/社員)のみ採用。それ以外・空は NULL(取込を止めない)。
     $posCat = targets_csv_value($row, $map, 'position_category');
     if ($posCat !== null && !in_array($posCat, POSITION_CATEGORIES, true)) {
         $posCat = null;
     }
+    // 自由入力テキストは create/update と同一ルールで安全検証(< > /制御文字/長さ)。
+    // 取込は行単位で例外送出するため、json_error 版ではなく個別チェックする。
+    $textFields = ['name' => '氏名', 'company' => '会社名', 'department' => '部署', 'title' => '役職'];
+    $sanitized = [];
+    foreach ($textFields as $field => $label) {
+        $val = targets_csv_value($row, $map, $field);
+        if ($val !== null) {
+            if (mb_strlen($val) > TARGET_TEXT_MAX_LEN) {
+                throw new InvalidArgumentException($label . ' が長すぎます（最大' . TARGET_TEXT_MAX_LEN . '文字）');
+            }
+            if (strpbrk($val, '<>') !== false) {
+                throw new InvalidArgumentException($label . ' に使用できない文字（< >）が含まれています');
+            }
+            if (preg_match('/[\x00-\x1F\x7F]/', $val) === 1) {
+                throw new InvalidArgumentException($label . ' に制御文字は使用できません');
+            }
+        }
+        $sanitized[$field] = $val;
+    }
     $values = [
-        targets_csv_value($row, $map, 'name'),
-        targets_csv_value($row, $map, 'company'),
-        targets_csv_value($row, $map, 'department'),
-        targets_csv_value($row, $map, 'title'),
+        $sanitized['name'],
+        $sanitized['company'],
+        $sanitized['department'],
+        $sanitized['title'],
         $posCat,
     ];
 
     if ($existing === null) {
         $targetId = Db::insert(
-            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [$tenantId, $email, $values[0], $values[1], $values[2], $values[3], $values[4]]
+            // tenant_no はテナント単位の連番(表示用)。グローバルな id とは別に採番する。
+            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, tenant_no)'
+            . ' VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
+            [$tenantId, $email, $values[0], $values[1], $values[2], $values[3], $values[4], $tenantId]
         );
         $result = 'imported';
     } else {

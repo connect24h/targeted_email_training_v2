@@ -252,20 +252,57 @@ function campaigns_distribute_contents(int $campaignId, array $targetIds): void
     }
     
     $contentCount = count($contents);
-    $koban = 1;
-    
+
+    // 配信方式: 'all' は各対象者に全コンテンツを送る(テスト用)。'distribute'(既定)は従来のラウンドロビン均等割り。
+    $mode = Db::one('SELECT content_delivery FROM campaigns WHERE id = ?', [$campaignId]);
+    $deliveryMode = $mode !== null ? (string) ($mode['content_delivery'] ?? 'distribute') : 'distribute';
+
+    if ($deliveryMode === 'all') {
+        // 各対象者に全コンテンツ分のレコードを作る。既存レコード(insert_targets が作った1件)を
+        // 先頭コンテンツに割り当て、2件目以降のコンテンツは新規レコード(固有 tracking_id)を追加する。
+        // これにより 2-a(コンテンツ別の開封追跡)が tracking_id 単位で自動的に成立する。
+        foreach ($targetIds as $targetId) {
+            $existingKoban = Db::one(
+                'SELECT koban FROM campaign_targets WHERE campaign_id = ? AND target_id = ? AND content_no IS NULL LIMIT 1',
+                [$campaignId, $targetId]
+            );
+            $baseKoban = $existingKoban !== null ? (int) ($existingKoban['koban'] ?? 1) : 1;
+            foreach ($contents as $ci => $content) {
+                $contentNo = (int) $content['content_no'];
+                $authFlag = $content['auth_flag'] !== null ? (int) $content['auth_flag'] : null;
+                if ($ci === 0) {
+                    // 先頭コンテンツ: insert_targets が作った既存の空レコードを更新。
+                    Db::run(
+                        'UPDATE campaign_targets SET content_no = ?, auth_flag = ? WHERE campaign_id = ? AND target_id = ? AND content_no IS NULL',
+                        [$contentNo, $authFlag, $campaignId, $targetId]
+                    );
+                } else {
+                    // 2件目以降: 新規レコード。固有 tracking_id を発行(コンテンツ別追跡の基軸)。
+                    Db::run(
+                        'INSERT INTO campaign_targets
+                         (campaign_id, target_id, tracking_id, koban, auth_flag, from_address, send_status, content_no)
+                         SELECT ?, ?, ?, ?, ?, from_address, ?, ?
+                         FROM campaign_targets WHERE campaign_id = ? AND target_id = ? AND content_no = ? LIMIT 1',
+                        [$campaignId, $targetId, campaigns_generate_tracking_id(), $baseKoban,
+                         $authFlag, 'pending', $contentNo,
+                         $campaignId, $targetId, (int) $contents[0]['content_no']]
+                    );
+                }
+            }
+        }
+        return;
+    }
+
+    // 従来: ラウンドロビンで content を割り当て(均等割り)。
     foreach ($targetIds as $index => $targetId) {
-        // ラウンドロビンで content を割り当て
         $content = $contents[$index % $contentCount];
         $contentNo = (int) $content['content_no'];
         $authFlag = $content['auth_flag'] !== null ? (int) $content['auth_flag'] : null;
-        
-        // campaign_targets に content_no と auth_flag を設定
+
         Db::run(
             'UPDATE campaign_targets SET content_no = ?, auth_flag = ? WHERE campaign_id = ? AND target_id = ?',
             [$contentNo, $authFlag, $campaignId, $targetId]
         );
-        $koban++;
     }
 }
 
@@ -309,7 +346,7 @@ function campaigns_handle_list(array $actor): never
                 COUNT(ct.id) AS target_count
          FROM campaigns c
          LEFT JOIN campaign_targets ct ON ct.campaign_id = c.id
-         WHERE c.tenant_id = ?
+         WHERE c.tenant_id = ? AND c.deleted_at IS NULL
          GROUP BY c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test, c.created_at
          ORDER BY c.id DESC',
         [$tenantId]
@@ -325,7 +362,26 @@ function campaigns_handle_get(array $actor): never
         json_error('id が不正です', 400);
     }
     assert_campaign_owned($id, $tenantId);
-    json_out(['success' => true, 'campaign' => campaigns_row($id, $tenantId)]);
+    $campaign = campaigns_row($id, $tenantId);
+    // 編集フォーム復元用に、コンテンツ構成と対象者ID一覧も返す。
+    $contents = Db::all(
+        'SELECT content_no, subject_template_id, body_template_id, phish_template_id,
+                link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url
+         FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no',
+        [$id]
+    );
+    // 対象者ID(重複除去。all配信は同一 target が複数行あるため DISTINCT)。
+    $targetRows = Db::all(
+        'SELECT DISTINCT target_id FROM campaign_targets WHERE campaign_id = ? ORDER BY koban',
+        [$id]
+    );
+    $targetIds = array_map(static fn ($r) => (int) $r['target_id'], $targetRows);
+    json_out([
+        'success'    => true,
+        'campaign'   => $campaign,
+        'contents'   => $contents,
+        'target_ids' => $targetIds,
+    ]);
 }
 
 function campaigns_validate_schedule(array $data): void
@@ -359,6 +415,10 @@ function campaigns_create_data(array $body): array
         'start_at' => campaigns_string($body, 'start_at'),
         'end_at' => campaigns_string($body, 'end_at'),
         'is_test' => campaigns_optional_bool_int($body, 'is_test') ?? 0,
+        // 配信方式: 'all'=全員に全コンテンツ(テスト用) / 'distribute'=従来の均等割り(既定)。
+        'content_delivery' => (campaigns_optional_string($body, 'content_delivery') === 'all') ? 'all' : 'distribute',
+        // テスト宛先(カンマ区切り)。is_test時、実Toをここに均等分配する(PipelineRunnerがemail検証)。
+        'test_redirect_emails' => campaigns_optional_string($body, 'test_redirect_emails'),
     ];
     campaigns_validate_schedule($data);
     return $data;
@@ -467,6 +527,10 @@ function campaigns_handle_create(array $actor): never
             'start_at' => campaigns_string($body, 'start_at'),
             'end_at' => campaigns_string($body, 'end_at'),
             'is_test' => campaigns_optional_bool_int($body, 'is_test') ?? 0,
+            // 配信方式: 'all'=全員に全コンテンツ / 'distribute'=均等割り(既定)。
+            'content_delivery' => (campaigns_optional_string($body, 'content_delivery') === 'all') ? 'all' : 'distribute',
+            // テスト宛先(カンマ区切り)。is_test時、実Toをここに均等分配する(PipelineRunnerがemail検証)。
+            'test_redirect_emails' => campaigns_optional_string($body, 'test_redirect_emails'),
         ];
         campaigns_validate_schedule($data);
         $phishTemplate = campaigns_assert_template_visible((int) $data['phish_template_id'], $tenantId, 'phish_login');
@@ -497,8 +561,8 @@ function campaigns_handle_create(array $actor): never
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
               from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_zip, send_mode,
               split_count, split_interval_min, weekdays_only, business_start, business_end,
-              start_at, end_at, is_test, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              start_at, end_at, is_test, content_delivery, test_redirect_emails, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $tenantId,
                 $data['name'],
@@ -521,6 +585,8 @@ function campaigns_handle_create(array $actor): never
                 $data['start_at'],
                 $data['end_at'],
                 $data['is_test'],
+                $data['content_delivery'],
+                $data['test_redirect_emails'] ?? null,
                 $actor['id'],
             ]
         );
@@ -562,7 +628,7 @@ function campaigns_handle_create(array $actor): never
 function campaigns_update_fields(array $body): array
 {
     $fields = [];
-    foreach (['name', 'from_address', 'from_domain', 'link_mode', 'attachment_ext', 'send_mode', 'business_start', 'business_end', 'start_at', 'end_at'] as $key) {
+    foreach (['name', 'from_address', 'from_domain', 'link_mode', 'attachment_ext', 'send_mode', 'business_start', 'business_end', 'start_at', 'end_at', 'test_redirect_emails', 'content_delivery'] as $key) {
         if (array_key_exists($key, $body)) {
             $fields[$key] = campaigns_optional_string($body, $key);
             if (in_array($key, ['name', 'from_address', 'link_mode', 'send_mode', 'start_at', 'end_at'], true) && $fields[$key] === null) {
@@ -593,7 +659,7 @@ function campaigns_apply_update(int $campaignId, int $tenantId, array $fields): 
         'name', 'subject_template_id', 'body_template_id', 'phish_template_id', 'from_address',
         'from_domain', 'beacon_base', 'link_mode', 'attachment_ext', 'attachment_zip', 'send_mode', 'split_count',
         'split_interval_min', 'weekdays_only', 'business_start', 'business_end', 'start_at',
-        'end_at', 'is_test',
+        'end_at', 'is_test', 'content_delivery', 'test_redirect_emails',
     ];
     foreach ($allowed as $key) {
         if (!array_key_exists($key, $fields)) {
@@ -725,12 +791,20 @@ function campaigns_handle_delete(array $actor): never
     $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
     $id = campaigns_int($body, 'id');
     $campaign = assert_campaign_owned($id, $tenantId);
-    if (!in_array((string) $campaign['status'], ['draft', 'cancelled'], true)) {
-        json_error('draft/cancelled のキャンペーンのみ削除できます', 409);
+
+    // 論理削除(soft delete): 実データは残し deleted_at をセットする。全状態から削除可能。
+    // 実データ(ビーコン/link-html/DB)は 90日後に cron(tet2-purge-campaigns.py)が物理削除する。
+    // 実行中(running/scheduled)なら多重送信を防ぐため、未実行バッチを止めて停止フラグを立てる。
+    if (in_array((string) $campaign['status'], ['running', 'scheduled', 'paused'], true)) {
+        Db::run("UPDATE send_schedule SET status='cancelled' WHERE campaign_id=? AND status IN ('queued')", [$id]);
+        $dir = (string) ($campaign['data_dir'] ?? '');
+        if ($dir !== '' && is_dir($dir)) {
+            @file_put_contents(rtrim($dir, '/') . '/stop_sending.flag', "deleted\n");
+        }
     }
 
-    Db::run('DELETE FROM campaigns WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
-    audit('campaign.delete', 'campaign_id=' . $id);
+    Db::run("UPDATE campaigns SET deleted_at = datetime('now','localtime'), status='cancelled' WHERE id = ? AND tenant_id = ?", [$id, $tenantId]);
+    audit('campaign.delete', 'campaign_id=' . $id . ',soft=1');
     json_out(['success' => true]);
 }
 
@@ -745,6 +819,88 @@ function campaigns_handle_cancel(array $actor): never
     Db::run('UPDATE campaigns SET status = ? WHERE id = ? AND tenant_id = ?', ['cancelled', $id, $tenantId]);
     audit('campaign.cancel', 'campaign_id=' . $id);
     json_out(['success' => true, 'campaign' => campaigns_row($id, $tenantId)]);
+}
+
+/**
+ * キャンペーンを複製する(再利用/再実行の土台)。
+ * 設定・コンテンツ構成・対象者をコピーして新規 draft を作る。
+ * コピーしないもの: 送信履歴(events/delivery_log)・送信状態・tracking_id(新規採番)・
+ * 送信スケジュール・レポートスナップショット・deleted_at。日時は再設定前提で引き継がない。
+ */
+function campaigns_handle_duplicate(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
+    $id = campaigns_int($body, 'id');
+    $src = assert_campaign_owned($id, $tenantId);
+
+    $newId = Db::tx(function () use ($src, $tenantId, $actor): int {
+        // 1. campaigns 本体をコピー(status=draft, 日時は空=UIで再設定, deleted_at=NULL)
+        $newId = Db::insert(
+            'INSERT INTO campaigns
+             (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
+              from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_zip, send_mode,
+              split_count, split_interval_min, weekdays_only, business_start, business_end,
+              start_at, end_at, is_test, content_delivery, test_redirect_emails, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $tenantId,
+                mb_substr((string) $src['name'] . ' のコピー', 0, 200),
+                'draft',
+                $src['subject_template_id'], $src['body_template_id'], $src['phish_template_id'],
+                $src['from_address'], $src['from_domain'], $src['beacon_base'],
+                $src['link_mode'], $src['attachment_ext'], $src['attachment_zip'], $src['send_mode'],
+                $src['split_count'], $src['split_interval_min'], $src['weekdays_only'],
+                $src['business_start'], $src['business_end'],
+                null, null,  // start_at / end_at は引き継がない(過去日時回避・UIで再設定)
+                $src['is_test'], $src['content_delivery'], $src['test_redirect_emails'] ?? null, (int) ($actor['id'] ?? 0),
+            ]
+        );
+
+        // data_dir は元をコピーせず、新IDで新規生成する(元と同じディレクトリを
+        // 共有すると送信ファイルが衝突するため)。通常の create と同じ扱い。
+        Db::run(
+            'UPDATE campaigns SET data_dir = ? WHERE id = ?',
+            [campaigns_data_dir($tenantId, $newId), $newId]
+        );
+
+        // 2. campaign_contents(コンテンツ構成)をコピー
+        $contents = Db::all('SELECT * FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no', [$src['id']]);
+        foreach ($contents as $c) {
+            Db::run(
+                'INSERT INTO campaign_contents
+                 (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
+                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    $newId, $c['content_no'], $c['subject_template_id'], $c['body_template_id'], $c['phish_template_id'],
+                    $c['link_mode'], $c['attachment_ext'], $c['attachment_zip'], $c['from_address'], $c['beacon_base'],
+                    $c['suppress_body_url'] ?? 0,
+                ]
+            );
+        }
+
+        // 3. campaign_targets(対象者)をコピー。tracking_id は新規採番、send_status は pending にリセット。
+        //    koban/auth_flag/from_address/content_no は元の割り当てを維持する。
+        $targets = Db::all('SELECT * FROM campaign_targets WHERE campaign_id = ? ORDER BY koban, content_no', [$src['id']]);
+        foreach ($targets as $t) {
+            Db::run(
+                'INSERT INTO campaign_targets
+                 (campaign_id, target_id, tracking_id, koban, auth_flag, from_address, send_status, content_no)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    $newId, $t['target_id'], campaigns_generate_tracking_id(), $t['koban'],
+                    $t['auth_flag'], $t['from_address'], 'pending', $t['content_no'] ?? null,
+                ]
+            );
+        }
+
+        return $newId;
+    });
+
+    audit('campaign.duplicate', 'src=' . $id . ',new=' . $newId);
+    json_out(['success' => true, 'campaign' => campaigns_row($newId, $tenantId)]);
 }
 
 /** ビーコンベースURLの候補一覧(既定値 + 既存キャンペーンで使われた beacon_base の重複除き)。 */
@@ -790,6 +946,9 @@ try {
     }
     if ($action === 'cancel' && $method === 'POST') {
         campaigns_handle_cancel($actor);
+    }
+    if ($action === 'duplicate' && $method === 'POST') {
+        campaigns_handle_duplicate($actor);
     }
     if ($action === 'beacon_bases' && $method === 'GET') {
         campaigns_handle_beacon_bases($actor);

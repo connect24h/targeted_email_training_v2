@@ -1,0 +1,202 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ja">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>デジタルアーツ - ファイル受取</title>
+<style type="text/css">
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: "メイリオ", Meiryo, "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", sans-serif;
+    font-size: 14px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.container {
+    width: 100%;
+    max-width: 480px;
+}
+.header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+.logo {
+    background-color: #fff;
+    padding: 15px 30px;
+    border-radius: 8px;
+    display: inline-block;
+    margin-bottom: 20px;
+}
+.logo-text {
+    font-size: 22px;
+    font-weight: bold;
+    color: #667eea;
+}
+.subtitle {
+    color: #fff;
+    font-size: 16px;
+    font-weight: 500;
+}
+.login-box {
+    background-color: #fff;
+    padding: 40px;
+    border-radius: 8px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+}
+.title {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: #333;
+    text-align: center;
+}
+.description {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 30px;
+    text-align: center;
+    line-height: 1.6;
+}
+.file-icon {
+    text-align: center;
+    margin-bottom: 20px;
+    font-size: 48px;
+    color: #667eea;
+}
+.form-group {
+    margin-bottom: 20px;
+}
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #333;
+    font-weight: 500;
+}
+input[type="text"],
+input[type="password"],
+input[type="email"] {
+    width: 100%;
+    padding: 12px 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="email"]:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102,126,234,0.1);
+}
+.btn-primary {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: opacity 0.3s;
+}
+.btn-primary:hover {
+    opacity: 0.9;
+}
+.info-text {
+    font-size: 12px;
+    color: #999;
+    text-align: center;
+    margin-top: 20px;
+}
+#resultArea {
+    margin-top: 30px;
+    display: none;
+}
+#fileid-group {
+    display: none;
+}
+</style>
+</head>
+<body>
+<img src="http://85.131.251.224/kunren-beacon-#$5$#.png" style="display:none;">
+
+<div class="container">
+    <div class="header">
+        <div class="logo">
+            <div class="logo-text">Digital Arts</div>
+        </div>
+    </div>
+
+    <div class="login-box">
+        <form id="loginForm">
+            <input type="hidden" id="email" name="email" value="#$6$#">
+
+            <div class="form-group" id="fileid-group">
+                <label for="fileid">ファイルID</label>
+                <input type="text" id="fileid" name="fileid" value="019a4e9d-bc05-7587-b62c-35f605541bc1" readonly>
+            </div>
+
+            <div class="form-group">
+                <label for="password">ログインID</label>
+                <input type="text" id="password" name="password" placeholder="ログインIDを入力" required>
+            </div>
+
+            <button type="submit" class="btn-primary">次へ</button>
+        </form>
+
+        <div class="info-text">
+            ※ このファイルは暗号化されて保護されています
+        </div>
+
+        <div id="resultArea"></div>
+    </div>
+</div>
+
+<script type="text/javascript">
+document.getElementById('loginForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    var email = document.getElementById('email').value;
+    var password = document.getElementById('password').value;
+    var randomValue = '#$5$#';
+
+    // フォームデータを作成
+    var formData = new FormData();
+    formData.append('email', email);
+    formData.append('password', password);
+    formData.append('random_value', randomValue);
+    formData.append('auth_type', 'digitalarts');
+
+    // PHPスクリプトに送信
+    fetch('/training_log.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.text())
+    .then(html => {
+        // ページ全体を種明かしHTML(master.html)に置き換える。
+        // document.write でドキュメントごと差し替えることで、偽ログインの
+        // <style> は破棄され、種明かし側の装飾(赤見出し・黄枠等)が正しく効く。
+        document.open();
+        document.write(html);
+        document.close();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+    });
+});
+</script>
+</body>
+</html>

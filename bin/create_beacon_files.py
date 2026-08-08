@@ -11,11 +11,112 @@ import zipfile
 import logging
 import base64
 import configparser
+import html
 import qrcode
 from datetime import datetime
 
+# QR埋め込み文書生成（同ディレクトリに配置。ロジックは qr_doc_gen.py 側を正とし、ここでは import のみ行う）。
+from qr_doc_gen import generate_qr_document
+
+import sqlite3
+
+
+def resolve_tenant_reveal(tracking_id):
+    """tracking_id(=乱数列)から所属テナントの reveal.html パスを返す。無ければ None。
+
+    (2026-08-06) テナント別の種明かし対応。認証なし(auth_flag=0)の link ページは
+    生成時に種明かしを直接埋め込むため、共通 master.html ではなく、そのテナントの
+    reveal.html があれば優先する(例: Goldwin 専用の種明かし)。
+    DB が読めない・reveal.html が無い・例外は全て None を返し、呼び出し側で
+    共通 master.html にフォールバックさせる(訓練を止めない・常に安全側)。
+    training_log.php(認証あり経路)と同じ解決ロジックを Python 側にも置く。
+    """
+    if not tracking_id or tracking_id == 'unknown':
+        return None
+    try:
+        db = '/opt/training/tet2-db/tet2.sqlite'
+        if not os.path.exists(db):
+            return None
+        conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+        try:
+            row = conn.execute(
+                'SELECT t.data_dir FROM campaign_targets ct '
+                'JOIN campaigns c ON c.id = ct.campaign_id '
+                'JOIN tenants   t ON t.id = c.tenant_id '
+                'WHERE ct.tracking_id = ? LIMIT 1',
+                (tracking_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row and row[0]:
+            reveal = os.path.join(str(row[0]).rstrip('/'), 'reveal.html')
+            if os.path.isfile(reveal) and os.access(reveal, os.R_OK):
+                return reveal
+    except Exception:
+        return None
+    return None
+
 # 標準出力のバッファリングを無効化
 sys.stdout.reconfigure(line_buffering=True)
+
+# QR型添付ファイルの拡張子識別子。Attachment.csv の「拡張子」列に書かれる値と一致させる
+# （PipelineRunner.php 側もこの識別子でマップするため、変更する場合は両方を揃えること）。
+#   'qr'      : 従来の生QR画像PNG（後方互換のデフォルト）
+#   'qr_docx' : 本文+QRを埋め込んだ docx
+#   'qr_pdf'  : 本文+QRを埋め込んだ pdf
+#   'qr_html' : 本文+QRを埋め込んだ html
+QR_DOCUMENT_FORMATS = {
+    'qr_docx': 'docx',
+    'qr_pdf': 'pdf',
+    'qr_html': 'html',
+}
+
+
+def resolve_qr_extension(extension):
+    """Attachment.csv の拡張子文字列から QR添付の種別を判定する。
+
+    戻り値: ('png', None) 従来の生QR画像PNG（既定・フォールバック）
+            ('doc', fmt)   本文+QRを埋め込んだ文書。fmt は 'docx'|'pdf'|'html'
+    """
+    key = str(extension).strip().lower()
+    if key in QR_DOCUMENT_FORMATS:
+        return ('doc', QR_DOCUMENT_FORMATS[key])
+    # 'qr' 含む未知の識別子は全て従来PNGにフォールバック（後方互換を最優先）。
+    return ('png', None)
+
+
+def get_body_template(body_templates_df, template_no):
+    """本文定型文の取得（send_email.py の get_body_template を踏襲）。"""
+    try:
+        template_no_int = int(float(template_no))
+        mask = body_templates_df['項番'] == template_no_int
+        if mask.any():
+            return body_templates_df.loc[mask, '本文定型文'].iloc[0]
+        return "本文テンプレートが見つかりません"
+    except Exception:
+        return "本文取得エラー"
+
+
+def replace_placeholders(text, row):
+    """本文差し込み処理（send_email.py の replace_placeholders を踏襲）。"""
+    if pd.isna(text):
+        return ""
+
+    placeholder_columns = {
+        '#$1$#': '本文差し込み1 #$1$#',
+        '#$2$#': '本文差し込み2 #$2$#',
+        '#$3$#': '本文差し込み3 #$3$#',
+        '#$4$#': '本文差し込み4 #$4$#',
+    }
+
+    for placeholder, column_name in placeholder_columns.items():
+        value = row.get(column_name, '')
+        if pd.isna(value) or value == '':
+            text = text.replace(placeholder, '')
+        else:
+            text = text.replace(placeholder, str(value))
+
+    return text
 
 def setup_logging():
     """ログ設定"""
@@ -48,10 +149,18 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
     # CSVファイル読み込み
     list_csv_path = os.path.join(data_dir, "list.csv")
     attachment_csv_path = os.path.join(data_dir, "Attachment.csv")
+    honbun_csv_path = os.path.join(data_dir, "honbun.csv")
 
     try:
         list_df = pd.read_csv(list_csv_path)
         attachment_df = pd.read_csv(attachment_csv_path)
+        # honbun.csv はQR文書型（qr_docx/qr_pdf/qr_html）で本文をそのまま流し込むために使う。
+        # 既存の生QR型(extension=='qr')やその他添付型では未使用のため、無くても致命的ではない。
+        if os.path.exists(honbun_csv_path):
+            honbun_df = pd.read_csv(honbun_csv_path)
+        else:
+            honbun_df = pd.DataFrame(columns=['項番', '本文定型文'])
+            logger.info(f"honbun.csvが見つかりません（QR文書型は使用不可）: {honbun_csv_path}")
         print(f"\n[OK] CSVファイル読み込み完了", flush=True)
         print(f"     list.csv: {len(list_df)}行", flush=True)
         print(f"     Attachment.csv: {len(attachment_df)}行", flush=True)
@@ -162,6 +271,22 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
         # 2. HTMLファイルの作成（認証フラグに応じたマスターファイルを使用）
         try:
             master_html_content, html_master_path = load_html_master(auth_flag)
+            # 認証なし(auth_flag=0)は link ページに種明かしを直接埋め込む。
+            # このときテナント別 reveal.html があれば共通 master.html より優先する。
+            # 認証あり(1/2/3)は認証画面を出し、種明かしは training_log.php 経路(実装済み)が
+            # テナント別 reveal を返すため、ここでは触らない(二重対応を避ける)。
+            try:
+                af_int = int(float(auth_flag)) if str(auth_flag).strip() not in ('', 'nan') else 0
+            except (ValueError, TypeError):
+                af_int = 0
+            if af_int == 0:
+                reveal_path = resolve_tenant_reveal(random_value)
+                if reveal_path:
+                    with open(reveal_path, 'r', encoding='utf-8') as rf:
+                        master_html_content = rf.read()
+                    html_master_path = reveal_path
+                    print(f"  [FILE] テナント別種明かしを使用: {reveal_path}", flush=True)
+                    logger.info(f"テナント別種明かしを使用: {reveal_path}")
             print(f"  [FILE] 使用するHTMLマスター: {os.path.basename(html_master_path)}", flush=True)
             logger.info(f"使用するHTMLマスター: {os.path.basename(html_master_path)}")
         except Exception as e:
@@ -178,8 +303,11 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
             beacon_base = cfg.get('server', 'beacon_url_base', fallback=beacon_base).rstrip('/')
 
         # プレースホルダーの置換
+        # #$5$#(random_value)は10桁ゼロ埋めの英数字なのでエスケープ不要。
+        # #$6$#(to_email)は master*.html 内で value="#$6$#" のHTML属性値に埋め込まれるため、
+        #  格納型XSS対策として quote=True でエスケープする（差し込む値のみ／テンプレート本体は触らない）。
         html_content = master_html_content.replace('#$5$#', random_value)
-        html_content = html_content.replace('#$6$#', to_email)  # 送信先メールアドレスを置換
+        html_content = html_content.replace('#$6$#', html.escape(to_email, quote=True))  # 送信先メールアドレスを置換
         # テンプレート内のハードコードされたURLをconfig値で置換
         html_content = html_content.replace('http://85.131.251.224', beacon_base)
 
@@ -220,41 +348,61 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
                         if extension.startswith('.'):
                             extension = extension[1:]
 
-                        # QR型の処理（拡張子が'qr'の場合）
-                        if extension.lower() == 'qr':
-                            print(f"  [QR] QRコード型添付ファイル処理開始", flush=True)
+                        # QR型の処理（拡張子が 'qr' または 'qr_docx'/'qr_pdf'/'qr_html' の場合）
+                        # 判定は resolve_qr_extension() に集約。未知の識別子は 'qr'(PNG)後方互換にフォールバックする。
+                        qr_kind, qr_doc_fmt = resolve_qr_extension(extension)
+                        if extension.lower() == 'qr' or extension.lower() in QR_DOCUMENT_FORMATS:
+                            print(f"  [QR] QRコード型添付ファイル処理開始（種別: {extension}）", flush=True)
                             try:
                                 # 追跡URLの構築
                                 tracking_url = f"{beacon_base}/link-{random_value}.html"
                                 print(f"     [QR] エンコード対象URL: {tracking_url}", flush=True)
                                 logger.info(f"QRコード対象URL: {tracking_url}")
 
-                                # QRコード画像の生成
-                                qr = qrcode.QRCode(
-                                    version=1,
-                                    error_correction=qrcode.constants.ERROR_CORRECT_L,
-                                    box_size=10,
-                                    border=4,
-                                )
-                                qr.add_data(tracking_url)
-                                qr.make(fit=True)
-                                qr_img = qr.make_image(fill_color="black", back_color="white")
+                                if qr_kind == 'doc':
+                                    # QR文書型: 本文テンプレをそのまま流し込み、QRを埋め込んだ docx/pdf/html を生成する。
+                                    body_template_no = row.get('本文定型文No', 1)
+                                    raw_body = get_body_template(honbun_df, body_template_no)
+                                    body_text = replace_placeholders(raw_body, row)
 
-                                # QRコードPNG保存
-                                qr_filename = f"kunren-qr-{random_value}.png"
-                                qr_dest_path = f"/opt/training/bin/Attachment/{qr_filename}"
+                                    doc_filename = f"kunren-qr-{random_value}.{qr_doc_fmt}"
+                                    qr_dest_path = f"/opt/training/bin/Attachment/{doc_filename}"
 
-                                # 既存ファイルがあれば削除
-                                if os.path.exists(qr_dest_path):
-                                    os.remove(qr_dest_path)
+                                    if os.path.exists(qr_dest_path):
+                                        os.remove(qr_dest_path)
 
-                                qr_img.save(qr_dest_path)
-                                os.chmod(qr_dest_path, 0o644)
+                                    generate_qr_document(qr_doc_fmt, body_text, tracking_url, qr_dest_path)
+                                    os.chmod(qr_dest_path, 0o644)
 
-                                print(f"     [OK] QRコード画像作成: {qr_filename}", flush=True)
-                                logger.info(f"QRコード画像作成: {qr_dest_path}")
+                                    print(f"     [OK] QR文書作成({qr_doc_fmt}): {doc_filename}", flush=True)
+                                    logger.info(f"QR文書作成({qr_doc_fmt}): {qr_dest_path}")
+                                else:
+                                    # 従来の生QR画像PNG（後方互換）
+                                    qr = qrcode.QRCode(
+                                        version=1,
+                                        error_correction=qrcode.constants.ERROR_CORRECT_L,
+                                        box_size=10,
+                                        border=4,
+                                    )
+                                    qr.add_data(tracking_url)
+                                    qr.make(fit=True)
+                                    qr_img = qr.make_image(fill_color="black", back_color="white")
 
-                                # ZIPフラグが1の場合、ZIPファイル化
+                                    # QRコードPNG保存
+                                    qr_filename = f"kunren-qr-{random_value}.png"
+                                    qr_dest_path = f"/opt/training/bin/Attachment/{qr_filename}"
+
+                                    # 既存ファイルがあれば削除
+                                    if os.path.exists(qr_dest_path):
+                                        os.remove(qr_dest_path)
+
+                                    qr_img.save(qr_dest_path)
+                                    os.chmod(qr_dest_path, 0o644)
+
+                                    print(f"     [OK] QRコード画像作成: {qr_filename}", flush=True)
+                                    logger.info(f"QRコード画像作成: {qr_dest_path}")
+
+                                # ZIPフラグが1の場合、ZIPファイル化（QR画像/QR文書とも共通ロジック）
                                 if float(zip_flag) == 1.0:
                                     qr_zip_filename = f"kunren-qr-{random_value}.zip"
                                     qr_zip_dest_path = f"/opt/training/bin/Attachment/{qr_zip_filename}"
@@ -297,8 +445,9 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
                                         attachment_html_content = f.read()
 
                             # プレースホルダーの置換（添付ファイル用）
+                            # #$6$# は master.html の value="#$6$#" 属性値に埋まるため quote=True でエスケープ。
                             attachment_html_content = attachment_html_content.replace('#$5$#', random_value)
-                            attachment_html_content = attachment_html_content.replace('#$6$#', to_email)
+                            attachment_html_content = attachment_html_content.replace('#$6$#', html.escape(to_email, quote=True))
 
                             # 添付ファイルとして保存
                             try:

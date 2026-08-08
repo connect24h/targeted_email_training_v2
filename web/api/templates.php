@@ -146,8 +146,8 @@ function templates_handle_create(array $actor): never
     $authFlag = templates_validate_auth_flag($kind, templates_body_optional_int($body, 'auth_flag'));
 
     $id = Db::insert(
-        'INSERT INTO templates (tenant_id, kind, name, lang, format, content, auth_flag, is_preset)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
+        'INSERT INTO templates (tenant_id, kind, name, lang, format, content, auth_flag, scenario_key, is_preset)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
         [
             $tenantId,
             $kind,
@@ -156,10 +156,69 @@ function templates_handle_create(array $actor): never
             $format,
             templates_string($body, 'content'),
             $authFlag,
+            templates_optional_string($body, 'scenario_key'),
         ]
     );
     audit('template.create', 'template_id=' . $id);
     json_out(['success' => true, 'template' => templates_assert_visible($id, $tenantId)], 201);
+}
+
+/**
+ * シナリオ(件名+本文のペア)を一括作成する。
+ * 件名と本文は 1 つの訓練シナリオを構成する対なので、同じ scenario_key を持つ
+ * 2 レコードを 1 トランザクションで作る。片方だけ登録されて対が壊れることを防ぐ。
+ * scenario_key は利用者に入力させず自動採番する(既存キーと衝突しない sc<N> 形式)。
+ */
+function templates_next_scenario_key(): string
+{
+    // 既存の sc<N> の最大値 + 1。共有プリセットの英単語キー(mfa 等)とは名前空間が分かれる。
+    $rows = Db::all("SELECT scenario_key FROM templates WHERE scenario_key LIKE 'sc%'", []);
+    $max = 0;
+    foreach ($rows as $r) {
+        if (preg_match('/^sc(\d+)$/', (string) $r['scenario_key'], $m)) {
+            $max = max($max, (int) $m[1]);
+        }
+    }
+    return 'sc' . ($max + 1);
+}
+
+function templates_handle_create_scenario(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, templates_body_optional_int($body, 'tenant_id'));
+    $format = templates_optional_string($body, 'format') ?? 'html';
+    templates_validate_format($format);
+
+    $name = templates_string($body, 'name');
+    $subject = templates_string($body, 'subject_content');
+    $bodyContent = templates_string($body, 'body_content');
+    $lang = templates_optional_string($body, 'lang') ?? 'ja';
+
+    $ids = Db::tx(function () use ($tenantId, $name, $subject, $bodyContent, $format, $lang): array {
+        $key = templates_next_scenario_key();
+        // 件名は本文と違い装飾が不要なので text 固定。本文のみ利用者指定の format に従う。
+        $subjectId = Db::insert(
+            'INSERT INTO templates (tenant_id, kind, name, lang, format, content, scenario_key, is_preset)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
+            [$tenantId, 'subject', $name, $lang, 'text', $subject, $key]
+        );
+        $bodyId = Db::insert(
+            'INSERT INTO templates (tenant_id, kind, name, lang, format, content, scenario_key, is_preset)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
+            [$tenantId, 'body', $name, $lang, $format, $bodyContent, $key]
+        );
+        return ['key' => $key, 'subject_id' => $subjectId, 'body_id' => $bodyId];
+    });
+
+    audit('template.create_scenario', 'key=' . $ids['key']
+        . ' subject_id=' . $ids['subject_id'] . ' body_id=' . $ids['body_id']);
+    json_out([
+        'success' => true,
+        'scenario_key' => $ids['key'],
+        'subject' => templates_assert_visible($ids['subject_id'], $tenantId),
+        'body' => templates_assert_visible($ids['body_id'], $tenantId),
+    ], 201);
 }
 
 function templates_handle_update(array $actor): never
@@ -278,11 +337,15 @@ function templates_handle_export_csv(array $actor): never
     $out = fopen('php://temp', 'r+');
     fputcsv($out, ['name', 'kind', 'format', 'content', 'auth_flag', 'scenario_key']);
     foreach ($rows as $r) {
+        // CSVインジェクション対策: name/scenario_key を無害化。
+        // content(HTML本文)は re-import で本文として復元する必要があり、先頭 ' 付与は
+        // 本文を壊すため対象外(HTML本文が =,+,-,@ で始まることは実運用上ない)。
+        // kind/format/auth_flag は列挙値・数値のため危険性なし。
         fputcsv($out, [
-            (string) $r['name'], (string) $r['kind'], (string) $r['format'],
+            tet2_csv_sanitize($r['name']), (string) $r['kind'], (string) $r['format'],
             (string) ($r['content'] ?? ''),
             $r['auth_flag'] === null ? '' : (string) $r['auth_flag'],
-            (string) ($r['scenario_key'] ?? ''),
+            tet2_csv_sanitize($r['scenario_key'] ?? ''),
         ]);
     }
     rewind($out);
@@ -396,6 +459,9 @@ try {
     }
     if ($action === 'get' && $method === 'GET') {
         templates_handle_get($actor);
+    }
+    if ($action === 'create_scenario' && $method === 'POST') {
+        templates_handle_create_scenario($actor);
     }
     if ($action === 'create' && $method === 'POST') {
         templates_handle_create($actor);

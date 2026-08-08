@@ -8,18 +8,22 @@
 
 ```
 web/        Web アプリ本体（本番: /var/www/html/tet2）
-  api/        REST API 11本（?action= パターン、CSRF/セッション認証）
+  api/        REST API 21本（?action= パターン、CSRF/セッション認証）
   lib/        リポジトリ層・PipelineRunner 等
   db/         スキーマ(schema.sql/schema-edu.sql) と seed スクリプト
   assets/     SPA アセット（app.css, vendor/ にBootstrap/Chart.jsローカル配置）
-  tests/      PHPUnit テスト（22ファイル / 425 assertions）
+  tests/      PHP テスト（24ファイル、tests/run.sh で一括実行）
   index.html app.js take.php  SPA エントリ + 受講ページ
 bin/        メール送信処理（本番: /opt/training/bin）
   tet2-worker.py       send_schedule ポーリング → 送信起動（systemd常駐）
   send_email.py        SMTP(localhost:25) 送信本体（v1由来・共用）
   create_beacon_files.py  ビーコン/リンク/添付生成
+  qr_doc_gen.py        QR埋め込み文書（docx/pdf/html）生成
+  tet2-purge-campaigns.py  論理削除済みキャンペーンの物理パージ
   replace_url.py / training_config.py / requirements.txt / config.ini
-deploy/systemd/  systemd unit 8本（worker + edu enroll/reminder/snapshot + report-ingest）
+  master*.html / __BeaconMst.png  生成用HTML・ビーコン素材
+deploy/systemd/  systemd unit 9本（worker + edu enroll/reminder/snapshot + report-ingest）
+deploy/cron/     論理削除済みキャンペーンのパージ定義
 ```
 
 ## 本番配置と DB
@@ -44,7 +48,8 @@ deploy/systemd/  systemd unit 8本（worker + edu enroll/reminder/snapshot + rep
 
 本リポジトリは本番からの集約であり、そのままの自動デプロイスクリプトは持たない。
 配置は上記「本番配置」のパスへ web/ と bin/ を展開し、deploy/systemd/ の unit を
-`/etc/systemd/system/` へ配置して `systemctl daemon-reload` する。DB は別途
+`/etc/systemd/system/` へ、deploy/cron/ の定義を `/etc/cron.d/` へ配置して
+`systemctl daemon-reload` する。DB は別途
 `db/schema*.sql` から構築し、`db/seed_*.php` で共有テンプレ/教材を投入する。
 
 ## セキュリティ

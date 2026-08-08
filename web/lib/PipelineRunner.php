@@ -22,6 +22,27 @@ final class PipelineRunner
     ];
 
     /**
+     * QR型で本文+QR埋め込み文書として生成できる拡張子。
+     * create_beacon_files.py の QR_DOCUMENT_FORMATS と一致させること（片方だけ変更しない）。
+     */
+    private const QR_DOCUMENT_EXTENSIONS = ['docx', 'pdf', 'html'];
+
+    /**
+     * QR型(link_mode=='qr')の Attachment.csv 拡張子列に書く値を決める。
+     *  - $attachmentExt が docx/pdf/html のいずれかなら 'qr_docx'/'qr_pdf'/'qr_html'
+     *    （create_beacon_files.py 側がこの識別子で本文+QR埋め込み文書を生成する）。
+     *  - それ以外（未指定/空/不正値）は従来の 'qr'（生QR画像PNG）にフォールバックし後方互換を保つ。
+     */
+    private static function qrAttachmentExtension(?string $attachmentExt): string
+    {
+        $ext = strtolower(trim((string) $attachmentExt));
+        if (in_array($ext, self::QR_DOCUMENT_EXTENSIONS, true)) {
+            return 'qr_' . $ext;
+        }
+        return 'qr';
+    }
+
+    /**
      * キャンペーンの CSV 群を data_dir に生成する。生成した data_dir を返す。
      * @throws RuntimeException
      */
@@ -87,7 +108,12 @@ final class PipelineRunner
             [1, $urlBase],
         ]);
         // Attachment.csv（添付 = No.1）
-        $ext = (string) ($c['attachment_ext'] ?? 'html');
+        // QR型は 'qr'（従来PNG）または 'qr_docx'/'qr_pdf'/'qr_html'（本文+QR埋め込み文書）を書く。
+        // それ以外の link_mode(attachment等)は attachment_ext をそのまま使う（従来動作）。
+        $linkModeSingle = (string) ($c['link_mode'] ?? 'link');
+        $ext = $linkModeSingle === 'qr'
+            ? self::qrAttachmentExtension($c['attachment_ext'] ?? null)
+            : (string) ($c['attachment_ext'] ?? 'html');
         $zip = (int) ($c['attachment_zip'] ?? 0);
         self::writeCsv($dir . '/Attachment.csv', [
             ['項番', '添付ファイル名', '拡張子', 'zipフラグ'],
@@ -110,9 +136,15 @@ final class PipelineRunner
         //  - attachment  : 添付あり、本文URLはトップ(#$1$# には誘い文だけで追跡は添付ビーコン)
         $linkMode = (string) ($c['link_mode'] ?? 'link');
         $base = rtrim($urlBase, '/');
+        // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
+        $redirect = self::resolveTestRedirect($c);
+        $ri = 0;
         foreach ($targets as $t) {
             $surname = self::surname((string) $t['to_name']);
             $tid = (string) $t['tracking_id'];
+            // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
+            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
+            $ri++;
             if ($linkMode === 'attachment') {
                 $bodyUrl = $base . '/';         // 添付型: 本文はトップ。追跡は添付内ビーコン(kunren-beacon-{tid}.png)
                 $attachNo = 1;                   // 添付を付ける
@@ -122,7 +154,7 @@ final class PipelineRunner
             }
             $rows[] = [
                 (int) $t['koban'],                 // 項番
-                (string) $t['to_email'],           // 送信先情報
+                $sendTo,                            // 送信先情報(実To。テスト時はリダイレクト先)
                 1,                                  // 件名定型文No
                 1,                                  // 本文定型文No
                 $bodyUrl,                           // 本文差し込み1 #$1$#
@@ -192,10 +224,14 @@ final class PipelineRunner
         $attachRows = [['項番', '添付ファイル名', '拡張子', 'zipフラグ']];
         foreach ($contents as $content) {
             $contentNo = (int) $content['content_no'];
-            // QR型は拡張子 'qr' にする（create_beacon_files.py が QR画像PNGを生成するトリガー）。
+            // QR型は attachment_ext(docx/pdf/html) に応じて 'qr_docx'/'qr_pdf'/'qr_html'
+            //（本文+QR埋め込み文書。create_beacon_files.py がトリガーとして判定）にするか、
+            // 未指定/不正値なら従来の 'qr'（生QR画像PNG・後方互換）にフォールバックする。
             // それ以外の添付型は attachment_ext を使う。
             $linkMode = (string) ($content['link_mode'] ?? 'link');
-            $ext = $linkMode === 'qr' ? 'qr' : (string) ($content['attachment_ext'] ?? 'html');
+            $ext = $linkMode === 'qr'
+                ? self::qrAttachmentExtension($content['attachment_ext'] ?? null)
+                : (string) ($content['attachment_ext'] ?? 'html');
             $zip = (int) ($content['attachment_zip'] ?? 0);
             $attachRows[] = [$contentNo, 'kunren', $ext, $zip];
         }
@@ -219,6 +255,9 @@ final class PipelineRunner
 
         $rows = [self::LIST_HEADER];
         $fromAddr = (string) ($c['from_address'] ?? '');
+        // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
+        $redirect = self::resolveTestRedirect($c);
+        $ri = 0;
 
         foreach ($targets as $t) {
             $targetContentNo = (int) ($t['content_no'] ?? 1); // デフォルトは1
@@ -266,9 +305,13 @@ final class PipelineRunner
                 $bodyUrl = '';
             }
 
+            // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
+            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
+            $ri++;
+
             $rows[] = [
                 (int) $t['koban'],                 // 項番
-                (string) $t['to_email'],           // 送信先情報
+                $sendTo,                            // 送信先情報(実To。テスト時はリダイレクト先)
                 $targetContentNo,                  // 件名定型文No = content_no
                 $targetContentNo,                  // 本文定型文No = content_no
                 $bodyUrl,                           // 本文差し込み1 #$1$#
@@ -338,6 +381,33 @@ final class PipelineRunner
         }
     }
 
+    /**
+     * テストモードの宛先リダイレクト先を返す。
+     * is_test=1 かつ test_redirect_emails が設定されていれば、その email 配列を返す。
+     * そうでなければ空配列(=リダイレクトしない=本番の宛先をそのまま使う)。
+     *
+     * これにより「本番の1000名分の差し込みデータ・tracking_id はそのまま生成しつつ、
+     * 実際の送信先(To)だけを少数のテストアカウントに均等分配」できる。
+     */
+    private static function resolveTestRedirect(array $c): array
+    {
+        if ((int) ($c['is_test'] ?? 0) !== 1) {
+            return [];
+        }
+        $raw = trim((string) ($c['test_redirect_emails'] ?? ''));
+        if ($raw === '') {
+            return [];
+        }
+        $emails = [];
+        foreach (preg_split('/[,\s]+/', $raw) as $e) {
+            $e = trim($e);
+            if ($e !== '' && filter_var($e, FILTER_VALIDATE_EMAIL)) {
+                $emails[] = $e;
+            }
+        }
+        return $emails;
+    }
+
     private static function writeCsv(string $path, array $rows): void
     {
         $fp = fopen($path, 'w');
@@ -348,5 +418,8 @@ final class PipelineRunner
             fputcsv($fp, $row);
         }
         fclose($fp);
+        // group 書き込み可(0664)にする。生成確認は www-data、送信ワーカーは training が
+        // 同じ data_dir に書くため、どちらが先に作っても相手が上書きできるようにする。
+        @chmod($path, 0664);
     }
 }

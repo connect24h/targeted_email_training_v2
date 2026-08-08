@@ -40,6 +40,20 @@ function mu_validate_html(string $html): void
     if (preg_match('/\son\w+\s*=/i', $html)) {
         json_error('イベントハンドラ属性（onclick 等）は使用できません', 400);
     }
+    // 外部読み込み・埋め込み・リダイレクトを行う危険要素を拒否。
+    // ※ <meta http-equiv="Content-Type"> は正当マスタで使うため、refresh のみを狙って拒否する。
+    if (preg_match('/<\s*iframe\b/i', $html)) {
+        json_error('iframe タグは使用できません', 400);
+    }
+    if (preg_match('/<\s*object\b/i', $html)) {
+        json_error('object タグは使用できません', 400);
+    }
+    if (preg_match('/<\s*embed\b/i', $html)) {
+        json_error('embed タグは使用できません', 400);
+    }
+    if (preg_match('/<\s*meta\b[^>]*http-equiv\s*=\s*["\']?\s*refresh/i', $html)) {
+        json_error('meta refresh（自動リダイレクト）は使用できません', 400);
+    }
 }
 
 /**
