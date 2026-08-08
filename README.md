@@ -24,6 +24,7 @@ bin/        メール送信処理（本番: /opt/training/bin）
   master*.html / __BeaconMst.png  生成用HTML・ビーコン素材
 deploy/systemd/  systemd unit 9本（worker + edu enroll/reminder/snapshot + report-ingest）
 deploy/cron/     論理削除済みキャンペーンのパージ定義
+deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 ```
 
 ## 本番配置と DB
@@ -70,6 +71,8 @@ PHP testは`web/db/schema*.sql`と架空の`.test` domainだけから合成DBを
 bash web/tests/run.sh
 python3 -m unittest discover -s bin/tests -p 'test_*.py'
 ```
+
+deploy/rollbackの詳しい安全手順は[`deploy/README.md`](deploy/README.md)を参照する。
 
 ## セキュリティ
 
