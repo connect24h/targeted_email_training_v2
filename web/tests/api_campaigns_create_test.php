@@ -14,6 +14,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/../lib/CampaignDraftFactory.php';
 
 // tet2_test_boot は Db::run(seedSql) を使うが PDO::prepare は単一文しか実行しない。
 // そのため boot 後に個別に Db::run() する。
@@ -370,7 +371,7 @@ $stillExists = Db::one('SELECT id FROM campaigns WHERE id = ?', [$cid_del3]);
 check($stillExists !== null, 'DEL-5 実データは残る(パージまで保持)');
 
 // DEL-6: 複製 → 新draftが作られ、tracking_id は新規・status=draft
-$cid_dup_src = create_draft(['name' => '複製元']);
+$cid_dup_src = create_draft(['name' => '複製元', 'target_ids' => [9901]]);
 $res = duplicate_campaign(['id' => $cid_dup_src]);
 check($res['code'] === 200, 'DEL-6 duplicate → 200');
 $newCid = $res['payload']['campaign']['id'] ?? 0;

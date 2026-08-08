@@ -1,4 +1,5 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
+require_once __DIR__ . '/../lib/CampaignDraftFactory.php';
 
 const CAMPAIGN_LINK_MODES = ['link', 'attachment', 'form', 'qr'];
 const CAMPAIGN_SEND_MODES = ['normal', 'split', 'slow'];
@@ -833,71 +834,13 @@ function campaigns_handle_duplicate(array $actor): never
     $body = json_body();
     $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
     $id = campaigns_int($body, 'id');
-    $src = assert_campaign_owned($id, $tenantId);
-
-    $newId = Db::tx(function () use ($src, $tenantId, $actor): int {
-        // 1. campaigns 本体をコピー(status=draft, 日時は空=UIで再設定, deleted_at=NULL)
-        $newId = Db::insert(
-            'INSERT INTO campaigns
-             (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
-              from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_zip, send_mode,
-              split_count, split_interval_min, weekdays_only, business_start, business_end,
-              start_at, end_at, is_test, content_delivery, test_redirect_emails, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [
-                $tenantId,
-                mb_substr((string) $src['name'] . ' のコピー', 0, 200),
-                'draft',
-                $src['subject_template_id'], $src['body_template_id'], $src['phish_template_id'],
-                $src['from_address'], $src['from_domain'], $src['beacon_base'],
-                $src['link_mode'], $src['attachment_ext'], $src['attachment_zip'], $src['send_mode'],
-                $src['split_count'], $src['split_interval_min'], $src['weekdays_only'],
-                $src['business_start'], $src['business_end'],
-                null, null,  // start_at / end_at は引き継がない(過去日時回避・UIで再設定)
-                $src['is_test'], $src['content_delivery'], $src['test_redirect_emails'] ?? null, (int) ($actor['id'] ?? 0),
-            ]
-        );
-
-        // data_dir は元をコピーせず、新IDで新規生成する(元と同じディレクトリを
-        // 共有すると送信ファイルが衝突するため)。通常の create と同じ扱い。
-        Db::run(
-            'UPDATE campaigns SET data_dir = ? WHERE id = ?',
-            [campaigns_data_dir($tenantId, $newId), $newId]
-        );
-
-        // 2. campaign_contents(コンテンツ構成)をコピー
-        $contents = Db::all('SELECT * FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no', [$src['id']]);
-        foreach ($contents as $c) {
-            Db::run(
-                'INSERT INTO campaign_contents
-                 (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [
-                    $newId, $c['content_no'], $c['subject_template_id'], $c['body_template_id'], $c['phish_template_id'],
-                    $c['link_mode'], $c['attachment_ext'], $c['attachment_zip'], $c['from_address'], $c['beacon_base'],
-                    $c['suppress_body_url'] ?? 0,
-                ]
-            );
-        }
-
-        // 3. campaign_targets(対象者)をコピー。tracking_id は新規採番、send_status は pending にリセット。
-        //    koban/auth_flag/from_address/content_no は元の割り当てを維持する。
-        $targets = Db::all('SELECT * FROM campaign_targets WHERE campaign_id = ? ORDER BY koban, content_no', [$src['id']]);
-        foreach ($targets as $t) {
-            Db::run(
-                'INSERT INTO campaign_targets
-                 (campaign_id, target_id, tracking_id, koban, auth_flag, from_address, send_status, content_no)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [
-                    $newId, $t['target_id'], campaigns_generate_tracking_id(), $t['koban'],
-                    $t['auth_flag'], $t['from_address'], 'pending', $t['content_no'] ?? null,
-                ]
-            );
-        }
-
-        return $newId;
-    });
+    try {
+        $newId = (new CampaignDraftFactory())->duplicate($id, $tenantId, (int) ($actor['id'] ?? 0));
+    } catch (CampaignDraftNotFoundException $e) {
+        json_error($e->getMessage(), 404);
+    } catch (CampaignDraftValidationException $e) {
+        json_error($e->getMessage(), 409);
+    }
 
     audit('campaign.duplicate', 'src=' . $id . ',new=' . $newId);
     json_out(['success' => true, 'campaign' => campaigns_row($newId, $tenantId)]);
