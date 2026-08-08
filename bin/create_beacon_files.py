@@ -137,6 +137,12 @@ def setup_logging():
 
     return logger
 
+
+def read_list_csv(path):
+    """tracking IDを数値へ変換せず、先頭ゼロを保持して読む。"""
+    return pd.read_csv(path, dtype=str)
+
+
 def create_beacon_files(data_dir='/opt/training/bin/data'):
     """ビーコンファイルの作成"""
     logger = setup_logging()
@@ -152,7 +158,7 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
     honbun_csv_path = os.path.join(data_dir, "honbun.csv")
 
     try:
-        list_df = pd.read_csv(list_csv_path)
+        list_df = read_list_csv(list_csv_path)
         attachment_df = pd.read_csv(attachment_csv_path)
         # honbun.csv はQR文書型（qr_docx/qr_pdf/qr_html）で本文をそのまま流し込むために使う。
         # 既存の生QR型(extension=='qr')やその他添付型では未使用のため、無くても致命的ではない。
