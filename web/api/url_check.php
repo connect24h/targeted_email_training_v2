@@ -13,7 +13,11 @@
  * http/https 以外・パース不能・ホストなしは fail-closed で false。
  * 戻り値が true のとき、$resolvedIps に検証済み IP を格納する(curl 固定接続用)。
  */
-function url_check_is_safe_host(string $url, ?array &$resolvedIps = null): bool
+function url_check_is_safe_host(
+    string $url,
+    ?array &$resolvedIps = null,
+    ?callable $resolveHost = null
+): bool
 {
     $resolvedIps = [];
     $scheme = parse_url($url, PHP_URL_SCHEME);
@@ -32,14 +36,8 @@ function url_check_is_safe_host(string $url, ?array &$resolvedIps = null): bool
     if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
         $ips[] = $host;
     } else {
-        foreach (dns_get_record($host, DNS_A + DNS_AAAA) ?: [] as $rec) {
-            if (isset($rec['ip'])) { $ips[] = $rec['ip']; }
-            if (isset($rec['ipv6'])) { $ips[] = $rec['ipv6']; }
-        }
-        if ($ips === []) {
-            $g = gethostbyname($host); // A のみのフォールバック
-            if ($g !== $host) { $ips[] = $g; }
-        }
+        $resolver = $resolveHost ?? 'url_check_resolve_host';
+        $ips = $resolver($host);
         if ($ips === []) {
             return false; // 解決できない = fail-closed
         }
@@ -52,6 +50,21 @@ function url_check_is_safe_host(string $url, ?array &$resolvedIps = null): bool
     }
     $resolvedIps = $ips;
     return true;
+}
+
+/** @return list<string> */
+function url_check_resolve_host(string $host): array
+{
+    $ips = [];
+    foreach (dns_get_record($host, DNS_A + DNS_AAAA) ?: [] as $record) {
+        if (isset($record['ip'])) { $ips[] = $record['ip']; }
+        if (isset($record['ipv6'])) { $ips[] = $record['ipv6']; }
+    }
+    if ($ips === []) {
+        $fallback = gethostbyname($host);
+        if ($fallback !== $host) { $ips[] = $fallback; }
+    }
+    return array_values(array_unique($ips));
 }
 
 function url_check_handle(): never

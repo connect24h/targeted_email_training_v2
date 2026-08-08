@@ -10,9 +10,9 @@
 web/        Web アプリ本体（本番: /var/www/html/tet2）
   api/        REST API 21本（?action= パターン、CSRF/セッション認証）
   lib/        リポジトリ層・PipelineRunner 等
-  db/         スキーマ(schema.sql/schema-edu.sql) と seed スクリプト
+  db/         現行スキーマ、migration runner、seed スクリプト
   assets/     SPA アセット（app.css, vendor/ にBootstrap/Chart.jsローカル配置）
-  tests/      PHP テスト（24ファイル、tests/run.sh で一括実行）
+  tests/      PHP テスト（26ファイル、合成DBを使い tests/run.sh で一括実行）
   index.html app.js take.php  SPA エントリ + 受講ページ
 bin/        メール送信処理（本番: /opt/training/bin）
   tet2-worker.py       send_schedule ポーリング → 送信起動（systemd常駐）
@@ -51,6 +51,25 @@ deploy/cron/     論理削除済みキャンペーンのパージ定義
 `/etc/systemd/system/` へ、deploy/cron/ の定義を `/etc/cron.d/` へ配置して
 `systemctl daemon-reload` する。DB は別途
 `db/schema*.sql` から構築し、`db/seed_*.php` で共有テンプレ/教材を投入する。
+
+既存DBのmigrationは明示したcopyでdry-runしてから適用する。`--apply`なしでは変更せず、
+本番DBへの直接適用にはさらに`--allow-production`が必要になる。実際の本番適用前には必ず
+SQLite backupを作成する。
+
+```bash
+php web/db/migrate.php --db=/absolute/path/to/tet2-copy.sqlite
+php web/db/migrate.php --db=/absolute/path/to/tet2-copy.sqlite --apply
+```
+
+## テスト
+
+PHP testは`web/db/schema*.sql`と架空の`.test` domainだけから合成DBを毎回生成し、
+本番DBや個人情報へ依存しない。Python回帰testも標準`unittest`で実行する。
+
+```bash
+bash web/tests/run.sh
+python3 -m unittest discover -s bin/tests -p 'test_*.py'
+```
 
 ## セキュリティ
 

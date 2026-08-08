@@ -11,6 +11,13 @@ require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
 load_api('url_check');
 
+$publicResolver = static fn(string $host): array => match ($host) {
+    'example.com' => ['93.184.216.34'],
+    'localhost' => ['127.0.0.1'],
+    'mixed.example.test' => ['93.184.216.34', '10.0.0.1'],
+    default => [],
+};
+
 // --- 拒否されるべき内部アドレス(SSRF ベクタ) ---
 $blocked = [
     'http://127.0.0.1/'                => 'ループバック(127.0.0.1)',
@@ -24,7 +31,7 @@ $blocked = [
     'http://0.0.0.0/'                  => '未指定アドレス(0.0.0.0)',
 ];
 foreach ($blocked as $url => $label) {
-    check(url_check_is_safe_host($url) === false, "拒否: {$label}");
+    check(url_check_is_safe_host($url, $resolved, $publicResolver) === false, "拒否: {$label}");
 }
 
 // --- 許可されるべき公開アドレス ---
@@ -34,8 +41,10 @@ $allowed = [
     'http://8.8.8.8/'         => '公開IP(8.8.8.8)',
 ];
 foreach ($allowed as $url => $label) {
-    check(url_check_is_safe_host($url) === true, "許可: {$label}");
+    check(url_check_is_safe_host($url, $resolved, $publicResolver) === true, "許可: {$label}");
 }
+check(url_check_is_safe_host('https://mixed.example.test/', $resolved, $publicResolver) === false,
+    '拒否: 公開IPとprivate IPが混在するDNS応答');
 
 // --- パースできない/スキーム不正は false(fail-closed) ---
 check(url_check_is_safe_host('notaurl') === false, 'パース不能は拒否(fail-closed)');

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # TET v2 テストランナー。tests/*_test.php を順に実行し、1つでも失敗したら非0で終わる。
-# 各テストは本番DBを一時コピーして使うため本番データは汚さない(helpers.php tet2_test_boot)。
+# 各テストはschemaから合成DBを生成するため、本番DBにも本番dataにも依存しない。
 set -u
 cd "$(dirname "$0")"
 

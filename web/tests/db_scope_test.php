@@ -1,34 +1,8 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../lib/Db.php';
-
-function useReadOnlyDatabase(): void
-{
-    $pdo = new PDO('sqlite:file:/opt/training/tet2-db/tet2.sqlite?mode=ro&immutable=1', null, null, [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-    ]);
-    $property = new ReflectionProperty(Db::class, 'pdo');
-    $property->setValue(null, $pdo);
-}
-
-function pass(string $message): void
-{
-    echo "PASS: {$message}\n";
-}
-
-function check(bool $condition, string $message): void
-{
-    assert($condition);
-    if (!$condition) {
-        throw new RuntimeException("FAIL: {$message}");
-    }
-    pass($message);
-}
-
-useReadOnlyDatabase();
+require_once __DIR__ . '/helpers.php';
+tet2_test_boot();
 
 $tenantOne = Db::forTenant(1);
 $tenantTwo = Db::forTenant(2);

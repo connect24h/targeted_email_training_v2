@@ -17,6 +17,22 @@ load_api('logs');
 
 $TENANT = 1; // current_user() の tenant(seed の tenant_id IS NOT NULL 最初 = tenant 1)
 
+// このtestに必要なcampaign/targetを明示し、本番dataのIDや内容へ依存させない。
+Db::run("INSERT INTO campaigns (id, tenant_id, name, status, beacon_base) VALUES
+  (61, 1, 'Campaign Files Fixture', 'draft', 'https://beacon.example.test')");
+for ($i = 1; $i <= 3; $i++) {
+    $targetId = 6100 + $i;
+    $trackingId = $i === 1 ? '6160278278' : '616027827' . (8 + $i);
+    Db::run(
+        'INSERT INTO targets (id, tenant_id, email, name, status) VALUES (?,?,?,?,?)',
+        [$targetId, $TENANT, "campaign-files-{$i}@example.test", "対象者{$i}", 'active']
+    );
+    Db::run(
+        'INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, koban, content_no) VALUES (?,?,?,?,?)',
+        [61, $targetId, $trackingId, $i, $i]
+    );
+}
+
 // --- 正常系: campaign 61(tenant1, 3対象者, content_no 1/2/3) ---
 $_GET = ['campaign_id' => '61'];
 $res = call_handler('logs_handle_campaign_files', [], 'operator', [$TENANT]);

@@ -38,12 +38,15 @@ CREATE TABLE IF NOT EXISTS targets (
   company    TEXT,
   department TEXT,
   title      TEXT,
+  position_category TEXT,
+  tenant_no  INTEGER,
   status     TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   UNIQUE (tenant_id, email),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
 CREATE INDEX IF NOT EXISTS idx_targets_tenant ON targets(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_tenant_no ON targets(tenant_id, tenant_no);
 
 -- グループ（部署 / 任意グループ）
 CREATE TABLE IF NOT EXISTS groups (
@@ -75,6 +78,7 @@ CREATE TABLE IF NOT EXISTS templates (
   content    TEXT NOT NULL,                     -- プレースホルダ #$1$#..#$6$#
   auth_flag  INTEGER,                           -- phish_login のみ: 0=通常 1=Box 2=MS365 3=DigitalArts
   is_preset  INTEGER NOT NULL DEFAULT 0,
+  scenario_key TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
@@ -104,12 +108,35 @@ CREATE TABLE IF NOT EXISTS campaigns (
   end_at              TEXT,
   is_test             INTEGER NOT NULL DEFAULT 0,
   data_dir            TEXT,
+  beacon_base         TEXT,
+  content_delivery    TEXT NOT NULL DEFAULT 'distribute',
+  deleted_at          TEXT DEFAULT NULL,
+  test_redirect_emails TEXT DEFAULT NULL,
   created_by          INTEGER,
   created_at          TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
   FOREIGN KEY (created_by) REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns(tenant_id, status);
+
+-- 複数コンテンツ配信。campaigns側のlegacy列は後方互換のため残す。
+CREATE TABLE IF NOT EXISTS campaign_contents (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id         INTEGER NOT NULL,
+  content_no          INTEGER NOT NULL,
+  subject_template_id INTEGER,
+  body_template_id    INTEGER,
+  phish_template_id   INTEGER,
+  link_mode           TEXT NOT NULL DEFAULT 'link',
+  attachment_ext      TEXT,
+  attachment_zip      INTEGER NOT NULL DEFAULT 0,
+  from_address        TEXT,
+  beacon_base         TEXT,
+  suppress_body_url   INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (campaign_id, content_no),
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_contents ON campaign_contents(campaign_id, content_no);
 
 -- キャンペーン対象（対象者スナップショット + tracking_id 採番）
 CREATE TABLE IF NOT EXISTS campaign_targets (
@@ -123,7 +150,8 @@ CREATE TABLE IF NOT EXISTS campaign_targets (
   attachment_path TEXT,
   send_status     TEXT NOT NULL DEFAULT 'pending', -- pending/sent/failed/deferred
   sent_at         TEXT,
-  UNIQUE (campaign_id, target_id),
+  content_no      INTEGER,
+  UNIQUE (campaign_id, target_id, content_no),
   FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
   FOREIGN KEY (target_id)   REFERENCES targets(id)
 );
@@ -173,6 +201,19 @@ CREATE TABLE IF NOT EXISTS delivery_log (
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_campaign ON delivery_log(campaign_id);
 
+-- 確定済みキャンペーンレポート。payloadは集計結果JSONのsnapshot。
+CREATE TABLE IF NOT EXISTS campaign_report_snapshots (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id  INTEGER NOT NULL UNIQUE,
+  tenant_id    INTEGER NOT NULL,
+  payload      TEXT NOT NULL,
+  committed_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  committed_by INTEGER,
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+CREATE INDEX IF NOT EXISTS idx_report_snap_tenant ON campaign_report_snapshots(tenant_id);
+
 -- 監査ログ
 CREATE TABLE IF NOT EXISTS audit_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,4 +223,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail      TEXT,
   ip          TEXT,
   occurred_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+-- 適用済みmigration。業務table 22個の集計には含めない。
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );

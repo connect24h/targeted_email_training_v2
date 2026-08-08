@@ -1,0 +1,216 @@
+<?php
+declare(strict_types=1);
+
+final class MigrationRunner
+{
+    private const CURRENT_VERSION = '20260808-current-schema';
+
+    private string $dbPath;
+
+    public function __construct(string $dbPath)
+    {
+        if ($dbPath === '' || !str_starts_with($dbPath, DIRECTORY_SEPARATOR)) {
+            throw new InvalidArgumentException('DB pathは絶対pathで明示してください');
+        }
+        $realPath = realpath($dbPath);
+        if ($realPath === false || !is_file($realPath)) {
+            throw new InvalidArgumentException('指定DBが存在しません');
+        }
+        $this->dbPath = $realPath;
+    }
+
+    /** @return list<string> */
+    public function pending(): array
+    {
+        $pdo = $this->connect(true);
+        if (!$this->tableExists($pdo, 'schema_migrations')) {
+            return [self::CURRENT_VERSION];
+        }
+        $stmt = $pdo->prepare('SELECT 1 FROM schema_migrations WHERE version = ?');
+        $stmt->execute([self::CURRENT_VERSION]);
+        return $stmt->fetchColumn() === false ? [self::CURRENT_VERSION] : [];
+    }
+
+    public function migrate(): int
+    {
+        if ($this->pending() === []) {
+            return 0;
+        }
+        $pdo = $this->connect(false);
+        $pdo->exec('PRAGMA foreign_keys = OFF');
+        $pdo->beginTransaction();
+        try {
+            $this->applyCurrentSchema($pdo);
+            $stmt = $pdo->prepare('INSERT INTO schema_migrations (version) VALUES (?)');
+            $stmt->execute([self::CURRENT_VERSION]);
+            if ($pdo->query('PRAGMA foreign_key_check')->fetchAll() !== []) {
+                throw new RuntimeException('migration後にforeign key違反を検出しました');
+            }
+            $pdo->commit();
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $error;
+        } finally {
+            $pdo->exec('PRAGMA foreign_keys = ON');
+        }
+        return 1;
+    }
+
+    private function applyCurrentSchema(PDO $pdo): void
+    {
+        $this->ensureAdditiveColumns($pdo);
+        $this->rebuildCampaignTargetsIfNeeded($pdo);
+        $this->rebuildEducationSharingIfNeeded($pdo);
+        $pdo->exec($this->readSchema('schema.sql'));
+        $pdo->exec($this->readSchema('schema-edu.sql'));
+    }
+
+    private function ensureAdditiveColumns(PDO $pdo): void
+    {
+        $columns = [
+            'campaigns' => [
+                'beacon_base' => 'TEXT',
+                'content_delivery' => "TEXT NOT NULL DEFAULT 'distribute'",
+                'deleted_at' => 'TEXT DEFAULT NULL',
+                'test_redirect_emails' => 'TEXT DEFAULT NULL',
+            ],
+            'targets' => ['position_category' => 'TEXT', 'tenant_no' => 'INTEGER'],
+            'templates' => ['scenario_key' => 'TEXT'],
+            'campaign_targets' => ['content_no' => 'INTEGER'],
+            'edu_categories' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
+            'edu_questions' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
+            'edu_assignments' => ['last_reminded_at' => 'TEXT'],
+        ];
+        foreach ($columns as $table => $definitions) {
+            if (!$this->tableExists($pdo, $table)) {
+                continue;
+            }
+            foreach ($definitions as $column => $definition) {
+                if (!$this->columnExists($pdo, $table, $column)) {
+                    $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$definition}");
+                }
+            }
+        }
+    }
+
+    private function rebuildCampaignTargetsIfNeeded(PDO $pdo): void
+    {
+        if (!$this->tableExists($pdo, 'campaign_targets') || !$this->hasLegacyTargetUnique($pdo)) {
+            return;
+        }
+        $pdo->exec('CREATE TABLE campaign_targets_migration (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL,
+            target_id INTEGER NOT NULL, tracking_id TEXT NOT NULL UNIQUE, koban INTEGER,
+            auth_flag INTEGER, from_address TEXT, attachment_path TEXT,
+            send_status TEXT NOT NULL DEFAULT \'pending\', sent_at TEXT, content_no INTEGER,
+            UNIQUE (campaign_id, target_id, content_no),
+            FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_id) REFERENCES targets(id))');
+        $pdo->exec('INSERT INTO campaign_targets_migration
+            (id, campaign_id, target_id, tracking_id, koban, auth_flag, from_address,
+             attachment_path, send_status, sent_at, content_no)
+            SELECT id, campaign_id, target_id, tracking_id, koban, auth_flag, from_address,
+                   attachment_path, send_status, sent_at, content_no FROM campaign_targets');
+        $pdo->exec('DROP TABLE campaign_targets');
+        $pdo->exec('ALTER TABLE campaign_targets_migration RENAME TO campaign_targets');
+    }
+
+    private function rebuildEducationSharingIfNeeded(PDO $pdo): void
+    {
+        if (!$this->needsNullableTenant($pdo, 'edu_categories')
+            && !$this->needsNullableTenant($pdo, 'edu_questions')) {
+            return;
+        }
+        $pdo->exec('CREATE TABLE edu_categories_migration (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, name TEXT NOT NULL,
+            slug TEXT NOT NULL, color TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1, is_shared INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id))');
+        $pdo->exec('CREATE TABLE edu_questions_migration (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, category_id INTEGER NOT NULL,
+            title TEXT NOT NULL, question_type TEXT NOT NULL DEFAULT \'single_choice\',
+            options TEXT NOT NULL, correct_answer TEXT NOT NULL, explanation TEXT,
+            difficulty INTEGER NOT NULL DEFAULT 1, is_active INTEGER NOT NULL DEFAULT 1,
+            is_shared INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+            FOREIGN KEY (category_id) REFERENCES edu_categories_migration(id) ON DELETE CASCADE)');
+        $pdo->exec('INSERT INTO edu_categories_migration
+            SELECT id, tenant_id, name, slug, color, sort_order, is_active, is_shared, created_at
+            FROM edu_categories');
+        $pdo->exec('INSERT INTO edu_questions_migration
+            SELECT id, tenant_id, category_id, title, question_type, options, correct_answer,
+                   explanation, difficulty, is_active, is_shared, created_at FROM edu_questions');
+        $pdo->exec('DROP TABLE edu_questions');
+        $pdo->exec('DROP TABLE edu_categories');
+        $pdo->exec('ALTER TABLE edu_categories_migration RENAME TO edu_categories');
+        $pdo->exec('ALTER TABLE edu_questions_migration RENAME TO edu_questions');
+    }
+
+    private function hasLegacyTargetUnique(PDO $pdo): bool
+    {
+        foreach ($pdo->query('PRAGMA index_list(campaign_targets)')->fetchAll() as $index) {
+            if ((int) $index['unique'] !== 1) {
+                continue;
+            }
+            $name = str_replace("'", "''", (string) $index['name']);
+            $columns = $pdo->query("PRAGMA index_info('{$name}')")->fetchAll(PDO::FETCH_COLUMN, 2);
+            if ($columns === ['campaign_id', 'target_id']) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function needsNullableTenant(PDO $pdo, string $table): bool
+    {
+        if (!$this->tableExists($pdo, $table)) {
+            return false;
+        }
+        foreach ($pdo->query("PRAGMA table_info({$table})")->fetchAll() as $column) {
+            if ($column['name'] === 'tenant_id') {
+                return (int) $column['notnull'] === 1;
+            }
+        }
+        return false;
+    }
+
+    private function tableExists(PDO $pdo, string $table): bool
+    {
+        $stmt = $pdo->prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?");
+        $stmt->execute([$table]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    private function columnExists(PDO $pdo, string $table, string $column): bool
+    {
+        foreach ($pdo->query("PRAGMA table_info({$table})")->fetchAll() as $info) {
+            if ($info['name'] === $column) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function connect(bool $readOnly): PDO
+    {
+        $dsn = $readOnly ? 'sqlite:file:' . $this->dbPath . '?mode=ro' : 'sqlite:' . $this->dbPath;
+        return new PDO($dsn, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
+    }
+
+    private function readSchema(string $name): string
+    {
+        $contents = file_get_contents(__DIR__ . '/' . $name);
+        if ($contents === false) {
+            throw new RuntimeException("schema読込失敗: {$name}");
+        }
+        return $contents;
+    }
+}

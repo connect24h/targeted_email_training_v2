@@ -11,7 +11,9 @@
 ini_set('session.use_cookies', '0');
 ini_set('session.use_only_cookies', '0');
 ini_set('session.use_trans_sid', '0');
+ini_set('session.save_path', sys_get_temp_dir());
 session_start();
+ob_start();
 
 require __DIR__ . '/helpers.php';
 
@@ -112,3 +114,4 @@ check($r['payload']['success'] === true, 'A-14: success=true');
 check(isset($r['payload']['csrf']), 'A-14: csrf返却');
 
 echo "\n✅ auth.php 全テスト完了\n";
+ob_end_flush();

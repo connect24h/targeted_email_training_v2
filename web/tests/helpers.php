@@ -3,12 +3,14 @@ declare(strict_types=1);
 
 /**
  * TET v2 API テスト用の共通ヘルパー。
- * - 本番 DB を隔離コピーに複製し、Db を TET2_DB_PATH でそこへ向ける。
+ * - schemaから合成DBを生成し、Db を TET2_DB_PATH でそこへ向ける。
  * - bootstrap.php の session/CSRF/role 依存をスタブ化し、API ハンドラ関数だけを
  *   ロードして直接呼べるようにする(HTTP/セッション不要でユニットテスト可能)。
  *
  * 使い方: require helpers.php → tet2_test_boot() → load_api('targets') → ハンドラ呼び出し。
  */
+
+require_once __DIR__ . '/fixtures/TestDatabase.php';
 
 $GLOBALS['__TET2_TEST_BODY'] = [];
 $GLOBALS['__TET2_TEST_ROLE'] = 'operator';
@@ -24,14 +26,11 @@ function check(bool $condition, string $message): void
     pass($message);
 }
 
-/** 本番DBを一時コピーし、Db をそこへ向ける。$seedSql があれば実行して調整。 */
+/** 合成DBを一時生成し、Db をそこへ向ける。$seedSql があれば実行して調整。 */
 function tet2_test_boot(?string $seedSql = null): string
 {
-    $prod = '/opt/training/tet2-db/tet2.sqlite';
     $tmp = sys_get_temp_dir() . '/tet2-test-' . getmypid() . '-' . substr(md5((string) mt_rand()), 0, 8) . '.sqlite';
-    if (!copy($prod, $tmp)) {
-        throw new RuntimeException("DB コピー失敗: {$tmp}");
-    }
+    TestDatabase::create($tmp);
     register_shutdown_function(fn() => @unlink($tmp));
     putenv("TET2_DB_PATH={$tmp}");
     require_once __DIR__ . '/../lib/Db.php';

@@ -7,22 +7,26 @@
 -- 教材カテゴリ(IPA10大脅威準拠12カテゴリ)。テナントごとに複製投入(教材は編集される想定のため共有しない)
 CREATE TABLE IF NOT EXISTS edu_categories (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  tenant_id  INTEGER NOT NULL,
+  tenant_id  INTEGER,
   name       TEXT NOT NULL,
   slug       TEXT NOT NULL,
   color      TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   is_active  INTEGER NOT NULL DEFAULT 1,
+  is_shared  INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-  UNIQUE (tenant_id, slug),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
 CREATE INDEX IF NOT EXISTS idx_edu_categories_tenant ON edu_categories(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_cat_shared_slug
+  ON edu_categories(slug) WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_cat_tenant_slug
+  ON edu_categories(tenant_id, slug) WHERE tenant_id IS NOT NULL;
 
 -- 設問バンク
 CREATE TABLE IF NOT EXISTS edu_questions (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  tenant_id      INTEGER NOT NULL,
+  tenant_id      INTEGER,
   category_id    INTEGER NOT NULL,
   title          TEXT NOT NULL,
   question_type  TEXT NOT NULL DEFAULT 'single_choice', -- single_choice / true_false / multiple_choice
@@ -31,6 +35,7 @@ CREATE TABLE IF NOT EXISTS edu_questions (
   explanation    TEXT,
   difficulty     INTEGER NOT NULL DEFAULT 1,             -- 配点(移植元 scoring.ts: 難易度=配点)
   is_active      INTEGER NOT NULL DEFAULT 1,
+  is_shared      INTEGER NOT NULL DEFAULT 0,
   created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
   FOREIGN KEY (category_id) REFERENCES edu_categories(id) ON DELETE CASCADE
@@ -89,6 +94,7 @@ CREATE TABLE IF NOT EXISTS edu_assignments (
   started_at   TEXT,
   completed_at TEXT,
   score        INTEGER,
+  last_reminded_at TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   UNIQUE (delivery_id, target_id),
   FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
