@@ -468,6 +468,7 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 | 2026-08-08 | 1 | `f255d0c` 完了 | 本番source allowlist同期、PHP 24/24、Python compile、secret/diff確認 |
 | 2026-08-08 | P0 | `5c35d80`, `31f4475` 完了 | GeoIP更新権限とtracking ID先頭ゼロをTDD修正 |
 | 2026-08-08 | 2 | `2457c96` 完了 | 22業務table再現、synthetic DB、migration二重実行no-op、production copy件数不変 |
+| 2026-08-08 | 3 | `2975860` 完了 | dry-run deploy、整合backup、atomic rollback、recoverable pruneを一時directoryで検証 |
 
 Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件数が一致し、
 `PRAGMA foreign_key_check`は0件だった。本番DB自体へのmigration・source配備は未実施。
