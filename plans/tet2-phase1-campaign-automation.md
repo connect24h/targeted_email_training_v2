@@ -457,7 +457,7 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 - 実装分解: 確認済み（Step 1～8、各StepにContext、Tasks、Verification、完了条件、Rollback）
 - 依存関係: 確認済み（正本同期とschema/test基盤を機能実装より前に配置）
 - 安全性: 確認済み（自動launch禁止、tenant境界、冪等性、本番DB backupを不変条件に設定）
-- 外部adversarial review: 未実施（現在のsingle-agent実行制約による。実装review時にagy検証を予定）
+- 外部adversarial review: Step 4でagyへ依頼したが無応答のため停止。Codex側security reviewと自動testで代替
 - 一番弱い箇所: 11～19営業日の概算は実績工数ではなく、現在確認できたsource/schema差分に基づく推定。
   Step 1完了時に実差分とtest修正量を測定し、残りの見積りを更新する。
 
@@ -469,6 +469,11 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 | 2026-08-08 | P0 | `5c35d80`, `31f4475` 完了 | GeoIP更新権限とtracking ID先頭ゼロをTDD修正 |
 | 2026-08-08 | 2 | `2457c96` 完了 | 22業務table再現、synthetic DB、migration二重実行no-op、production copy件数不変 |
 | 2026-08-08 | 3 | `2975860` 完了 | dry-run deploy、整合backup、atomic rollback、recoverable pruneを一時directoryで検証 |
+| 2026-08-09 | 4 | `ee4e53f` 完了 | DraftFactory分離、tenant/active/content検証、transaction rollback、duplicate API互換、PHP 28/28・Python PASS |
 
 Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件数が一致し、
 `PRAGMA foreign_key_check`は0件だった。本番DB自体へのmigration・source配備は未実施。
+
+Step 4の外部reviewは`codex-agy-delegate`へ読み取り専用で依頼したが、約98分応答がなく停止した。
+外部review結果は未取得で、source変更は発生していない。Codex側ではtenant分離、parameterized query、
+tracking IDの文字列性・一意性、transaction原子性を確認し、全28 PHP testとPython unittestを再実行した。
