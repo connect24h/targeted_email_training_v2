@@ -173,7 +173,7 @@ sqlite3 -readonly 'file:/tmp/tet2-test.sqlite?immutable=1' 'PRAGMA foreign_key_c
 
 ```bash
 bash -n deploy/tet2-deploy.sh deploy/tet2-rollback.sh
-deploy/tet2-deploy.sh --dry-run
+deploy/tet2-deploy.sh
 systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer
 ```
 
@@ -391,7 +391,7 @@ bash web/tests/run.sh
 find web -name '*.php' -type f -exec php -l {} \;
 python3 -m py_compile bin/create_beacon_files.py bin/send_email.py bin/tet2-worker.py
 systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer
-deploy/tet2-deploy.sh --dry-run
+deploy/tet2-deploy.sh
 ```
 
 ### Release gate
@@ -473,6 +473,7 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 | 2026-08-09 | 5 | `69dfcf2` 完了 | automation 3table、月次/四半期schedule、CRUD/preview/generate API、重複防止、PHP 30/30 PASS |
 | 2026-08-09 | 6 | `0129924` 完了 | atomic runner、dry-run CLI、hourly timer unit、失敗継続・重複防止、PHP 31/31 PASS |
 | 2026-08-09 | 7 | `27a5403`, `539fb92` 完了 | 管理UI、role別操作、preview、最終run表示、desktop/mobile browser smoke、PHP 32/32 PASS |
+| 2026-08-09 | 8 | 配備前gate完了 | production copy migration、全回帰、deploy/rollback、systemd、Apacheを確認。本番配備・pilotは承認待ち |
 
 Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件数が一致し、
 `PRAGMA foreign_key_check`は0件だった。本番DB自体へのmigration・source配備は未実施。
@@ -490,3 +491,7 @@ CLIの本番applyは`--apply --allow-production`の二重flagを要求する。
 Step 7では独立scriptとして管理画面を追加した。operatorは作成・編集・停止・再開・手動draft生成、
 viewerは一覧とpreviewだけを利用できる。390px幅でdocument overflowなし、JavaScript consoleのerror/warning 0件を
 Playwright smokeで確認した。本番source・DB・service・timerは変更していない。
+
+Step 8の非変更gateは完了した。詳細は
+[`../docs/campaign-automation-release-readiness.md`](../docs/campaign-automation-release-readiness.md)を参照する。
+本番配備、migration、pilot、24時間監視は利用者の明示承認後に実施するため、Step 8全体は未完了のままとする。
