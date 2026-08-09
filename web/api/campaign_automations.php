@@ -1,6 +1,7 @@
 <?php declare(strict_types=1); require __DIR__ . '/../lib/bootstrap.php';
 require_once __DIR__ . '/../lib/CampaignAutomationSchedule.php';
 require_once __DIR__ . '/../lib/CampaignDraftFactory.php';
+require_once __DIR__ . '/../lib/CampaignAutomationRunner.php';
 
 const CAMPAIGN_AUTOMATION_FREQUENCIES = ['monthly', 'quarterly'];
 const CAMPAIGN_AUTOMATION_TIME_MODES = ['fixed', 'random_window'];
@@ -319,31 +320,6 @@ function campaign_automations_handle_preview(array $actor): never
     json_out(['success' => true, 'preview' => $preview]);
 }
 
-function campaign_automations_claim_run(int $automationId, array $occurrence): int
-{
-    try {
-        return Db::insert(
-            'INSERT INTO campaign_automation_runs
-             (automation_id, occurrence_key, selected_send_at, status) VALUES (?, ?, ?, ?)',
-            [$automationId, $occurrence['occurrence_key'], $occurrence['selected_send_at'], 'claimed']
-        );
-    } catch (PDOException $error) {
-        if (str_contains($error->getMessage(), 'UNIQUE')) {
-            json_error('この予定回のdraftは既に生成済みです', 409);
-        }
-        throw $error;
-    }
-}
-
-function campaign_automations_fail_run(int $runId, string $errorCode): void
-{
-    Db::run(
-        "UPDATE campaign_automation_runs SET status='failed', error_code=?,
-         finished_at=datetime('now','localtime') WHERE id=?",
-        [$errorCode, $runId]
-    );
-}
-
 function campaign_automations_handle_generate_now(array $actor): never
 {
     tet2_require_csrf();
@@ -354,37 +330,22 @@ function campaign_automations_handle_generate_now(array $actor): never
     if ($rule['status'] !== 'active') {
         json_error('停止中の自動化ルールです', 409);
     }
-    campaign_automations_assert_source((int) $rule['source_campaign_id'], $tenantId);
-    $targetIds = campaign_automations_target_ids($id, $tenantId);
-    if ($targetIds === []) {
-        json_error('対象者が0名です', 409);
+    $result = (new CampaignAutomationRunner())->generateOne($id, [
+        'tenant_id' => $tenantId,
+        'created_by' => (int) ($actor['id'] ?? 0),
+    ]);
+    if ($result['status'] === 'duplicate') {
+        json_error('この予定回のdraftは既に生成済みです', 409);
     }
-    $schedule = new CampaignAutomationSchedule();
-    $occurrence = $schedule->next($rule);
-    $occurrence['selected_send_at'] = $schedule->selectSendAt($occurrence);
-    $runId = campaign_automations_claim_run($id, $occurrence);
-    try {
-        $draftId = (new CampaignDraftFactory())->createFromSource(
-            (int) $rule['source_campaign_id'],
-            $tenantId,
-            ['created_by' => (int) ($actor['id'] ?? 0), 'target_ids' => $targetIds,
-             'name' => mb_substr((string) $rule['name'] . ' ' . $occurrence['occurrence_key'], 0, 200)]
-        );
-    } catch (CampaignDraftNotFoundException $error) {
-        campaign_automations_fail_run($runId, 'source_not_found');
-        json_error($error->getMessage(), 404);
-    } catch (CampaignDraftValidationException $error) {
-        campaign_automations_fail_run($runId, 'draft_validation');
-        json_error($error->getMessage(), 409);
-    } catch (Throwable $error) {
-        campaign_automations_fail_run($runId, 'generation_failed');
-        throw $error;
+    if ($result['status'] === 'failed') {
+        $code = $result['error_code'] === 'source_not_found' ? 404 : 409;
+        json_error('draft生成に失敗しました: ' . $result['error_code'], $code);
     }
-    Db::run(
-        "UPDATE campaign_automation_runs SET status='generated', generated_campaign_id=?,
-         finished_at=datetime('now','localtime') WHERE id=?",
-        [$draftId, $runId]
-    );
+    if ($result['status'] !== 'generated') {
+        json_error('自動化ルールを実行できません', 409);
+    }
+    $runId = (int) $result['run_id'];
+    $draftId = (int) $result['campaign_id'];
     audit('campaign_automation.generate', "automation_id={$id},run_id={$runId},campaign_id={$draftId}");
     $campaign = Db::one('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ?', [$draftId, $tenantId]);
     json_out(['success' => true, 'run_id' => $runId, 'campaign' => $campaign], 201);

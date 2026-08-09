@@ -6,6 +6,7 @@ require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
 require_once __DIR__ . '/../lib/CampaignAutomationSchedule.php';
 require_once __DIR__ . '/../lib/CampaignDraftFactory.php';
+require_once __DIR__ . '/../lib/CampaignAutomationRunner.php';
 load_api('campaign_automations');
 
 function automationTemplate(string $kind, string $name, ?int $authFlag = null): int

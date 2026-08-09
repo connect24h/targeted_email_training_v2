@@ -44,11 +44,11 @@ final class CampaignDraftFactory
     }
 
     /**
-     * @param array{created_by:int,target_ids:array<int,int>,name?:string} $options
+     * @param array{created_by:int|null,target_ids:array<int,int>,name?:string} $options
      */
     public function createFromSource(int $sourceCampaignId, int $tenantId, array $options): int
     {
-        return Db::tx(function () use ($sourceCampaignId, $tenantId, $options): int {
+        $operation = function () use ($sourceCampaignId, $tenantId, $options): int {
             $source = $this->findSource($sourceCampaignId, $tenantId);
             $createdBy = $this->validateCreatedBy($options['created_by'] ?? null, $tenantId);
             $targetIds = $this->normalizeTargetIds($options['target_ids'] ?? null);
@@ -69,7 +69,11 @@ final class CampaignDraftFactory
                 $this->assignDistributedTargets($draftId, $targetIds, $contents);
             }
             return $draftId;
-        });
+        };
+        if (Db::pdo()->inTransaction()) {
+            return $operation();
+        }
+        return Db::tx($operation);
     }
 
     private function findSource(int $sourceCampaignId, int $tenantId): array
@@ -84,8 +88,11 @@ final class CampaignDraftFactory
         return $source;
     }
 
-    private function validateCreatedBy(mixed $createdBy, int $tenantId): int
+    private function validateCreatedBy(mixed $createdBy, int $tenantId): ?int
     {
+        if ($createdBy === null) {
+            return null;
+        }
         if (!is_int($createdBy) || $createdBy < 1) {
             throw new CampaignDraftValidationException('作成者が不正です');
         }
@@ -179,7 +186,7 @@ final class CampaignDraftFactory
         return mb_substr(trim($requestedName), 0, 200);
     }
 
-    private function insertCampaign(array $source, int $createdBy, string $name): int
+    private function insertCampaign(array $source, ?int $createdBy, string $name): int
     {
         return Db::insert(
             'INSERT INTO campaigns

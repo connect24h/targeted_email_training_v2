@@ -1,0 +1,14 @@
+[Unit]
+Description=TET v2 Campaign Draft Automation
+After=network.target
+
+[Service]
+Type=oneshot
+User=training
+Group=www-data
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/bin/php /var/www/html/tet2/db/campaign_automation.php --apply --allow-production
+StandardOutput=append:/opt/training/tet2-data/campaign-automation.log
+StandardError=append:/opt/training/tet2-data/campaign-automation.log

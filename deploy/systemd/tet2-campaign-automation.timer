@@ -1,0 +1,11 @@
+[Unit]
+Description=Run TET v2 campaign draft automation hourly
+
+[Timer]
+OnCalendar=*-*-* *:20:00
+Persistent=true
+RandomizedDelaySec=5min
+Unit=tet2-campaign-automation.service
+
+[Install]
+WantedBy=timers.target

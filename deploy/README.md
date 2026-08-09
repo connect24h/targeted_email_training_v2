@@ -9,6 +9,7 @@
 - apply前に上書き対象source、unit、cronとSQLiteの整合backupを作る
 - rollbackは明示したbackup IDだけを使い、manifest全件のpath/state/checksumを事前検証する
 - DB rollbackは`--restore-db --db-offline-confirmed`の二重flagが必須
+- `tet2-campaign-automation.timer`は配備だけではenableせず、pilot承認後に別工程でenableする
 
 ## Dry-runとapply
 
