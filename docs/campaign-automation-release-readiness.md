@@ -1,7 +1,9 @@
 # キャンペーン自動化 配備準備レポート
 
-検証日: 2026-08-09  
-対象branch: `chore/tet2-source-convergence`  
+検証日: 2026-08-09
+
+対象branch: `chore/tet2-source-convergence`
+
 判定: **実装完了・承認後の段階配備が可能**
 
 ## 判定範囲
