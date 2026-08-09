@@ -7,6 +7,41 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 
+/**
+ * 役職カテゴリの正規値。targets.position_category と position_masters.category が取り得る値。
+ *
+ * 複数の API から参照するため bootstrap に単一定義する(api/*.php 側で個別に const を
+ * 定義すると、テストの load_api() が各ファイルを eval する際に再定義エラーになる)。
+ */
+const TET2_POSITION_CATEGORIES = ['役員', '管理職', '一般従業員'];
+
+/**
+ * 旧称・表記ゆれを正規値へ寄せる対応表。
+ * 「社員」は 2026-08-10 以前の正規値。過去に出力した CSV を再取込しても
+ * 値が失われないよう、入力側では引き続き受け付ける。
+ */
+const TET2_POSITION_CATEGORY_ALIASES = [
+    '社員'     => '一般従業員',
+    '一般社員' => '一般従業員',
+];
+
+/**
+ * 役職カテゴリを正規値へ正規化する。正規値でもエイリアスでもなければ null を返す。
+ * (呼び出し側が「不正値として弾く」か「NULL として取り込む」かを選べるようにする)
+ */
+function tet2_normalize_position_category(?string $value): ?string
+{
+    if ($value === null) {
+        return null;
+    }
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+    $value = TET2_POSITION_CATEGORY_ALIASES[$value] ?? $value;
+    return in_array($value, TET2_POSITION_CATEGORIES, true) ? $value : null;
+}
+
 // ---- セッション ----
 function tet2_init_session(): void
 {

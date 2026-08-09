@@ -8,7 +8,7 @@ final class IntegrationNotFoundException extends RuntimeException {}
 final class AwarenessTargetService
 {
     private const STATUSES = ['active', 'suspended', 'archived'];
-    private const POSITION_CATEGORIES = ['役員', '管理職', '社員'];
+    private const POSITION_CATEGORIES = ['役員', '管理職', '一般従業員'];
 
     public function __construct(private readonly int $tenantId)
     {
@@ -24,12 +24,12 @@ final class AwarenessTargetService
             throw new IntegrationValidationException('cursorまたはlimitが不正です');
         }
         $boundary ??= (int) (Db::one(
-            'SELECT COALESCE(MAX(id),0) AS id FROM targets WHERE tenant_id=?',
+            'SELECT COALESCE(MAX(id),0) AS id FROM targets WHERE tenant_id=? AND is_test=0',
             [$this->tenantId]
         )['id'] ?? 0);
         $rows = Db::all(
-            'SELECT id,email,name,company,department,title,position_category,status
-             FROM targets WHERE tenant_id=? AND id>? AND id<=? ORDER BY id LIMIT ?',
+            'SELECT id,email,name,company,department,title,position_category,status,archived_at
+             FROM targets WHERE tenant_id=? AND is_test=0 AND id>? AND id<=? ORDER BY id LIMIT ?',
             [$this->tenantId, $cursor, $boundary, $limit + 1]
         );
         $hasMore = count($rows) > $limit;
@@ -108,7 +108,9 @@ final class AwarenessTargetService
         }
         return $this->idempotent('target.archive', $idempotencyKey, ['targetId' => $targetId], function () use ($targetId): array {
             $this->ownedTarget($targetId);
-            Db::run("UPDATE targets SET status='archived' WHERE id=? AND tenant_id=?", [$targetId, $this->tenantId]);
+            Db::run("UPDATE targets
+                SET status='archived',archived_at=COALESCE(archived_at,datetime('now','localtime'))
+                WHERE id=? AND tenant_id=?", [$targetId, $this->tenantId]);
             return ['target' => $this->mapTarget($this->ownedTarget($targetId))];
         });
     }
@@ -157,8 +159,14 @@ final class AwarenessTargetService
         }
         if (array_key_exists('positionCategory', $input)) {
             $position = $input['positionCategory'];
-            if ($position !== null && !in_array($position, self::POSITION_CATEGORIES, true)) {
-                throw new IntegrationValidationException('positionCategoryが不正です');
+            if ($position !== null) {
+                if (!is_string($position)) {
+                    throw new IntegrationValidationException('positionCategoryが不正です');
+                }
+                $position = tet2_normalize_position_category($position);
+                if ($position === null || !in_array($position, self::POSITION_CATEGORIES, true)) {
+                    throw new IntegrationValidationException('positionCategoryが不正です');
+                }
             }
             $result['positionCategory'] = $position;
         }
@@ -236,11 +244,13 @@ final class AwarenessTargetService
     private function createTarget(array $request): int
     {
         return Db::insert(
-            'INSERT INTO targets (tenant_id,email,name,company,department,title,position_category,status,tenant_no)
-             VALUES (?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(tenant_no),0)+1 FROM targets WHERE tenant_id=?))',
+            "INSERT INTO targets
+                (tenant_id,email,name,company,department,title,position_category,status,archived_at,tenant_no)
+             VALUES (?,?,?,?,?,?,?,?,CASE WHEN ?='archived' THEN datetime('now','localtime') ELSE NULL END,
+                (SELECT COALESCE(MAX(tenant_no),0)+1 FROM targets WHERE tenant_id=?))",
             [$this->tenantId, $request['email'], $request['name'], $request['company'] ?? null,
              $request['department'] ?? null, $request['title'] ?? null, $request['positionCategory'] ?? null,
-             $request['status'] ?? 'active', $this->tenantId]
+             $request['status'] ?? 'active', $request['status'] ?? 'active', $this->tenantId]
         );
     }
 
@@ -257,6 +267,12 @@ final class AwarenessTargetService
                 $sets[] = "{$column}=?";
                 $params[] = $request[$key];
             }
+        }
+        if (array_key_exists('status', $request)) {
+            $sets[] = "archived_at=CASE
+                WHEN ?='archived' THEN COALESCE(archived_at,datetime('now','localtime'))
+                ELSE NULL END";
+            $params[] = $request['status'];
         }
         $params[] = $targetId;
         $params[] = $this->tenantId;
@@ -314,7 +330,8 @@ final class AwarenessTargetService
         $mapped = ['id' => (int) $row['id'], 'tenantId' => $this->tenantId, 'email' => (string) $row['email'],
             'name' => $row['name'], 'company' => $row['company'], 'department' => $row['department'],
             'title' => $row['title'], 'positionCategory' => $row['position_category'],
-            'status' => (string) $row['status'], 'groups' => array_map(static fn(array $g): array => [
+            'status' => (string) $row['status'], 'archivedAt' => $row['archived_at'] ?? null,
+            'groups' => array_map(static fn(array $g): array => [
                 'id' => (int) $g['id'], 'name' => (string) $g['name'], 'kind' => (string) $g['kind'],
                 'status' => (string) $g['status']], $groups)];
         $mapped['sourceVersion'] = hash('sha256', json_encode(
@@ -374,8 +391,9 @@ final class AwarenessTargetService
             MAX(CASE WHEN e.event_type='click' THEN e.occurred_at END) clicked_at,
             MAX(CASE WHEN e.event_type='auth' THEN e.occurred_at END) auth_at
           FROM campaign_targets ct JOIN campaigns c ON c.id=ct.campaign_id
+          JOIN targets t ON t.id=ct.target_id AND t.tenant_id=c.tenant_id
           LEFT JOIN events e ON e.campaign_id=c.id AND e.tracking_id=ct.tracking_id AND e.tenant_id=c.tenant_id
-          WHERE c.tenant_id=? AND ct.id>? GROUP BY ct.id ORDER BY ct.id LIMIT ?";
+          WHERE c.tenant_id=? AND t.is_test=0 AND ct.id>? GROUP BY ct.id ORDER BY ct.id LIMIT ?";
     }
 
     /** @param array<string,mixed> $row @return array<string,mixed> */

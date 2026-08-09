@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 26, 'fresh DBに26個の業務tableがある');
+check(count($businessTables) === 27, 'fresh DBに27個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -38,6 +38,7 @@ $expectedTables = [
     'campaign_automation_groups',
     'campaign_automation_runs',
     'integration_idempotency_keys',
+    'position_masters',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -46,7 +47,7 @@ foreach ($expectedTables as $table) {
 $expectedColumns = [
     'campaigns' => ['beacon_base', 'content_delivery', 'deleted_at', 'test_redirect_emails'],
     'campaign_targets' => ['content_no'],
-    'targets' => ['position_category', 'tenant_no'],
+    'targets' => ['position_category', 'tenant_no', 'archived_at', 'is_test'],
     'groups' => ['status', 'archived_at'],
     'templates' => ['scenario_key'],
     'edu_categories' => ['is_shared'],

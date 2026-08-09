@@ -2,7 +2,8 @@
 
 // active=有効, suspended=一時停止(訓練対象外), archived=アーカイブ(退職/過去在籍。履歴は保持し統計に残す)
 const TARGET_STATUSES = ['active', 'suspended', 'archived'];
-const POSITION_CATEGORIES = ['役員', '管理職', '社員'];
+// 正規値は bootstrap の単一定義を参照する(旧称「社員」は入力時にエイリアス変換される)。
+const POSITION_CATEGORIES = TET2_POSITION_CATEGORIES;
 const TARGET_CSV_HEADERS = [
     'メールアドレス' => 'email',
     '氏名' => 'name',
@@ -71,6 +72,24 @@ function targets_optional_string(array $body, string $key): ?string
         json_error($key . ' が不正です', 400);
     }
     return trim($body[$key]);
+}
+
+/**
+ * 真偽値(is_test 等)を 0/1 で受け取る。未指定は null(=現状維持)。
+ * campaigns_optional_bool_int と同じ受け入れ方(bool / 0 / 1)に揃える。
+ */
+function targets_optional_bool_int(array $body, string $key): ?int
+{
+    if (!array_key_exists($key, $body) || $body[$key] === null) {
+        return null;
+    }
+    if (is_bool($body[$key])) {
+        return $body[$key] ? 1 : 0;
+    }
+    if ($body[$key] === 0 || $body[$key] === 1) {
+        return (int) $body[$key];
+    }
+    json_error($key . ' が不正です', 400);
 }
 
 function targets_optional_nullable_string(array $body, string $key): ?string
@@ -199,7 +218,7 @@ function targets_handle_list(array $actor): never
     if ($groupId !== null) {
         targets_assert_group_owned($groupId, $tenantId);
         $targets = Db::all(
-            'SELECT t.id, t.tenant_no, t.tenant_id, t.email, t.name, t.company, t.department, t.title, t.position_category, t.status, t.created_at
+            'SELECT t.id, t.tenant_no, t.tenant_id, t.email, t.name, t.company, t.department, t.title, t.position_category, t.status, t.created_at, t.archived_at, t.is_test
              FROM targets t
              INNER JOIN target_group tg ON tg.target_id = t.id
              INNER JOIN groups g ON g.id = tg.group_id
@@ -213,7 +232,7 @@ function targets_handle_list(array $actor): never
     // 非グループ経路は別名 t を使わないので status 条件を素の列名で組む。
     $archiveClause2 = $includeArchived ? '' : " AND status != 'archived'";
     $targets = Db::all(
-        'SELECT id, tenant_no, tenant_id, email, name, company, department, title, position_category, status, created_at
+        'SELECT id, tenant_no, tenant_id, email, name, company, department, title, position_category, status, created_at, archived_at, is_test
          FROM targets
          WHERE tenant_id = ? AND (? IS NULL OR email LIKE ? OR name LIKE ?)' . $archiveClause2 . '
          ORDER BY tenant_no',
@@ -262,14 +281,21 @@ function targets_handle_create(array $actor): never
     targets_assert_groups_owned($groupIds, $tenantId);
 
     $positionCategory = targets_optional_nullable_string($body, 'position_category');
-    if ($positionCategory !== null && !in_array($positionCategory, POSITION_CATEGORIES, true)) {
-        json_error('役職カテゴリが不正です（役員/管理職/社員）', 400);
+    if ($positionCategory !== null) {
+        // 旧称「社員」はエイリアスで受け入れ、正規値へ寄せる。
+        $normalized = tet2_normalize_position_category($positionCategory);
+        if ($normalized === null) {
+            json_error('役職カテゴリが不正です（役員/管理職/一般従業員）', 400);
+        }
+        $positionCategory = $normalized;
     }
-    $id = Db::tx(function () use ($tenantId, $email, $body, $groupIds, $positionCategory): int {
+    // 検証用ユーザ(レポート集計から除外)。未指定は 0=本番ユーザ。
+    $isTest = targets_optional_bool_int($body, 'is_test') ?? 0;
+    $id = Db::tx(function () use ($tenantId, $email, $body, $groupIds, $positionCategory, $isTest): int {
         $targetId = Db::insert(
             // tenant_no はテナント単位の連番(表示用)。グローバルな id とは別に採番する。
-            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, tenant_no)'
-            . ' VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
+            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, is_test, tenant_no)'
+            . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
             [
                 $tenantId,
                 $email,
@@ -278,6 +304,7 @@ function targets_handle_create(array $actor): never
                 targets_optional_nullable_string($body, 'department'),
                 targets_optional_nullable_string($body, 'title'),
                 $positionCategory,
+                $isTest,
                 $tenantId,
             ]
         );
@@ -308,23 +335,30 @@ function targets_handle_update(array $actor): never
     // position_category も「—」(未設定)で保存できるよう空文字は NULL 扱い。
     $positionCategory = targets_optional_nullable_string($body, 'position_category');
     $status = targets_optional_string($body, 'status');
+    // 検証用ユーザ切替。未指定(null)は現状維持。
+    $isTest = targets_optional_bool_int($body, 'is_test');
     $groupIds = targets_int_array($body, 'group_ids');
 
-    if ($name === null && $company === null && $department === null && $title === null && $positionCategory === null && $status === null && $groupIds === null) {
+    if ($name === null && $company === null && $department === null && $title === null && $positionCategory === null && $status === null && $isTest === null && $groupIds === null) {
         json_error('更新項目がありません', 400);
     }
     if ($status !== null && !in_array($status, TARGET_STATUSES, true)) {
         json_error('status が不正です', 400);
     }
-    if ($positionCategory !== null && $positionCategory !== '' && !in_array($positionCategory, POSITION_CATEGORIES, true)) {
-        json_error('役職カテゴリが不正です（役員/管理職/社員）', 400);
+    // 空文字は「—(未設定)にする」意図なのでそのまま通す。値があれば正規化(旧称「社員」を救う)。
+    if ($positionCategory !== null && $positionCategory !== '') {
+        $normalized = tet2_normalize_position_category($positionCategory);
+        if ($normalized === null) {
+            json_error('役職カテゴリが不正です（役員/管理職/一般従業員）', 400);
+        }
+        $positionCategory = $normalized;
     }
 
     if ($groupIds !== null) {
         targets_assert_groups_owned($groupIds, $tenantId);
     }
 
-    Db::tx(function () use ($id, $tenantId, $name, $company, $department, $title, $positionCategory, $status, $groupIds): void {
+    Db::tx(function () use ($id, $tenantId, $name, $company, $department, $title, $positionCategory, $status, $isTest, $groupIds): void {
         Db::run(
             'UPDATE targets
              SET name = COALESCE(?, name),
@@ -332,9 +366,17 @@ function targets_handle_update(array $actor): never
                  department = COALESCE(?, department),
                  title = COALESCE(?, title),
                  position_category = COALESCE(?, position_category),
-                 status = COALESCE(?, status)
+                 status = COALESCE(?, status),
+                 is_test = COALESCE(?, is_test),
+                 -- status を archived にしたら削除日時を記録し、archived から戻したら消す。
+                 -- status 未指定(NULL)のときは現状維持。
+                 archived_at = CASE
+                     WHEN ? IS NULL THEN archived_at
+                     WHEN ? = \'archived\' THEN COALESCE(archived_at, datetime(\'now\',\'localtime\'))
+                     ELSE NULL
+                 END
              WHERE id = ? AND tenant_id = ?',
-            [$name, $company, $department, $title, $positionCategory, $status, $id, $tenantId]
+            [$name, $company, $department, $title, $positionCategory, $status, $isTest, $status, $status, $id, $tenantId]
         );
         if ($groupIds !== null) {
             Db::run(
@@ -365,12 +407,37 @@ function targets_handle_delete(array $actor): never
     //  2. これらは target_id を外部キー(CASCADEなし)で参照するため、物理 DELETE は FK 違反→
     //     サーバエラーになる。アーカイブなら FK 問題も原理的に発生しない。
     // アーカイブされた対象者は一覧から除外表示され、新規キャンペーンの対象にも出ない。
+    // archived_at に削除日時を残す(在籍期間の判定・誤削除の追跡用)。
     Db::run(
-        "UPDATE targets SET status = 'archived' WHERE id = ? AND tenant_id = ?",
+        "UPDATE targets SET status = 'archived', archived_at = datetime('now','localtime')
+         WHERE id = ? AND tenant_id = ?",
         [$id, $tenantId]
     );
     audit('target.archive', 'target_id=' . $id);
     json_out(['success' => true, 'archived' => true]);
+}
+
+/**
+ * アーカイブ(論理削除)した対象者を active に戻す。誤削除の復旧用。
+ * 復活後は削除日を持たないので archived_at を NULL に戻す。
+ */
+function targets_handle_restore(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, targets_body_optional_int($body, 'tenant_id'));
+    $id = targets_int($body, 'id');
+    $target = assert_target_owned($id, $tenantId);
+    if (($target['status'] ?? '') !== 'archived') {
+        json_error('削除済みの対象者ではありません', 400);
+    }
+
+    Db::run(
+        "UPDATE targets SET status = 'active', archived_at = NULL WHERE id = ? AND tenant_id = ?",
+        [$id, $tenantId]
+    );
+    audit('target.restore', 'target_id=' . $id);
+    json_out(['success' => true, 'restored' => true]);
 }
 
 function targets_csv_header_map(array $headers): array
@@ -400,7 +467,30 @@ function targets_csv_value(array $row, array $map, string $key): ?string
     return $value === '' ? null : $value;
 }
 
-function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId): string
+/**
+ * 役職マスタを [役職名 => カテゴリ] の連想配列で返す。CSV 取込の補完用。
+ * position_masters が無い環境(古いDB)でも取込を止めないよう、失敗時は空配列を返す。
+ *
+ * @return array<string, string>
+ */
+function targets_position_master_map(int $tenantId): array
+{
+    try {
+        $rows = Db::all('SELECT title, category FROM position_masters WHERE tenant_id = ?', [$tenantId]);
+    } catch (Throwable) {
+        return [];
+    }
+    $map = [];
+    foreach ($rows as $r) {
+        $map[(string) $r['title']] = (string) $r['category'];
+    }
+    return $map;
+}
+
+/**
+ * @param array<string, string> $positionMap 役職名→カテゴリ。CSV にカテゴリ列が無いときの補完に使う
+ */
+function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId, array $positionMap = []): string
 {
     $email = targets_csv_value($row, $map, 'email');
     if ($email === null || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
@@ -411,10 +501,15 @@ function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId
         throw new InvalidArgumentException('email が不正です');
     }
     $existing = Db::one('SELECT id FROM targets WHERE tenant_id = ? AND email = ?', [$tenantId, $email]);
-    // 役職カテゴリは正規値(役員/管理職/社員)のみ採用。それ以外・空は NULL(取込を止めない)。
-    $posCat = targets_csv_value($row, $map, 'position_category');
-    if ($posCat !== null && !in_array($posCat, POSITION_CATEGORIES, true)) {
-        $posCat = null;
+    // 役職カテゴリは正規値のみ採用。旧称「社員」はエイリアスで救い、
+    // それ以外・空は NULL(取込を止めない)。
+    $posCat = tet2_normalize_position_category(targets_csv_value($row, $map, 'position_category'));
+    // カテゴリ列が無い/空なら役職名から役職マスタを引いて補完する。
+    if ($posCat === null) {
+        $csvTitle = targets_csv_value($row, $map, 'title');
+        if ($csvTitle !== null && isset($positionMap[$csvTitle])) {
+            $posCat = $positionMap[$csvTitle];
+        }
     }
     // 自由入力テキストは create/update と同一ルールで安全検証(< > /制御文字/長さ)。
     // 取込は行単位で例外送出するため、json_error 版ではなく個別チェックする。
@@ -489,15 +584,18 @@ function targets_handle_import_csv(array $actor): never
     $headers = str_getcsv((string) array_shift($lines));
     $map = targets_csv_header_map($headers);
     $result = ['imported' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+    // 役職マスタを1回だけ読み込む(行ごとに引くとクエリが行数分発行される)。
+    // CSV に役職カテゴリ列が無い/空のとき、役職名から補完するために使う。
+    $positionMap = targets_position_master_map($tenantId);
 
-    Db::tx(function () use ($lines, $tenantId, $map, $groupId, &$result): void {
+    Db::tx(function () use ($lines, $tenantId, $map, $groupId, $positionMap, &$result): void {
         foreach ($lines as $index => $line) {
             if (trim((string) $line) === '') {
                 continue;
             }
             $lineNumber = $index + 2;
             try {
-                $status = targets_import_row($tenantId, str_getcsv((string) $line), $map, $groupId);
+                $status = targets_import_row($tenantId, str_getcsv((string) $line), $map, $groupId, $positionMap);
                 $result[$status]++;
             } catch (InvalidArgumentException $e) {
                 $result['skipped']++;
@@ -519,25 +617,46 @@ function targets_handle_import_csv(array $actor): never
  * 指定テナントの対象者を CSV 文字列に組む(import_csv と対称のヘッダー/カラム順)。
  * 出力副作用を持たないのでユニットテスト可能。BOM は付けない(出力ハンドラ側で付与)。
  */
-function targets_build_csv(int $tenantId): string
+/**
+ * 対象者 CSV を組み立てる。
+ *
+ * 既定はアーカイブ(退職/過去在籍)を除外する。list と同じ既定にすることで
+ * 「画面に出ていない人が CSV には出る」ズレを防ぐ。
+ * $includeArchived=true のときだけアーカイブも含め、削除日(archived_at)列を追加する。
+ */
+function targets_build_csv(int $tenantId, bool $includeArchived = false): string
 {
+    $archiveClause = $includeArchived ? '' : " AND status != 'archived'";
     $rows = Db::all(
-        'SELECT email, name, company, department, title, position_category
-         FROM targets WHERE tenant_id = ? ORDER BY id',
+        'SELECT email, name, company, department, title, position_category, status, archived_at, is_test
+         FROM targets WHERE tenant_id = ?' . $archiveClause . ' ORDER BY id',
         [$tenantId]
     );
     $out = fopen('php://temp', 'r+');
     // import が受け付ける日本語ヘッダーと同じ並びで出力(往復可能にする)。
-    fputcsv($out, ['メールアドレス', '氏名', '会社名', '部署', '役職', '役職カテゴリ']);
+    // アーカイブ込みのときだけ状態/削除日/テスト区分を足す(import 側は未知の列を無視する)。
+    $header = ['メールアドレス', '氏名', '会社名', '部署', '役職', '役職カテゴリ'];
+    if ($includeArchived) {
+        $header[] = '状態';
+        $header[] = '削除日';
+        $header[] = 'テストユーザ';
+    }
+    fputcsv($out, $header);
     foreach ($rows as $r) {
-        fputcsv($out, [
+        $line = [
             (string) $r['email'],
             (string) ($r['name'] ?? ''),
             (string) ($r['company'] ?? ''),
             (string) ($r['department'] ?? ''),
             (string) ($r['title'] ?? ''),
             (string) ($r['position_category'] ?? ''),
-        ]);
+        ];
+        if ($includeArchived) {
+            $line[] = (string) ($r['status'] ?? '');
+            $line[] = (string) ($r['archived_at'] ?? '');
+            $line[] = ((int) ($r['is_test'] ?? 0) === 1) ? 'テスト' : '';
+        }
+        fputcsv($out, $line);
     }
     rewind($out);
     $csv = stream_get_contents($out);
@@ -552,11 +671,14 @@ function targets_build_csv(int $tenantId): string
 function targets_handle_export_csv(array $actor): never
 {
     $tenantId = effective_tenant_id($actor, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
-    $csv = targets_build_csv($tenantId);
+    // list と同じ既定(アーカイブ除外)。?include_archived=1 で削除済みも含めて出力する。
+    $includeArchived = isset($_GET['include_archived']) && $_GET['include_archived'] === '1';
+    $csv = targets_build_csv($tenantId, $includeArchived);
     $count = max(0, substr_count($csv, "\n") - 1); // ヘッダー1行を除く概数
-    audit('target.export_csv', 'count=' . $count);
+    // 削除済みを含む持ち出しかを監査で区別できるようにする。
+    audit('target.export_csv', 'count=' . $count . ($includeArchived ? ' include_archived=1' : ''));
 
-    $filename = 'targets_' . date('Ymd_His') . '.csv';
+    $filename = 'targets_' . ($includeArchived ? 'all_' : '') . date('Ymd_His') . '.csv';
     http_response_code(200);
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
@@ -588,6 +710,9 @@ try {
     }
     if ($action === 'delete' && $method === 'POST') {
         targets_handle_delete($actor);
+    }
+    if ($action === 'restore' && $method === 'POST') {
+        targets_handle_restore($actor);
     }
     if ($action === 'import_csv' && $method === 'POST') {
         targets_handle_import_csv($actor);

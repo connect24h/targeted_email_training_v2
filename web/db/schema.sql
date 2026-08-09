@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS targets (
   tenant_no  INTEGER,
   status     TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  -- status='archived' にした日時。在籍期間の判定と誤削除の追跡に使う。active に戻したら NULL。
+  archived_at TEXT DEFAULT NULL,
+  -- 1=検証用のテストユーザ。訓練配信には使えるが、レポート集計からは既定で除外する
+  -- (campaigns.is_test と同じ思想。本番の統計に検証データを混ぜない)。
+  is_test    INTEGER NOT NULL DEFAULT 0,
   UNIQUE (tenant_id, email),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );

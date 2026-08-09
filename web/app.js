@@ -97,6 +97,11 @@ function roleLabel(r) {
 }
 const ROLE_RANK = { viewer:1, operator:2, tenant_admin:3, superadmin:4 };
 function roleAtLeast(have, need) { return (ROLE_RANK[have] || 0) >= (ROLE_RANK[need] || 99); }
+// 役職カテゴリの正規値(サーバの TET2_POSITION_CATEGORIES と一致させる)。
+// 旧称「社員」は取込・API 側でエイリアス変換されるため、選択肢には出さない。
+const POSITION_CATEGORIES = ['役員', '管理職', '一般従業員'];
+// カテゴリごとのバッジ色。役職マスタ画面・集計画面と共通。
+const POSITION_CATEGORY_BADGE = { '役員': 'danger', '管理職': 'warning', '一般従業員': 'secondary' };
 
 async function setupTenantSwitcher() {
   const sw = $('#tenantSwitcher');
@@ -1731,7 +1736,7 @@ async function renderIndividuals() {
       const statusBadge = archived ? '<span class="badge bg-secondary">退職</span>'
         : p.status === 'suspended' ? '<span class="badge bg-light text-dark">停止中</span>' : '';
       return `<tr${archived ? ' class="text-muted"' : ''}>
-        <td>${esc(p.name || p.email)}</td>
+        <td>${esc(p.name || p.email)}${Number(p.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td>
         <td>${esc(p.company)}</td>
         <td>${p.position_category ? esc(p.position_category) : ''}</td>
         <td>${p.campaigns}</td>
@@ -1778,21 +1783,47 @@ async function openToGroupModal() {
 }
 
 /* ========== 対象者 ========== */
+// 日時(YYYY-MM-DD HH:MM:SS)を日付だけにする。空なら空文字。
+function dateOnly(v) { return v ? String(v).slice(0, 10) : ''; }
+
 async function renderTargets() {
-  const { targets } = await api('api/targets.php', { query: { action: 'list' } });
+  // トグル ON のときだけ削除済み(アーカイブ)も取得する。
+  const showArchived = $('#showArchivedTargets')?.checked === true;
+  const query = { action: 'list' };
+  if (showArchived) query.include_archived = '1';
+  const { targets } = await api('api/targets.php', { query });
   cacheRows('targets', targets);
   // #列は表示上の通し番号(古い順に1,2,3…)。他の一覧と統一。削除しても詰まる。
   // list は tenant_no 順(=作成順)で返るため、その並びのまま連番を振る。
-  $('#targetsBody').innerHTML = targets.length ? targets.map((t, i) => `
-    <tr>
-      <td>${i + 1}</td><td>${esc(t.email)}</td><td>${esc(t.name)}</td>
+  $('#targetsBody').innerHTML = targets.length ? targets.map((t, i) => {
+    const archived = t.status === 'archived';
+    const canEdit = roleAtLeast(State.user.role, 'operator');
+    // 削除済みは編集/削除ではなく「復活」だけを出す(履歴は保持したまま在籍に戻す)。
+    const actions = !canEdit ? ''
+      : archived
+        ? `<button class="btn btn-sm btn-outline-success" onclick="restoreTarget(${t.id})" title="削除を取り消して在籍に戻す"><i class="bi bi-arrow-counterclockwise"></i></button>`
+        : `<button class="btn btn-sm btn-outline-secondary" onclick="editTarget(${t.id})"><i class="bi bi-pencil"></i></button>
+           <button class="btn btn-sm btn-outline-danger" onclick="deleteTarget(${t.id})"><i class="bi bi-trash"></i></button>`;
+    return `
+    <tr${archived ? ' class="text-muted table-light"' : ''}>
+      <td>${i + 1}</td>
+      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}</td>
+      <td>${esc(t.name)}</td>
       <td>${esc(t.company)}</td><td>${esc(t.department)}</td><td>${esc(t.title)}</td>
       <td>${t.position_category ? `<span class="badge bg-light text-dark">${esc(t.position_category)}</span>` : ''}</td>
-      <td class="text-nowrap">
-        ${roleAtLeast(State.user.role,'operator')?`<button class="btn btn-sm btn-outline-secondary" onclick="editTarget(${t.id})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteTarget(${t.id})"><i class="bi bi-trash"></i></button>`:''}
-      </td>
-    </tr>`).join('') : emptyRow(8);
+      <td class="text-nowrap small">${esc(dateOnly(t.created_at))}</td>
+      <td class="text-nowrap small">${t.archived_at ? esc(dateOnly(t.archived_at)) : ''}</td>
+      <td class="text-nowrap">${actions}</td>
+    </tr>`;
+  }).join('') : emptyRow(10);
+}
+// 削除済み対象者を在籍に戻す。訓練履歴はもともと消えていないのでそのまま復活する。
+async function restoreTarget(id) {
+  if (!confirm('この対象者を在籍に戻しますか？')) return;
+  try {
+    await api('api/targets.php', { method: 'POST', query: { action: 'restore' }, body: { id } });
+    toast('在籍に戻しました', 'ok'); renderTargets();
+  } catch (e) { toast(e.message, 'err'); }
 }
 function targetForm(t = {}) {
   return `<form id="targetForm">
@@ -1806,14 +1837,19 @@ function targetForm(t = {}) {
     <div class="mb-2"><label class="form-label">役職カテゴリ</label>
       <select class="form-select" name="position_category">
         <option value="">—</option>
-        ${['役員','管理職','社員'].map((c)=>`<option value="${c}"${t.position_category===c?' selected':''}>${c}</option>`).join('')}
-      </select></div></form>`;
+        ${POSITION_CATEGORIES.map((c)=>`<option value="${c}"${t.position_category===c?' selected':''}>${c}</option>`).join('')}
+      </select></div>
+    <div class="form-check mb-2">
+      <input class="form-check-input" type="checkbox" name="is_test" id="cbTargetTest"${Number(t.is_test) === 1 ? ' checked' : ''}>
+      <label class="form-check-label" for="cbTargetTest">テストユーザ（レポート集計から除外）</label>
+      <div class="form-text">検証用の宛先。訓練配信には使えますが、開封率などの集計には数えません。</div>
+    </div></form>`;
 }
 function collectTarget() {
   const f = $('#targetForm');
   return { email: f.email.value.trim(), name: f.name.value.trim(), company: f.company.value.trim(),
     department: f.department.value.trim(), title: f.title.value.trim(),
-    position_category: f.position_category.value };
+    position_category: f.position_category.value, is_test: f.is_test.checked };
 }
 function newTarget() {
   showModal('新規対象者', targetForm(), async () => {
@@ -1835,7 +1871,7 @@ async function deleteTarget(id) {
     toast('削除しました', 'ok'); renderTargets(); } catch (e) { toast(e.message, 'err'); }
 }
 function importCsv() {
-  const body = `<p class="small text-muted">1行目にヘッダ（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ または email/name/company/department/title/position_category）。メール列は必須。役職カテゴリは「役員/管理職/社員」のみ有効。</p>
+  const body = `<p class="small text-muted">1行目にヘッダ（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ または email/name/company/department/title/position_category）。メール列は必須。役職カテゴリは「役員/管理職/一般従業員」のみ有効（旧称「社員」は「一般従業員」として取り込みます）。列が無い場合は役職名から役職マスタを引いて自動補完します。</p>
     <textarea class="form-control" id="csvText" rows="8" placeholder="メールアドレス,氏名,部署&#10;taro@example.com,山田太郎,営業部"></textarea>`;
   showModal('CSV 取込', body, async () => {
     const csv = $('#csvText').value.trim();
@@ -1845,11 +1881,13 @@ function importCsv() {
   });
 }
 // 現対象者を CSV でダウンロード。CSV(非JSON)なので api() は使わず直接 fetch → blob 保存。
-async function exportTargetsCsv() {
+// 既定は一覧と同じくアーカイブ(退職者)を除外。includeArchived=true で削除日付きの全件を出す。
+async function exportTargetsCsv(includeArchived = false) {
   const btn = $('#exportCsvBtn');
   btn.disabled = true;
   try {
     const qs = new URLSearchParams({ action: 'export_csv' });
+    if (includeArchived) qs.set('include_archived', '1');
     // superadmin がテナント切替中なら tenant_id を付与(api() と同じ挙動)
     if (State.user && State.user.role === 'superadmin' && State.activeTenantId) qs.set('tenant_id', State.activeTenantId);
     const ctrl = new AbortController();
@@ -1863,10 +1901,10 @@ async function exportTargetsCsv() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `targets_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `targets_${includeArchived ? 'all_' : ''}${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    toast('CSV を出力しました', 'ok');
+    toast(includeArchived ? 'CSV を出力しました（削除済みを含む）' : 'CSV を出力しました', 'ok');
   } catch (e) { toast(`出力に失敗しました（${e.message}）`, 'err'); }
   finally { btn.disabled = false; }
 }
@@ -2860,7 +2898,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#newTargetBtn').addEventListener('click', newTarget);
   $('#importCsvBtn').addEventListener('click', importCsv);
-  $('#exportCsvBtn')?.addEventListener('click', exportTargetsCsv);
+  // click イベントを引数に渡さない(Event オブジェクトが includeArchived=true 扱いになるため)。
+  $('#exportCsvBtn')?.addEventListener('click', () => exportTargetsCsv(false));
+  $('#exportCsvAllBtn')?.addEventListener('click', () => exportTargetsCsv(true));
+  $('#showArchivedTargets')?.addEventListener('change', renderTargets);
   $('#newGroupBtn').addEventListener('click', newGroup);
   $('#newScenarioBtn').addEventListener('click', newScenario);
 $('#newTemplateBtn').addEventListener('click', newTemplate);
@@ -2875,7 +2916,7 @@ $('#newTemplateBtn').addEventListener('click', newTemplate);
 
 // インライン onclick から呼ぶためグローバル公開
 Object.assign(window, {
-  launchCampaign, stopCampaign, resumeCampaign, showCampaignProgress, showCampaignData, loadCampaignFile, viewMaster, editMaster, downloadMaster, deleteCampaign, editTarget, deleteTarget,
+  launchCampaign, stopCampaign, resumeCampaign, showCampaignProgress, showCampaignData, loadCampaignFile, viewMaster, editMaster, downloadMaster, deleteCampaign, editTarget, deleteTarget, restoreTarget,
   editGroup, deleteGroup, setTplKind, editTemplate, deleteTemplate, tplViewer, scenarioViewer,
   editUser, deleteUser, editTenant, showReportDetail, generateCampaign,
 });

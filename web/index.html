@@ -60,6 +60,8 @@
         <li><a class="nav-link" data-view="targets"><i class="bi bi-people"></i>対象者</a></li>
         <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
         <li><a class="nav-link" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
+        <li><a class="nav-link" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
+        <li><a class="nav-link" data-view="targetStats"><i class="bi bi-pie-chart"></i>対象者集計</a></li>
         <li><a class="nav-link" data-view="masters"><i class="bi bi-window"></i>マスタ管理</a></li>
         <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>ログ管理</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">セキュリティ教育</li>
@@ -216,14 +218,24 @@
       <section data-panel="targets" class="view-panel d-none">
         <div class="d-flex justify-content-between align-items-center mb-3">
           <h5 class="mb-0"><i class="bi bi-people me-1"></i>対象者</h5>
-          <div class="d-flex gap-2">
-            <button class="btn btn-outline-secondary btn-sm" id="exportCsvBtn"><i class="bi bi-download"></i> CSV出力</button>
+          <div class="d-flex gap-2 align-items-center">
+            <div class="form-check form-switch me-1">
+              <input class="form-check-input" type="checkbox" role="switch" id="showArchivedTargets">
+              <label class="form-check-label small text-muted" for="showArchivedTargets">削除済みを表示</label>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-outline-secondary btn-sm" id="exportCsvBtn"><i class="bi bi-download"></i> CSV出力</button>
+              <button class="btn btn-outline-secondary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"><span class="visually-hidden">CSV出力オプション</span></button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                <li><button class="dropdown-item" id="exportCsvAllBtn"><i class="bi bi-archive me-1"></i>削除済み(退職者)も含めて出力</button></li>
+              </ul>
+            </div>
             <button class="btn btn-outline-secondary btn-sm" data-perm="operator" id="importCsvBtn"><i class="bi bi-upload"></i> CSV取込</button>
             <button class="btn btn-primary btn-sm" data-perm="operator" id="newTargetBtn"><i class="bi bi-plus-lg"></i> 新規</button>
           </div>
         </div>
         <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>操作</th></tr></thead>
+          <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th>操作</th></tr></thead>
           <tbody id="targetsBody"></tbody>
         </table></div>
       </section>
@@ -257,6 +269,74 @@
           <thead id="templatesHead"></thead>
           <tbody id="templatesBody"></tbody>
         </table></div>
+      </section>
+
+      <!-- 役職マスタ: 役職名→役職カテゴリの対応表。未登録の役職をここから登録する -->
+      <section data-panel="positions" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0"><i class="bi bi-person-vcard me-1"></i>役職マスタ</h5>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary btn-sm" data-perm="operator" id="applyPositionsBtn"><i class="bi bi-arrow-repeat"></i> マスタを再適用</button>
+            <button class="btn btn-primary btn-sm" data-perm="operator" id="newPositionBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+          </div>
+        </div>
+        <div id="positionCoverage"></div>
+        <div id="positionUnmappedCard" class="card mb-3 d-none">
+          <div class="card-header bg-warning-subtle">
+            <i class="bi bi-exclamation-triangle me-1"></i>未登録の役職
+            <span class="small text-muted ms-2">カテゴリを選んで「マスタに追加」を押すと、その役職の対象者へすぐ反映されます。</span>
+          </div>
+          <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+            <thead><tr><th>役職名</th><th>人数</th><th style="width:220px">役職カテゴリ</th><th style="width:150px">操作</th></tr></thead>
+            <tbody id="positionUnmappedBody"></tbody>
+          </table></div>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle">
+          <thead><tr><th>#</th><th>役職名</th><th>役職カテゴリ</th><th>該当人数</th><th>メモ</th><th>操作</th></tr></thead>
+          <tbody id="positionsBody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- 対象者集計: 会社別 / 役職別の人数 -->
+      <section data-panel="targetStats" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0"><i class="bi bi-pie-chart me-1"></i>対象者集計</h5>
+          <div class="d-flex gap-3 align-items-center">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch" id="statIncludeTest">
+              <label class="form-check-label small text-muted" for="statIncludeTest">テストユーザを含める</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch" id="statIncludeArchived">
+              <label class="form-check-label small text-muted" for="statIncludeArchived">削除済みを含める</label>
+            </div>
+          </div>
+        </div>
+        <ul class="nav nav-pills mb-3" id="statTabs">
+          <li class="nav-item"><a class="nav-link active" href="#" data-stat="company">会社別</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-stat="position">役職別</a></li>
+        </ul>
+        <div id="statSummary" class="mb-3"></div>
+        <div id="statCompanyPane">
+          <div class="card mb-3"><div class="card-body"><canvas id="statCompanyChart" height="140"></canvas></div></div>
+          <div class="table-responsive"><table class="table table-hover align-middle">
+            <thead id="statCompanyHead"></thead>
+            <tbody id="statCompanyBody"></tbody>
+          </table></div>
+        </div>
+        <div id="statPositionPane" class="d-none">
+          <div class="row g-3 mb-3">
+            <div class="col-md-5"><div class="card h-100"><div class="card-body"><canvas id="statCategoryChart" height="200"></canvas></div></div></div>
+            <div class="col-md-7"><div class="card h-100"><div class="card-body">
+              <h6 class="card-title small text-muted">役職カテゴリ別</h6>
+              <table class="table table-sm align-middle mb-0"><tbody id="statCategoryBody"></tbody></table>
+            </div></div></div>
+          </div>
+          <div class="table-responsive"><table class="table table-hover align-middle">
+            <thead><tr><th>役職名</th><th>役職カテゴリ</th><th>人数</th><th>マスタ</th></tr></thead>
+            <tbody id="statPositionBody"></tbody>
+          </table></div>
+        </div>
       </section>
 
       <!-- マスタ管理 -->
@@ -448,5 +528,6 @@
 <script src="assets/vendor/chart.umd.min.js"></script>
 <script src="app.js"></script>
 <script src="assets/campaign-automations.js"></script>
+<script src="assets/positions.js"></script>
 </body>
 </html>

@@ -230,7 +230,7 @@ function edu_rep_handle_overview(array $user): never
          FROM edu_responses r
          INNER JOIN edu_assignments a ON a.id = r.assignment_id
          INNER JOIN targets t ON t.id = a.target_id
-         WHERE r.tenant_id = ?
+         WHERE r.tenant_id = ? AND t.is_test = 0
          GROUP BY department
          ORDER BY avg_pct DESC",
         [$tenantId]

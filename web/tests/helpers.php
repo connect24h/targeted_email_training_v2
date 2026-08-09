@@ -43,6 +43,25 @@ function tet2_test_boot(?string $seedSql = null): string
 }
 
 // ---- bootstrap.php 相当のスタブ(テスト内で先に定義することで本物より優先) ----
+// 役職カテゴリ定数と正規化(bootstrap.php と同一定義。load_api は bootstrap を読まないため)。
+const TET2_POSITION_CATEGORIES = ['役員', '管理職', '一般従業員'];
+const TET2_POSITION_CATEGORY_ALIASES = [
+    '社員'     => '一般従業員',
+    '一般社員' => '一般従業員',
+];
+function tet2_normalize_position_category(?string $value): ?string
+{
+    if ($value === null) {
+        return null;
+    }
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+    $value = TET2_POSITION_CATEGORY_ALIASES[$value] ?? $value;
+    return in_array($value, TET2_POSITION_CATEGORIES, true) ? $value : null;
+}
+
 function json_out($data, int $code = 200): never
 {
     $GLOBALS['__TET2_TEST_LAST'] = ['code' => $code, 'data' => $data];

@@ -18,6 +18,9 @@ Endpoint: `/api/integrations/awareness_targets.php`
 認証は`Authorization: Bearer <token>`、更新系は8〜128文字の`Idempotency-Key`が必須。
 tenantはrequestから受け取らず、server側の`TET2_AWARENESS_TENANT_ID`で固定する。
 snapshotの初回responseに含まれる`boundary`を後続pageでも指定すると、同期中の追加を次回へ分離できる。
+`is_test=1`の対象者とその訓練結果は、本番受講者・統計へ検証データを混ぜないためsnapshotから除外する。
+役職カテゴリは`役員 / 管理職 / 一般従業員`を正規値とし、旧称`社員`は入力時に`一般従業員`へ変換する。
+人物responseの`archivedAt`は論理削除日時で、activeへ戻すと`null`になる。
 
 ## 環境変数
 
@@ -39,4 +42,3 @@ proxyが外部から同headerを除去・上書きすることを確認した上
 - 削除: 両systemとも物理削除せずarchive
 
 本番適用は、DB backup、migration copy rehearsal、API疎通、SecurityAwareness previewでconflict件数を確認してから行う。
-

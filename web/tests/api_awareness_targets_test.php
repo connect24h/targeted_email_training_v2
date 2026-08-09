@@ -70,6 +70,7 @@ $created = $service->upsert([
 check($created['created'] === true, '新規targetを作成する');
 check($created['target']['tenantId'] === 1, 'responseのtenantは認証tenantに固定する');
 check($created['target']['groups'][0]['id'] === 1, '同一tenant groupを設定する');
+check($created['target']['positionCategory'] === '一般従業員', '旧称「社員」を正規カテゴリへ変換する');
 
 $replayed = $service->upsert([
     'email' => 'shared-user@example.test',
@@ -107,6 +108,10 @@ try {
     pass('他tenant groupを拒否する');
 }
 
+$testTargetId = Db::insert(
+    "INSERT INTO targets (tenant_id,email,name,is_test,tenant_no) VALUES (1,?,?,1,999)",
+    ['awareness-test-user@example.test', '連携除外テスト']
+);
 $snapshot = $service->snapshot(0, 100, null);
 $snapshotTarget = array_values(array_filter(
     $snapshot['targets'],
@@ -114,6 +119,10 @@ $snapshotTarget = array_values(array_filter(
 ))[0] ?? null;
 check($snapshotTarget !== null, 'full snapshotに作成targetを含む');
 check(strlen((string) $snapshotTarget['sourceVersion']) === 64, 'snapshotにSHA-256 sourceVersionを含む');
+check(count(array_filter(
+    $snapshot['targets'],
+    static fn (array $target): bool => $target['id'] === $testTargetId
+)) === 0, 'full snapshotはテストユーザを除外する');
 check($snapshot['nextCursor'] === null, '最終pageはnext cursorなし');
 
 $archived = $service->archive((int) $created['target']['id'], 'archive-key-1');
@@ -139,5 +148,16 @@ $result = array_values(array_filter(
 check($result !== null, 'phishing result snapshotを返す');
 check($result['tenantId'] === 1 && $result['targetId'] === $created['target']['id'], '結果にstable target identityを含む');
 check($result['linkClicked'] === true, 'eventを結果flagへ集約する');
+
+Db::run(
+    "INSERT INTO campaign_targets (campaign_id,target_id,tracking_id,content_no,send_status,sent_at)
+     VALUES (?,?,?,?,?,?)",
+    [$campaignId, $testTargetId, 'SYNC-TEST01', 1, 'sent', '2026-08-09 10:00:00']
+);
+$filteredResults = $service->phishingResults(0, 100);
+check(count(array_filter(
+    $filteredResults['results'],
+    static fn (array $row): bool => $row['trackingId'] === 'SYNC-TEST01'
+)) === 0, 'phishing result snapshotはテストユーザを除外する');
 
 echo "ALL TESTS PASSED\n";

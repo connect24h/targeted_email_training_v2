@@ -51,6 +51,13 @@ function report_summary_from_counts(array $row): array
     ];
 }
 
+/**
+ * キャンペーン1件のサマリー(母数と open/click/auth)。
+ *
+ * テストユーザ(targets.is_test=1)は母数からもイベント数からも除外する。
+ * イベント側は tracking_id が campaign_targets 経由でテストユーザに紐づく行を弾く
+ * (events 自体は is_test を持たないため、campaign_targets→targets を辿って判定する)。
+ */
 function report_summary_row(int $campaignId, int $tenantId): array
 {
     return Db::one(
@@ -58,20 +65,31 @@ function report_summary_row(int $campaignId, int $tenantId): array
             (SELECT COUNT(*)
              FROM campaign_targets ct
              INNER JOIN campaigns c ON c.id = ct.campaign_id
-             WHERE c.tenant_id = ? AND ct.campaign_id = ?) AS target_count,
+             INNER JOIN targets t ON t.id = ct.target_id
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0) AS target_count,
             (SELECT COUNT(*)
              FROM campaign_targets ct
              INNER JOIN campaigns c ON c.id = ct.campaign_id
-             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND ct.send_status = 'sent') AS sent_count,
+             INNER JOIN targets t ON t.id = ct.target_id
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND ct.send_status = 'sent' AND t.is_test = 0) AS sent_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'open') AS open_count,
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'open'
+               AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
+                               INNER JOIN targets t2 ON t2.id = ct2.target_id
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS open_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'click') AS click_count,
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'click'
+               AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
+                               INNER JOIN targets t2 ON t2.id = ct2.target_id
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS click_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'auth') AS auth_count",
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'auth'
+               AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
+                               INNER JOIN targets t2 ON t2.id = ct2.target_id
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS auth_count",
         [$tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId]
     ) ?? [];
 }
@@ -126,7 +144,8 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
                     SUM(CASE WHEN ct.send_status = 'sent' THEN 1 ELSE 0 END) AS sent_count
              FROM campaign_targets ct
              INNER JOIN campaigns c2 ON c2.id = ct.campaign_id
-             WHERE c2.tenant_id = ?
+             INNER JOIN targets t2 ON t2.id = ct.target_id
+             WHERE c2.tenant_id = ? AND t2.is_test = 0
              GROUP BY ct.campaign_id
          ) ct ON ct.campaign_id = c.id
          LEFT JOIN (
@@ -136,6 +155,9 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
                     COUNT(DISTINCT CASE WHEN e.event_type = 'auth' THEN e.tracking_id END) AS auth_count
              FROM events e
              WHERE e.tenant_id = ? AND e.event_type IN ('open', 'click', 'auth')
+               AND NOT EXISTS (SELECT 1 FROM campaign_targets ct3
+                               INNER JOIN targets t3 ON t3.id = ct3.target_id
+                               WHERE ct3.tracking_id = e.tracking_id AND t3.is_test = 1)
              GROUP BY e.campaign_id
          ) ev ON ev.campaign_id = c.id
          WHERE c.tenant_id = ? AND c.deleted_at IS NULL" . $testWhere . "
@@ -230,7 +252,7 @@ function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, 
                AND e.tenant_id = ?
                AND e.event_type IN ('open','click','auth')
                {$periodClause}
-         WHERE c.tenant_id = ? AND ct.campaign_id = ?
+         WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0
          GROUP BY {$axisGroup}
          ORDER BY cnt DESC";
     $params = array_merge([$tenantId], $periodParams, [$tenantId, $campaignId]);
@@ -333,11 +355,14 @@ function report_compute_detail(int $campaignId, int $tenantId, string $periodCla
         "CASE WHEN t.company IS NULL OR t.company = '' THEN '(未設定)' ELSE t.company END",
         $periodClause, $periodParams
     );
-    // 役職別: 正規値以外は 'その他'。
+    // 役職別: 正規値以外は 'その他'。正規値は TET2_POSITION_CATEGORIES(役員/管理職/一般従業員)。
+    // 旧称「社員」のデータが残っていても 'その他' に落ちるだけで集計自体は壊れない。
+    $positionAxis = "CASE WHEN t.position_category IN ('役員','管理職','一般従業員')"
+        . " THEN t.position_category ELSE 'その他' END";
     $positionRows = report_detail_axis(
         $campaignId, $tenantId,
-        "CASE WHEN t.position_category IN ('役員','管理職','社員') THEN t.position_category ELSE 'その他' END",
-        "CASE WHEN t.position_category IN ('役員','管理職','社員') THEN t.position_category ELSE 'その他' END",
+        $positionAxis,
+        $positionAxis,
         $periodClause, $periodParams
     );
     // コンテンツ別: content_no(NULL は '(単一)')。
@@ -410,15 +435,20 @@ function report_handle_detail(): never
  * 個人別統計(全キャンペーン横断)。対象者ごとに参加/開封/クリック/認証の回数と率を集計する。
  * 「よく開封する人」のワーストランキング用。アーカイブ済み対象者も含める(退職者も履歴に残す)。
  * open/click/auth は (campaign_id, tracking_id) 単位の DISTINCT = 1キャンペーン1人1回カウント。
+ *
+ * テストユーザ(is_test=1)は本番統計に混ぜないため既定で除外する。
+ * ?include_test=1 で検証時のみ含められる(campaigns.is_test と同じ思想)。
  */
 function report_handle_individuals(): never
 {
     $user = require_role('viewer');
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
     $limit = isset($_GET['limit']) ? max(1, min(500, (int) $_GET['limit'])) : 100;
+    $includeTest = isset($_GET['include_test']) && $_GET['include_test'] === '1';
+    $testWhere = $includeTest ? '' : ' AND t.is_test = 0';
 
     $rows = Db::all(
-        "SELECT t.id, t.email, t.name, t.company, t.department, t.position_category, t.status,
+        "SELECT t.id, t.email, t.name, t.company, t.department, t.position_category, t.status, t.is_test,
                 COUNT(DISTINCT ct.campaign_id) AS campaigns,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'open'  THEN e.campaign_id END) AS opens,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.campaign_id END) AS clicks,
@@ -430,7 +460,7 @@ function report_handle_individuals(): never
                AND e.campaign_id = ct.campaign_id
                AND e.tenant_id = ?
                AND e.event_type IN ('open','click','auth')
-         WHERE t.tenant_id = ?
+         WHERE t.tenant_id = ?" . $testWhere . "
          GROUP BY t.id
          HAVING campaigns > 0
          ORDER BY opens DESC, auths DESC, clicks DESC
@@ -452,6 +482,7 @@ function report_handle_individuals(): never
             'department' => (string) ($r['department'] ?? ''),
             'position_category' => $r['position_category'],
             'status' => (string) $r['status'],
+            'is_test' => (int) $r['is_test'],
             'campaigns' => $campaigns,
             'opens' => $opens,
             'clicks' => $clicks,

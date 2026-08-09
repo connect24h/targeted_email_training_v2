@@ -8,6 +8,61 @@ final class MigrationRunner
         '20260809-campaign-automations',
         '20260809-campaign-rotation',
         '20260809-awareness-participant-integration',
+        '20260809-targets-archived-at',
+        '20260809-targets-is-test',
+        '20260810-position-masters',
+    ];
+
+    /**
+     * 役職マスタの初期データ。ゴールドウイン(slug=goldwin)の役職体系。
+     * note='推定' の行は提供リストに無く、役職名から推定したもの(画面で修正可能)。
+     *
+     * @var list<array{0:string,1:string,2:?string}> [title, category, note]
+     */
+    private const GOLDWIN_POSITIONS = [
+        // --- 役員 ---
+        ['名誉会長', '役員', null],
+        ['代表取締役社長', '役員', null],
+        ['取締役', '役員', null],
+        ['社外取締役', '役員', null],
+        ['常勤監査役', '役員', null],
+        ['社外監査役', '役員', null],
+        ['常勤顧問', '役員', null],
+        ['常勤参事', '役員', null],
+        ['常務理事', '役員', null],
+        ['本部長', '役員', null],
+        ['グループ会社社長', '役員', null],
+        ['グループ会社常勤取締役', '役員', null],
+        ['執行役員ＣＳＬＯ', '役員', '推定'],
+        ['執行役員ＣＨＲＯ', '役員', '推定'],
+        ['グループ会社会長', '役員', '推定'],
+        ['総経理', '役員', '推定'],
+        ['役員', '役員', '推定'],
+        // --- 管理職 ---
+        ['室長', '管理職', null],
+        ['部長', '管理職', null],
+        ['担当部長', '管理職', null],
+        ['副部長', '管理職', null],
+        ['副本部長', '管理職', null],
+        ['マネージャー', '管理職', null],
+        ['エリア長', '管理職', null],
+        ['店長', '管理職', null],
+        ['副店長', '管理職', null],
+        ['ＤＢ', '管理職', null],
+        ['マーケティングディレクター', '管理職', null],
+        ['Ｄ２Ｃセールスマネージャー', '管理職', null],
+        ['スーパーバイザー', '管理職', '推定'],
+        ['管理総監', '管理職', '推定'],
+        ['管理職', '管理職', '推定'],
+        // --- 一般従業員 ---
+        ['一般従業員', '一般従業員', null],
+        ['エキスパート', '一般従業員', null],
+        ['シニアエキスパート', '一般従業員', null],
+        ['リーダー', '一般従業員', null],
+        ['ＭＤ', '一般従業員', null],
+        ['セールスマイスター', '一般従業員', null],
+        ['コファウンダー', '一般従業員', null],
+        ['社員', '一般従業員', '推定'],
     ];
 
     private string $dbPath;
@@ -90,6 +145,18 @@ final class MigrationRunner
             $this->applyAwarenessParticipantIntegration($pdo);
             return;
         }
+        if ($version === '20260809-targets-archived-at') {
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
+        if ($version === '20260809-targets-is-test') {
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
+        if ($version === '20260810-position-masters') {
+            $this->applyPositionMasters($pdo);
+            return;
+        }
         throw new RuntimeException("未知のmigrationです: {$version}");
     }
 
@@ -134,6 +201,45 @@ final class MigrationRunner
         $pdo->exec($this->readSchema('schema-edu.sql'));
     }
 
+    /**
+     * 役職マスタを作成し、旧カテゴリを正規化してゴールドウインの初期マスタを適用する。
+     */
+    private function applyPositionMasters(PDO $pdo): void
+    {
+        $pdo->exec($this->readSchema('schema-position.sql'));
+        $pdo->exec("UPDATE targets SET position_category = '一般従業員' WHERE position_category = '社員'");
+
+        $tenantStmt = $pdo->prepare('SELECT id FROM tenants WHERE slug = ?');
+        $tenantStmt->execute(['goldwin']);
+        $tenantId = $tenantStmt->fetchColumn();
+        if ($tenantId === false) {
+            return;
+        }
+        $tenantId = (int) $tenantId;
+
+        $insert = $pdo->prepare(
+            'INSERT OR IGNORE INTO position_masters (tenant_id, title, category, sort_order, note)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        foreach (self::GOLDWIN_POSITIONS as $index => [$title, $category, $note]) {
+            $insert->execute([$tenantId, $title, $category, $index, $note]);
+        }
+
+        $apply = $pdo->prepare(
+            "UPDATE targets
+                SET position_category = (
+                    SELECT pm.category FROM position_masters pm
+                     WHERE pm.tenant_id = targets.tenant_id AND pm.title = targets.title
+                )
+              WHERE tenant_id = ?
+                AND EXISTS (
+                    SELECT 1 FROM position_masters pm
+                     WHERE pm.tenant_id = targets.tenant_id AND pm.title = targets.title
+                )"
+        );
+        $apply->execute([$tenantId]);
+    }
+
     private function ensureAdditiveColumns(PDO $pdo): void
     {
         $columns = [
@@ -143,7 +249,12 @@ final class MigrationRunner
                 'deleted_at' => 'TEXT DEFAULT NULL',
                 'test_redirect_emails' => 'TEXT DEFAULT NULL',
             ],
-            'targets' => ['position_category' => 'TEXT', 'tenant_no' => 'INTEGER'],
+            'targets' => [
+                'position_category' => 'TEXT',
+                'tenant_no' => 'INTEGER',
+                'archived_at' => 'TEXT DEFAULT NULL',
+                'is_test' => 'INTEGER NOT NULL DEFAULT 0',
+            ],
             'templates' => ['scenario_key' => 'TEXT'],
             'campaign_targets' => ['content_no' => 'INTEGER'],
             'edu_categories' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],

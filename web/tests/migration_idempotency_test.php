@@ -56,18 +56,21 @@ $pdo = new PDO('sqlite:' . $dbPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMO
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 4, '未適用migrationが4件ある');
-check($runner->migrate() === 4, '初回はmigrationを4件適用する');
+check(count($runner->pending()) === 7, '未適用migrationが7件ある');
+check($runner->migrate() === 7, '初回はmigrationを7件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 4,
-    'schema_migrationsへ4件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 7,
+    'schema_migrationsへ7件だけ記録される');
 check((int) $pdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='integration_idempotency_keys'"
 )->fetchColumn() === 1, 'integration idempotency tableを追加する');
+check((int) $pdo->query(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='position_masters'"
+)->fetchColumn() === 1, 'position masters tableを追加する');
 check((int) $pdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, 'automation tableを3件追加する');
@@ -95,11 +98,21 @@ check($currentRunner->pending() === [
     '20260809-campaign-automations',
     '20260809-campaign-rotation',
     '20260809-awareness-participant-integration',
-], '現行DBはautomation、rotation、Awareness migrationがpending');
-check($currentRunner->migrate() === 3, '現行DBへ残りのmigrationを適用する');
+    '20260809-targets-archived-at',
+    '20260809-targets-is-test',
+    '20260810-position-masters',
+], '現行DBは6件の後続migrationがpending');
+check($currentRunner->migrate() === 6, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
+// current-schema 適用済みの既存DBにも独立migrationで追加列が届く。
+$currentColumns = $currentPdo->query('PRAGMA table_info(targets)')->fetchAll(PDO::FETCH_COLUMN, 1);
+check(in_array('archived_at', $currentColumns, true), '現行DBへtargets.archived_atが追加される');
+check(in_array('is_test', $currentColumns, true), '現行DBへtargets.is_testが追加される');
+check((int) $currentPdo->query(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='position_masters'"
+)->fetchColumn() === 1, '現行DBへposition_masters tableが追加される');
 
 $rotationPath = sys_get_temp_dir() . '/tet2-migration-rotation-' . getmypid() . '.sqlite';
 @unlink($rotationPath);
@@ -114,7 +127,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 2, '既存automation DBへrotationとAwareness migrationを適用する');
+check($rotationRunner->migrate() === 5, '既存automation DBへ5件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -138,9 +151,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 4, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 4,
-    'version tableを作成して4件記録する');
+check($unversionedRunner->migrate() === 7, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 7,
+    'version tableを作成して7件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -153,7 +166,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 4, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 7, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets

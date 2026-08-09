@@ -173,4 +173,40 @@ foreach ($r['payload']['individuals'] as $ind) { $byId2[$ind['target_id']] = $in
 check(isset($byId2[$targetIds[0]]), 'アーカイブ済み対象者も個人別統計に残る(履歴分析)');
 check(($byId2[$targetIds[0]]['status'] ?? '') === 'archived', 'アーカイブ済みは status=archived で識別できる');
 
+// ============ テストユーザ(is_test)はレポート集計から除外される(2026-08-09) ============
+// 集計に出ている対象者をテストユーザに変えると、既定の統計から消える。
+$_GET = [];
+$before = null;
+$_GET = ['action' => 'individuals'];
+$r = call_handler('report_handle_individuals', [], 'viewer');
+$before = count($r['payload']['individuals']);
+
+Db::run('UPDATE targets SET is_test = 1 WHERE id = ?', [$targetIds[0]]);
+
+$_GET = ['action' => 'individuals'];
+$r = call_handler('report_handle_individuals', [], 'viewer');
+$idsAfter = array_column($r['payload']['individuals'], 'target_id');
+check(!in_array($targetIds[0], $idsAfter, true), 'テストユーザは個人別統計(既定)から除外される');
+check(count($r['payload']['individuals']) === $before - 1, 'テストユーザの分だけ個人別統計の件数が減る');
+
+// include_test=1 なら検証用に含められる
+$_GET = ['action' => 'individuals', 'include_test' => '1'];
+$r = call_handler('report_handle_individuals', [], 'viewer');
+$idsWithTest = array_column($r['payload']['individuals'], 'target_id');
+check(in_array($targetIds[0], $idsWithTest, true), 'include_test=1 ならテストユーザも個人別統計に出る');
+$testRow = null;
+foreach ($r['payload']['individuals'] as $ind) { if ($ind['target_id'] === $targetIds[0]) { $testRow = $ind; } }
+check((int) ($testRow['is_test'] ?? 0) === 1, '個人別統計が is_test を返す(画面の TEST バッジ用)');
+
+// サマリー集計の母数からもテストユーザが抜ける
+$_GET = ['action' => 'summary', 'campaign_id' => $campaignId];
+$r = call_handler('report_handle_summary', [], 'viewer');
+$summaryWithTestExcluded = (int) $r['payload']['summary']['target_count'];
+Db::run('UPDATE targets SET is_test = 0 WHERE id = ?', [$targetIds[0]]);
+$_GET = ['action' => 'summary', 'campaign_id' => $campaignId];
+$r = call_handler('report_handle_summary', [], 'viewer');
+$summaryAll = (int) $r['payload']['summary']['target_count'];
+check($summaryWithTestExcluded === $summaryAll - 1, 'サマリーの母数からテストユーザが除外される');
+$_GET = [];
+
 echo "ALL TESTS PASSED\n";
