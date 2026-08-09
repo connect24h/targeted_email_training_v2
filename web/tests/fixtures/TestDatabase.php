@@ -20,6 +20,7 @@ final class TestDatabase
         $pdo->exec('PRAGMA foreign_keys = ON');
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-automation.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

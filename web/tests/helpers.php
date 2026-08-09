@@ -15,6 +15,8 @@ require_once __DIR__ . '/fixtures/TestDatabase.php';
 $GLOBALS['__TET2_TEST_BODY'] = [];
 $GLOBALS['__TET2_TEST_ROLE'] = 'operator';
 $GLOBALS['__TET2_TEST_LAST'] = null; // 直近の json_out/json_error 結果
+$GLOBALS['__TET2_TEST_CSRF_CALLS'] = 0;
+$GLOBALS['__TET2_TEST_AUDIT'] = [];
 
 function pass(string $message): void { echo "PASS: {$message}\n"; }
 
@@ -52,11 +54,14 @@ function json_error(string $message, int $code = 400): never
     throw new Tet2TestExit($code, ['success' => false, 'error' => $message]);
 }
 function json_body(): array { return $GLOBALS['__TET2_TEST_BODY']; }
-function tet2_require_csrf(): void {}
+function tet2_require_csrf(): void { $GLOBALS['__TET2_TEST_CSRF_CALLS']++; }
 function tet2_init_session(): void {}
 function tet2_security_headers(): void {}
 function tet2_csrf_token(): string { return 'test-csrf'; }
-function audit(string $action, string $detail = ''): void {}
+function audit(string $action, string $detail = ''): void
+{
+    $GLOBALS['__TET2_TEST_AUDIT'][] = ['action' => $action, 'detail' => $detail];
+}
 
 function current_user(): ?array
 {
@@ -134,6 +139,8 @@ function call_handler(string $fn, array $body = [], string $role = 'operator', ?
     $GLOBALS['__TET2_TEST_BODY'] = $body;
     $GLOBALS['__TET2_TEST_ROLE'] = $role;
     $GLOBALS['__TET2_TEST_LAST'] = null;
+    $GLOBALS['__TET2_TEST_CSRF_CALLS'] = 0;
+    $GLOBALS['__TET2_TEST_AUDIT'] = [];
     if ($args === null) {
         $ref = new ReflectionFunction($fn);
         $args = $ref->getNumberOfParameters() >= 1 ? [current_user()] : [];

@@ -3,7 +3,10 @@ declare(strict_types=1);
 
 final class MigrationRunner
 {
-    private const CURRENT_VERSION = '20260808-current-schema';
+    private const VERSIONS = [
+        '20260808-current-schema',
+        '20260809-campaign-automations',
+    ];
 
     private string $dbPath;
 
@@ -24,25 +27,34 @@ final class MigrationRunner
     {
         $pdo = $this->connect(true);
         if (!$this->tableExists($pdo, 'schema_migrations')) {
-            return [self::CURRENT_VERSION];
+            return self::VERSIONS;
         }
+        $pending = [];
         $stmt = $pdo->prepare('SELECT 1 FROM schema_migrations WHERE version = ?');
-        $stmt->execute([self::CURRENT_VERSION]);
-        return $stmt->fetchColumn() === false ? [self::CURRENT_VERSION] : [];
+        foreach (self::VERSIONS as $version) {
+            $stmt->execute([$version]);
+            if ($stmt->fetchColumn() === false) {
+                $pending[] = $version;
+            }
+        }
+        return $pending;
     }
 
     public function migrate(): int
     {
-        if ($this->pending() === []) {
+        $pending = $this->pending();
+        if ($pending === []) {
             return 0;
         }
         $pdo = $this->connect(false);
         $pdo->exec('PRAGMA foreign_keys = OFF');
         $pdo->beginTransaction();
         try {
-            $this->applyCurrentSchema($pdo);
-            $stmt = $pdo->prepare('INSERT INTO schema_migrations (version) VALUES (?)');
-            $stmt->execute([self::CURRENT_VERSION]);
+            foreach ($pending as $version) {
+                $this->apply($pdo, $version);
+                $stmt = $pdo->prepare('INSERT INTO schema_migrations (version) VALUES (?)');
+                $stmt->execute([$version]);
+            }
             if ($pdo->query('PRAGMA foreign_key_check')->fetchAll() !== []) {
                 throw new RuntimeException('migration後にforeign key違反を検出しました');
             }
@@ -55,7 +67,20 @@ final class MigrationRunner
         } finally {
             $pdo->exec('PRAGMA foreign_keys = ON');
         }
-        return 1;
+        return count($pending);
+    }
+
+    private function apply(PDO $pdo, string $version): void
+    {
+        if ($version === '20260808-current-schema') {
+            $this->applyCurrentSchema($pdo);
+            return;
+        }
+        if ($version === '20260809-campaign-automations') {
+            $pdo->exec($this->readSchema('schema-automation.sql'));
+            return;
+        }
+        throw new RuntimeException("未知のmigrationです: {$version}");
     }
 
     private function applyCurrentSchema(PDO $pdo): void

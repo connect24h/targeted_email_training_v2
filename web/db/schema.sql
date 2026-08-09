@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   occurred_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
--- 適用済みmigration。業務table 22個の集計には含めない。
+-- 適用済みmigration。業務tableの集計には含めない。
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version    TEXT PRIMARY KEY,
   applied_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
