@@ -51,7 +51,8 @@ deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 元キャンペーン、対象group、実施日、固定時刻またはランダム時間帯を設定する。生成処理は
 `send_schedule`を作らず、既存のlaunch操作を行うまでメールを送信しない。
 
-runnerとsystemd timerはリポジトリへ追加済みだが、本番では未配備・未enableである。
+runner、DB migration、systemd unitは本番へ配備済みである。automation timerは
+pilot確認前のためdisabled・inactiveのままとし、ruleとrunも未作成である。
 
 ## セットアップ（概要）
 

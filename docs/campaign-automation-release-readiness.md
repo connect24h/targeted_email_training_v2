@@ -1,15 +1,15 @@
-# キャンペーン自動化 配備準備レポート
+# キャンペーン自動化 配備・pilot準備レポート
 
 検証日: 2026-08-09
 
 対象branch: `chore/tet2-source-convergence`
 
-判定: **実装完了・承認後の段階配備が可能**
+判定: **本番source・DB migration完了、paused pilot確認待ち**
 
 ## 判定範囲
 
-第1期Step 1〜7の実装と、Step 8のうち本番を変更しない配備前gateを完了した。
-本番source配備、本番DB migration、service reload、automation timerのenable、pilot作成、
+第1期Step 1〜7の実装、Step 8の配備前gate、本番source配備、本番DB migrationを完了した。
+systemdはunitを読み込み済みだが、automation timerのenable、pilot rule作成、draft生成、
 実メール送信は実施していない。
 
 ## Gate結果
@@ -26,15 +26,18 @@
 | tenant・role境界 | PASS | APIのIDOR test、operator/viewer browser smoke成功 |
 | UI | PASS | desktop/mobile 390px、document overflowなし、console error/warning 0 |
 | deploy/rollback | PASS | deploy rehearsal成功、dry-runは124対象を列挙して変更なし |
+| 本番source配備 | PASS | backup ID `20260809T112000-900001`、124/124ファイルで配備後drift 0 |
+| 本番DB migration | PASS | 2件適用、2回目no-op、既存22table件数不変、FK error 0 |
 | systemd unit | PASS | `systemd-analyze verify`成功。saslauthdの既存legacy PID警告のみ |
 | Apache設定 | PASS | `apache2ctl configtest`: `Syntax OK` |
 | 既存service | PASS | workerと既存4timerはactive |
-| automation timer | 意図どおり停止 | 本番はinactive、unit未配備・未enable |
-| 本番非変更 | PASS | 検証前後で既存22tableの件数とschemaが一致 |
+| automation timer | 意図どおり停止 | unit配備済み、disabled・inactive |
+| HTTP認証境界 | PASS | originとCloudflareの双方が401を返し、Basic認証を維持 |
+| 本番送信状態 | PASS | backup比較で`send_schedule`件数不変、rule 0、run 0 |
 
 deploy dry-runの内訳は、同一83、追加予定23、更新予定17、sandbox内で読めない表示1だった。
 読めない表示は`/opt/training/bin/__BeaconMst.png`で、sandbox外のread-only checksum確認では
-Git正本と同じSHA-256だった。本番への書込みは発生していない。
+Git正本と同じSHA-256だった。配備後は全124ファイルのsource/destination checksumが一致した。
 
 ## Security review
 
@@ -46,15 +49,25 @@ Git正本と同じSHA-256だった。本番への書込みは発生していな�
 - auditとrunner errorはIDと非PII codeだけを記録
 - hardcoded secret、shell実行、動的SQL補間は追加していない
 
-## 承認後の段階配備
+## 本番実施記録
 
-1. deploy dry-runの追加23・更新17ファイルを人が最終確認する。
-2. timestamp付きbackupを作成し、sourceをallowlist deployする。
-3. Apache configtestとHTTP smokeを行う。
-4. 本番DBをbackup後、migrationを適用し、2回目no-opとFK error 0を確認する。
-5. automation timerはenableせず、pilot tenantのruleをpausedで作成する。
-6. preview後に手動`generate_now`し、draft内容・対象者・`send_schedule`増加0を確認する。
-7. 24時間監視後、別承認でtimerをenableする。実メール送信は既存の手動launch手順で行う。
+1. `/var/backups/tet2/20260809T112000-900001`へsourceとSQLite整合backupを作成した。
+2. allowlist 124ファイルを配備し、配備後drift 0を確認した。
+3. migration 2件をtransaction適用し、2回目no-op、既存22table件数不変、FK error 0を確認した。
+4. `daemon-reload`後もautomation timerはdisabled・inactive、既存workerと4timerはactiveである。
+5. 配備済みsourceから合成DBの全32 PHP testを実行し、32/32 PASSを確認した。
+6. 外形確認は一度Cloudflare 521となったが、直後のorigin切り分けと再試行では双方401へ復帰した。
+
+## 残るpaused pilot
+
+同一tenantで利用可能な最小候補はtenant 1、source campaign 61、group 3（active target 3件）である。
+source campaign 61は`is_test=0`のため、自動選択せず利用者確認を待つ。
+
+1. pilot tenant、source campaign、groupを確定する。
+2. timerがdisabledのままruleを作成し、直ちにpause状態を確認する。
+3. previewで予定日時と対象人数を確認する。
+4. 手動`generate_now`でdraftを1件生成し、内容・対象者・`send_schedule`増加0を確認する。
+5. 24時間監視後、別承認でtimerをenableする。実メール送信は既存の手動launch手順で行う。
 
 ## Rollback判断
 
@@ -65,10 +78,9 @@ rollbackする。追加automation tableは削除せずruleをpauseする。既�
 ## 検証報告
 
 - 実装完了条件: ✅ 確認済み（Step 1〜7、PHP 32/32、browser smoke）
-- 本番非変更条件: ✅ 確認済み（既存22table件数・schema不変、timer inactive）
+- 本番配備条件: ✅ 確認済み（backup、124ファイルdrift 0、migration no-op・FK 0）
 - 安全条件: ✅ 確認済み（draft-only、tenant/role/CSRF、冪等性、rollback rehearsal）
-- 配備手順: ✅ 確認済み（backup、migration、paused pilot、24時間監視を7段階で記載）
-- 本番段階配備: ⚠ 未実施（利用者の明示承認とpilot tenant/source指定が必要）
-- 機械確認: ✅ 15 Gate行、7段階配備、32 test files、22既存table
+- paused pilot: ⚠ 未実施（source campaign 61が`is_test=0`のため利用者確認が必要）
+- 機械確認: ✅ 18 Gate行、6本番実施項目、5 pilot段階、32 test files、22既存table
 - 一番弱い箇所: 本番認証・実DBを使うUI統合試験は未実施。今回のbrowser smokeはAPI mockであり、
-  本番source配備後のpaused pilotで補完する。
+  paused pilotで補完する。
