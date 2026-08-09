@@ -8,11 +8,11 @@
 
 ```
 web/        Web アプリ本体（本番: /var/www/html/tet2）
-  api/        REST API 21本（?action= パターン、CSRF/セッション認証）
+  api/        REST API 22本（?action= パターン、CSRF/セッション認証）
   lib/        リポジトリ層・PipelineRunner 等
   db/         現行スキーマ、migration runner、seed スクリプト
   assets/     SPA アセット（app.css, vendor/ にBootstrap/Chart.jsローカル配置）
-  tests/      PHP テスト（26ファイル、合成DBを使い tests/run.sh で一括実行）
+  tests/      PHP テスト（32ファイル、合成DBを使い tests/run.sh で一括実行）
   index.html app.js take.php  SPA エントリ + 受講ページ
 bin/        メール送信処理（本番: /opt/training/bin）
   tet2-worker.py       send_schedule ポーリング → 送信起動（systemd常駐）
@@ -22,7 +22,7 @@ bin/        メール送信処理（本番: /opt/training/bin）
   tet2-purge-campaigns.py  論理削除済みキャンペーンの物理パージ
   replace_url.py / training_config.py / requirements.txt / config.ini
   master*.html / __BeaconMst.png  生成用HTML・ビーコン素材
-deploy/systemd/  systemd unit 9本（worker + edu enroll/reminder/snapshot + report-ingest）
+deploy/systemd/  systemd unit 11本（worker + automation + edu enroll/reminder/snapshot + report-ingest）
 deploy/cron/     論理削除済みキャンペーンのパージ定義
 deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 ```
@@ -44,6 +44,14 @@ deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 3. `send_email.py --data-dir ... --interval ... --auto-pause` で SMTP 送信
 
 緊急停止は data_dir に `stop_sending.flag` を置くとバッチが `cancelled` になる。
+
+## 定期キャンペーン
+
+月次・四半期のルールからレビュー用draftを自動生成できる。管理画面の「定期キャンペーン」で
+元キャンペーン、対象group、実施日、固定時刻またはランダム時間帯を設定する。生成処理は
+`send_schedule`を作らず、既存のlaunch操作を行うまでメールを送信しない。
+
+runnerとsystemd timerはリポジトリへ追加済みだが、本番では未配備・未enableである。
 
 ## セットアップ（概要）
 

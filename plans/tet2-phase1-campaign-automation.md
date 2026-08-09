@@ -472,6 +472,7 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 | 2026-08-09 | 4 | `ee4e53f` 完了 | DraftFactory分離、tenant/active/content検証、transaction rollback、duplicate API互換、PHP 28/28・Python PASS |
 | 2026-08-09 | 5 | `69dfcf2` 完了 | automation 3table、月次/四半期schedule、CRUD/preview/generate API、重複防止、PHP 30/30 PASS |
 | 2026-08-09 | 6 | `0129924` 完了 | atomic runner、dry-run CLI、hourly timer unit、失敗継続・重複防止、PHP 31/31 PASS |
+| 2026-08-09 | 7 | `27a5403`, `539fb92` 完了 | 管理UI、role別操作、preview、最終run表示、desktop/mobile browser smoke、PHP 32/32 PASS |
 
 Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件数が一致し、
 `PRAGMA foreign_key_check`は0件だった。本番DB自体へのmigration・source配備は未実施。
@@ -485,3 +486,7 @@ Step 5のproduction copy rehearsalでは、未version管理の現行DB copyへ2 
 
 Step 6ではclaim・draft生成・run完了・次回更新を単一transaction化した。timer unitは未配備・未enableで、
 CLIの本番applyは`--apply --allow-production`の二重flagを要求する。
+
+Step 7では独立scriptとして管理画面を追加した。operatorは作成・編集・停止・再開・手動draft生成、
+viewerは一覧とpreviewだけを利用できる。390px幅でdocument overflowなし、JavaScript consoleのerror/warning 0件を
+Playwright smokeで確認した。本番source・DB・service・timerは変更していない。
