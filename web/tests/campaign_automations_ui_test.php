@@ -26,6 +26,7 @@ ui_check(str_contains($script, "action: 'list'"), '一覧APIを利用する');
 ui_check(str_contains($script, "action: 'preview'"), 'preview APIを利用する');
 ui_check(str_contains($script, "action: 'generate_now'"), 'draft生成APIを利用する');
 ui_check(str_contains($script, "roleAtLeast(State.user.role, 'operator')"), '動的操作をroleで制限する');
+ui_check(str_contains($script, 'last_run_status'), '最終run結果を一覧表示する');
 ui_check(str_contains($script, 'esc('), 'API由来文字列をescapeする');
 ui_check(str_contains($script, 'confirm('), 'draft生成前に確認する');
 

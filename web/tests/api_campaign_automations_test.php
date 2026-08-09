@@ -172,6 +172,10 @@ check($draft !== null && $draft['status'] === 'draft', '生成campaignはdraft')
 $run = Db::one('SELECT * FROM campaign_automation_runs WHERE generated_campaign_id = ?', [$draftId]);
 check($run !== null && $run['status'] === 'generated', 'runをgeneratedで記録する');
 check((int) Db::one('SELECT COUNT(*) AS n FROM send_schedule')['n'] === $beforeSchedules, 'send_scheduleを作らない');
+$response = automationCall('campaign_automations_handle_list', ['role' => 'viewer']);
+$listedAutomation = $response['payload']['automations'][0] ?? [];
+check(($listedAutomation['last_run_status'] ?? null) === 'generated', 'listで最終run結果を返す');
+check((int) ($listedAutomation['last_generated_campaign_id'] ?? 0) === $draftId, 'listで最終draft IDを返す');
 $auditJson = json_encode($GLOBALS['__TET2_TEST_AUDIT'], JSON_UNESCAPED_UNICODE);
 check(!str_contains((string) $auditJson, '@example.test'), 'auditへPIIを記録しない');
 

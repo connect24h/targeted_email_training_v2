@@ -13,6 +13,17 @@ function automationStatusBadge(value) {
     : '<span class="badge bg-secondary">停止中</span>';
 }
 
+function automationLastRun(row) {
+  if (!row.last_run_status) return '最終実行: なし';
+  if (row.last_run_status === 'generated') {
+    return `最終実行: draft #${Number(row.last_generated_campaign_id)} 生成`;
+  }
+  if (row.last_run_status === 'failed') {
+    return `最終実行: 失敗（${esc(row.last_run_error_code || 'unknown')}）`;
+  }
+  return '最終実行: 処理中';
+}
+
 function automationScheduleLabel(row) {
   const frequency = automationFrequencyLabel(row.frequency);
   const time = row.time_mode === 'random_window'
@@ -40,7 +51,7 @@ function renderAutomationRows(automations) {
   const body = $('#campaignAutomationsBody');
   body.innerHTML = automations.length ? automations.map((row) => `
     <tr>
-      <td><strong>${esc(row.name)}</strong><div class="small text-muted">生成履歴 ${Number(row.run_count || 0)}件</div></td>
+      <td><strong>${esc(row.name)}</strong><div class="small text-muted">${automationLastRun(row)} / 履歴 ${Number(row.run_count || 0)}件</div></td>
       <td>${esc(row.source_campaign_name)}</td>
       <td>${automationScheduleLabel(row)}</td>
       <td>${esc(fmtDate(row.next_due_at))}</td>

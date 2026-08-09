@@ -125,9 +125,16 @@ function campaign_automations_row(int $id, int $tenantId): array
 {
     $row = Db::one(
         'SELECT ca.*, c.name AS source_campaign_name,
-                (SELECT COUNT(*) FROM campaign_automation_runs r WHERE r.automation_id = ca.id) AS run_count
+                (SELECT COUNT(*) FROM campaign_automation_runs r WHERE r.automation_id = ca.id) AS run_count,
+                lr.status AS last_run_status, lr.error_code AS last_run_error_code,
+                lr.generated_campaign_id AS last_generated_campaign_id,
+                COALESCE(lr.finished_at, lr.created_at) AS last_run_at
          FROM campaign_automations ca
          JOIN campaigns c ON c.id = ca.source_campaign_id
+         LEFT JOIN campaign_automation_runs lr ON lr.id = (
+             SELECT r2.id FROM campaign_automation_runs r2
+             WHERE r2.automation_id = ca.id ORDER BY r2.id DESC LIMIT 1
+         )
          WHERE ca.id = ? AND ca.tenant_id = ?',
         [$id, $tenantId]
     );
