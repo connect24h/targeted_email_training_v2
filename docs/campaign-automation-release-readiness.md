@@ -1,15 +1,16 @@
-# キャンペーン自動化 配備・pilot準備レポート
+# キャンペーン自動化 配備・pilot稼働レポート
 
 検証日: 2026-08-09
 
 対象branch: `chore/tet2-source-convergence`
 
-判定: **本番source・DB migration・paused pilot完了、24時間監視中**
+判定: **paused ruleでtimerを段階有効化、24時間の実稼働監視中**
 
 ## 判定範囲
 
 第1期Step 1〜7の実装、Step 8の配備前gate、本番source配備、本番DB migration、
-停止状態のpilot draft生成を完了した。automation timerのenableと実メール送信は実施していない。
+停止状態のpilot draft生成、automation timerの段階有効化を完了した。pilot ruleのresumeと
+実メール送信は実施していない。
 
 ## Gate結果
 
@@ -30,7 +31,7 @@
 | systemd unit | PASS | `systemd-analyze verify`成功。saslauthdの既存legacy PID警告のみ |
 | Apache設定 | PASS | `apache2ctl configtest`: `Syntax OK` |
 | 既存service | PASS | workerと既存4timerはactive |
-| automation timer | 意図どおり停止 | unit配備済み、disabled・inactive |
+| automation timer | PASS（段階稼働） | enabled・active・waiting、rule paused、初回予定2026-08-09 13:24:24 JST |
 | HTTP認証境界 | PASS | originとCloudflareの双方が401を返し、Basic認証を維持 |
 | paused pilot | PASS | automation 1、run 1、draft 81、target 3、content 3、rule paused |
 | 本番送信状態 | PASS | backup比較で`send_schedule`は21件のまま、runner due 0、送信操作なし |
@@ -54,7 +55,8 @@ Git正本と同じSHA-256だった。配備後は全124ファイルのsource/des
 1. `/var/backups/tet2/20260809T112000-900001`へsourceとSQLite整合backupを作成した。
 2. allowlist 124ファイルを配備し、配備後drift 0を確認した。
 3. migration 2件をtransaction適用し、2回目no-op、既存22table件数不変、FK error 0を確認した。
-4. `daemon-reload`後もautomation timerはdisabled・inactive、既存workerと4timerはactiveである。
+4. 配備直後の`daemon-reload`時点ではautomation timerをdisabled・inactiveに維持し、
+   既存workerと4timerがactiveであることを確認した。
 5. 配備済みsourceから合成DBの全32 PHP testを実行し、32/32 PASSを確認した。
 6. 外形確認は一度Cloudflare 521となったが、直後のorigin切り分けと再試行では双方401へ復帰した。
 7. pilot直前backup `/var/backups/tet2/20260809T115000-900002` のchecksumを照合した。
@@ -62,6 +64,9 @@ Git正本と同じSHA-256だった。配備後は全124ファイルのsource/des
 9. tenant 1、source campaign 61、group 3でautomation 1を作成し、run 1からdraft 81を生成した。
 10. automation 1を同一処理内でpausedへ戻し、target 3、content 3、監査3件、FK error 0、
     `send_schedule` 21件不変、runner due 0を確認した。
+11. paused ruleのままserviceを手動実行し、examined 0、generated 0、failed 0、duplicate 0を確認した。
+12. 2026-08-09 12:27 JSTにtimerをenable/startし、active・waitingを確認した。初回自動実行予定は
+    2026-08-09 13:24:24 JSTである。
 
 ## Paused pilot結果と残る稼働gate
 
@@ -73,8 +78,10 @@ prepared query、transaction、監査記録を維持した。検証後、CLIと�
 2. timerがdisabledのままruleを作成し、draft生成後に同一処理でpausedへ戻した。
 3. runの選択日時は2026-08-15 09:00 JST、次回生成予定は2026-09-10 09:00 JSTとなった。
 4. draft 81は`draft`、target 3、content 3で、`send_schedule`増加0を確認した。
-5. 監視終了予定の2026-08-10 12:07 JST以降にDB、audit、service、HTTPを再確認する。
-6. 監視合格後に別承認でtimerをenableする。実メール送信は既存の手動launch手順で行う。
+5. paused ruleでserviceを手動実行し、実unitと本番DBの組合せでdue 0を確認した。
+6. ruleをpausedに維持したままtimerだけを有効化し、runnerの実稼働監視を開始した。
+7. 2026-08-10 12:27 JST以降にDB、audit、log、service、HTTP、管理UIを再確認し、
+   合格後にruleのresumeを判断する。実メール送信は既存の手動launch手順で行う。
 
 ## Rollback判断
 
@@ -88,8 +95,9 @@ rollbackする。追加automation tableは削除せずruleをpauseする。既�
 - 本番配備条件: ✅ 確認済み（backup、124ファイルdrift 0、migration no-op・FK 0）
 - 安全条件: ✅ 確認済み（draft-only、tenant/role/CSRF、冪等性、rollback rehearsal）
 - paused pilot: ✅ 確認済み（automation 1 / run 1 / draft 81、paused、due 0）
-- 機械確認: ✅ 19 Gate行、10本番実施項目、6 pilot段階、32 test files、22既存table
-- 24時間監視: ⚠ 継続中（終了予定: 2026-08-10 12:07 JST）
+- 機械確認: ✅ 19 Gate行、12本番実施項目、7 pilot段階、32 test files、22既存table
+- timer段階稼働: ✅ 確認済み（enabled・active・waiting、rule paused、手動service exit 0）
+- 24時間監視: ⚠ 継続中（終了予定: 2026-08-10 12:27 JST）
 - 一番弱い箇所: 本番認証・実DBを使うUI統合試験は未実施。今回のbrowser smokeはAPI mockであり、
-  pilotはCLI経由で補完した。既存の認証済みbrowser sessionがなかったため、timer有効化前に
+  pilotはCLI経由で補完した。既存の認証済みbrowser sessionがなかったため、rule再開前に
   管理UIからのread-only表示確認を残す。

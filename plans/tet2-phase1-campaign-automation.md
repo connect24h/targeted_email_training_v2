@@ -382,7 +382,7 @@ production deployとtimer enableは外部状態を変更するため、実装完
 - production migration、source deploy、Apache configtest、service reloadを順に行う
 - timerは最初pause状態で配備し、手動`generate_now`を先に確認する
 - pilot tenantとsource campaignは利用者が指定する。実メール送信は行わない
-- 24時間監視後にtimerをenableする
+- pilot後はruleをpausedのままtimerをenableし、24時間のrunner実稼働監視後にruleをresumeする
 
 ### Verification
 
@@ -473,7 +473,7 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 | 2026-08-09 | 5 | `69dfcf2` 完了 | automation 3table、月次/四半期schedule、CRUD/preview/generate API、重複防止、PHP 30/30 PASS |
 | 2026-08-09 | 6 | `0129924` 完了 | atomic runner、dry-run CLI、hourly timer unit、失敗継続・重複防止、PHP 31/31 PASS |
 | 2026-08-09 | 7 | `27a5403`, `539fb92` 完了 | 管理UI、role別操作、preview、最終run表示、desktop/mobile browser smoke、PHP 32/32 PASS |
-| 2026-08-09 | 8 | 本番配備・migration・paused pilot完了 | backup `20260809T115000-900002`、automation 1 / run 1 / draft 81、target 3、content 3、send_schedule不変、timer disabled。24時間監視中 |
+| 2026-08-09 | 8 | 本番配備・migration・paused pilot・timer段階稼働完了 | backup `20260809T115000-900002`、automation 1 / run 1 / draft 81、send_schedule不変、timer enabled/active、rule paused。24時間監視中 |
 
 Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件数が一致し、
 `PRAGMA foreign_key_check`は0件だった。本番DBへの適用はStep 8で実施した。
@@ -486,7 +486,8 @@ Step 5のproduction copy rehearsalでは、未version管理の現行DB copyへ2 
 既存table件数不変、automation table 3件、`PRAGMA foreign_key_check` 0件を確認した。
 
 Step 6ではclaim・draft生成・run完了・次回更新を単一transaction化した。CLIの本番applyは
-`--apply --allow-production`の二重flagを要求する。unitはStep 8で配備したがtimerはdisabled・inactiveである。
+`--apply --allow-production`の二重flagを要求する。unitはStep 8で配備し、paused ruleによる手動service検証後に
+timerをenabled・activeとした。
 
 Step 7では独立scriptとして管理画面を追加した。operatorは作成・編集・停止・再開・手動draft生成、
 viewerは一覧とpreviewだけを利用できる。390px幅でdocument overflowなし、JavaScript consoleのerror/warning 0件を
@@ -494,4 +495,5 @@ Playwright smokeで確認した。
 
 Step 8の配備前gate、本番source配備、DB migration、paused pilotは完了した。詳細は
 [`../docs/campaign-automation-release-readiness.md`](../docs/campaign-automation-release-readiness.md)を参照する。
-24時間監視と管理UIのread-only表示確認後にtimer有効化を判断するため、Step 8全体は未完了のままとする。
+timerはruleをpausedのまま段階有効化した。24時間のrunner実稼働監視と管理UIのread-only表示確認後に
+rule再開を判断するため、Step 8全体は未完了のままとする。
