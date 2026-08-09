@@ -81,6 +81,15 @@ function groups_assert_owned(int $groupId, int $tenantId): array
     return $group;
 }
 
+function groups_assert_active(int $groupId, int $tenantId): array
+{
+    $group = groups_assert_owned($groupId, $tenantId);
+    if (($group['status'] ?? 'active') !== 'active') {
+        json_error('グループはアーカイブ済みです', 409);
+    }
+    return $group;
+}
+
 function groups_assert_targets_owned(array $targetIds, int $tenantId): void
 {
     foreach ($targetIds as $targetId) {
@@ -104,7 +113,7 @@ function groups_handle_list(array $actor): never
          FROM groups g
          LEFT JOIN target_group tg ON tg.group_id = g.id
          LEFT JOIN targets t ON t.id = tg.target_id AND t.tenant_id = ? AND t.status != 'archived'
-         WHERE g.tenant_id = ?
+         WHERE g.tenant_id = ? AND g.status = 'active'
          GROUP BY g.id, g.tenant_id, g.name, g.kind
          ORDER BY g.id",
         [$tenantId, $tenantId]
@@ -136,7 +145,7 @@ function groups_handle_update(array $actor): never
     $body = json_body();
     $tenantId = effective_tenant_id($actor, groups_body_optional_int($body, 'tenant_id'));
     $id = groups_int($body, 'id');
-    groups_assert_owned($id, $tenantId);
+    groups_assert_active($id, $tenantId);
     $name = groups_optional_string($body, 'name');
     $kind = groups_optional_string($body, 'kind');
 
@@ -164,9 +173,13 @@ function groups_handle_delete(array $actor): never
     $id = groups_int($body, 'id');
     groups_assert_owned($id, $tenantId);
 
-    Db::run('DELETE FROM groups WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
-    audit('group.delete', 'group_id=' . $id);
-    json_out(['success' => true]);
+    Db::run(
+        "UPDATE groups SET status='archived', archived_at=datetime('now','localtime')
+         WHERE id = ? AND tenant_id = ?",
+        [$id, $tenantId]
+    );
+    audit('group.archive', 'group_id=' . $id);
+    json_out(['success' => true, 'archived' => true]);
 }
 
 function groups_handle_add_targets(array $actor): never
@@ -176,7 +189,7 @@ function groups_handle_add_targets(array $actor): never
     $tenantId = effective_tenant_id($actor, groups_body_optional_int($body, 'tenant_id'));
     $groupId = groups_int($body, 'group_id');
     $targetIds = groups_int_array($body, 'target_ids');
-    groups_assert_owned($groupId, $tenantId);
+    groups_assert_active($groupId, $tenantId);
     groups_assert_targets_owned($targetIds, $tenantId);
 
     Db::tx(function () use ($groupId, $targetIds, $tenantId): void {
@@ -201,7 +214,7 @@ function groups_handle_remove_targets(array $actor): never
     $tenantId = effective_tenant_id($actor, groups_body_optional_int($body, 'tenant_id'));
     $groupId = groups_int($body, 'group_id');
     $targetIds = groups_int_array($body, 'target_ids');
-    groups_assert_owned($groupId, $tenantId);
+    groups_assert_active($groupId, $tenantId);
     groups_assert_targets_owned($targetIds, $tenantId);
 
     Db::tx(function () use ($groupId, $targetIds, $tenantId): void {
@@ -226,7 +239,7 @@ function groups_handle_members(array $actor): never
     if ($groupId === null) {
         json_error('group_id が不正です', 400);
     }
-    groups_assert_owned($groupId, $tenantId);
+    groups_assert_active($groupId, $tenantId);
     $members = Db::all(
         "SELECT t.id, t.email, t.name, t.company, t.department
          FROM target_group tg

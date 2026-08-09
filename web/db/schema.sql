@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS groups (
   tenant_id INTEGER NOT NULL,
   name      TEXT NOT NULL,
   kind      TEXT NOT NULL DEFAULT 'custom',     -- department / custom
+  status    TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+  archived_at TEXT,
   UNIQUE (tenant_id, name),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
@@ -65,6 +67,22 @@ CREATE TABLE IF NOT EXISTS target_group (
   FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE,
   FOREIGN KEY (group_id)  REFERENCES groups(id)  ON DELETE CASCADE
 );
+
+-- Awareness連携のservice writeをprocess再起動後も冪等にする。
+CREATE TABLE IF NOT EXISTS integration_idempotency_keys (
+  tenant_id    INTEGER NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','completed')),
+  response_body TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  expires_at   TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, idempotency_key),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+CREATE INDEX IF NOT EXISTS idx_integration_idempotency_expiry
+  ON integration_idempotency_keys(expires_at);
 
 -- テンプレート（件名 / 本文 / 偽ログイン / ネタバラシ / eラーニング）
 -- tenant_id NULL = 共有プリセット（セキュリオの40種相当）

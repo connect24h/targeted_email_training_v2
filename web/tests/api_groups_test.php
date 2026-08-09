@@ -75,12 +75,13 @@ check(($r['payload']['group']['kind'] ?? '') === 'custom', 'GC-6: kind が更新
 $r = call_handler('groups_handle_update', ['id' => $createdGroupId], 'operator');
 check($r['code'] === 400, 'GC-7: update no fields → 400');
 
-// GC-8: delete → 200
+// GC-8: archive → 200
 $r = call_handler('groups_handle_delete', ['id' => $customGroupId], 'operator');
-check($r['code'] === 200, 'GC-8: delete → 200');
-check(($r['payload']['success'] ?? false) === true, 'GC-8: success=true');
-$deleted = Db::one('SELECT id FROM groups WHERE id = ?', [$customGroupId]);
-check($deleted === null, 'GC-8: グループが実際に削除される');
+check($r['code'] === 200, 'GC-8: archive → 200');
+check(($r['payload']['archived'] ?? false) === true, 'GC-8: archived=true');
+$archived = Db::one('SELECT status, archived_at FROM groups WHERE id = ?', [$customGroupId]);
+check($archived !== null && $archived['status'] === 'archived', 'GC-8: グループを論理archiveする');
+check($archived['archived_at'] !== null, 'GC-8: archive日時を保存する');
 
 // GC-9: 他テナントのグループを delete → 404
 if ($otherTenantId !== null) {

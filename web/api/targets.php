@@ -142,7 +142,7 @@ function targets_is_unique_error(Throwable $e): bool
 
 function targets_assert_group_owned(int $groupId, int $tenantId): array
 {
-    $group = Db::one('SELECT * FROM groups WHERE id = ? AND tenant_id = ?', [$groupId, $tenantId]);
+    $group = Db::one("SELECT * FROM groups WHERE id = ? AND tenant_id = ? AND status='active'", [$groupId, $tenantId]);
     if ($group === null) {
         json_error('グループが見つかりません', 404);
     }
@@ -168,7 +168,7 @@ function targets_group_names(array $targetIds, int $tenantId): array
              FROM groups g
              INNER JOIN target_group tg ON tg.group_id = g.id
              INNER JOIN targets t ON t.id = tg.target_id
-             WHERE tg.target_id = ? AND t.tenant_id = ? AND g.tenant_id = ?
+             WHERE tg.target_id = ? AND t.tenant_id = ? AND g.tenant_id = ? AND g.status = \'active\'
              ORDER BY g.name',
             [$targetId, $tenantId, $tenantId]
         );

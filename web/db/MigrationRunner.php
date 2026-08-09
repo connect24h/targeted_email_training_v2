@@ -7,6 +7,7 @@ final class MigrationRunner
         '20260808-current-schema',
         '20260809-campaign-automations',
         '20260809-campaign-rotation',
+        '20260809-awareness-participant-integration',
     ];
 
     private string $dbPath;
@@ -85,6 +86,10 @@ final class MigrationRunner
             $this->applyCampaignRotation($pdo);
             return;
         }
+        if ($version === '20260809-awareness-participant-integration') {
+            $this->applyAwarenessParticipantIntegration($pdo);
+            return;
+        }
         throw new RuntimeException("未知のmigrationです: {$version}");
     }
 
@@ -98,6 +103,26 @@ final class MigrationRunner
             $pdo->exec('ALTER TABLE campaign_automations ADD COLUMN max_occurrences INTEGER
                 CHECK (max_occurrences BETWEEN 1 AND 120)');
         }
+    }
+
+    private function applyAwarenessParticipantIntegration(PDO $pdo): void
+    {
+        if (!$this->columnExists($pdo, 'groups', 'status')) {
+            $pdo->exec("ALTER TABLE groups ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','archived'))");
+        }
+        if (!$this->columnExists($pdo, 'groups', 'archived_at')) {
+            $pdo->exec('ALTER TABLE groups ADD COLUMN archived_at TEXT');
+        }
+        $pdo->exec('CREATE TABLE IF NOT EXISTS integration_idempotency_keys (
+            tenant_id INTEGER NOT NULL, idempotency_key TEXT NOT NULL, action TEXT NOT NULL,
+            request_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'processing\'
+                CHECK (status IN (\'processing\',\'completed\')),
+            response_body TEXT, created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')),
+            expires_at TEXT NOT NULL, PRIMARY KEY (tenant_id, idempotency_key),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id))');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_integration_idempotency_expiry
+            ON integration_idempotency_keys(expires_at)');
     }
 
     private function applyCurrentSchema(PDO $pdo): void

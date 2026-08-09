@@ -8,7 +8,7 @@
 
 ```
 web/        Web アプリ本体（本番: /var/www/html/tet2）
-  api/        REST API 22本（?action= パターン、CSRF/セッション認証）
+  api/        REST API（?action= パターン、CSRF/セッション認証、連携APIはBearer認証）
   lib/        リポジトリ層・PipelineRunner 等
   db/         現行スキーマ、migration runner、seed スクリプト
   assets/     SPA アセット（app.css, vendor/ にBootstrap/Chart.jsローカル配置）
@@ -94,6 +94,7 @@ deploy/rollbackの詳しい安全手順は[`deploy/README.md`](deploy/README.md)
 - OWASP Top 10 診断・修正済み（内部URL遮断/レート制限/内部パス403/IDOR多重防御）
 - CSP 対応のため外部CDN非依存（`assets/vendor` にライブラリをローカル配置）
 - CSRF トークン（`X-CSRF-Token`）、`esc()` 徹底、fetch 30秒 timeout
+- SecurityAwarenessとの人物マスター連携: [`docs/awareness-participant-integration.md`](docs/awareness-participant-integration.md)
 
 ## 関連
 
