@@ -1,8 +1,8 @@
 ---
 project: /root/tet2 + /root/SecurityAwareness
 created: 2026-08-09
-status: implemented_pending_production_rollout
-execution_requires_user_confirmation: true
+status: production_rollout_completed
+execution_requires_user_confirmation: false
 recommended_source_of_truth: TET2 targets
 phase_1_tenant_scope: single configured tenant
 architecture_review: passed
@@ -10,20 +10,28 @@ architecture_review: passed
 
 # Awareness受講者と標的型メール訓練対象者の機能統合計画
 
-## 2026-08-09 実装記録
+## 2026-08-09 実装・本番稼働記録
 
 feature branch上の実装、test、security review、agy review、SQLite本番copyと一時PostgreSQLでの
-migration rehearsalまで完了した。本番DB migration、service credential設定、deploy、初回preview/applyは
-本計画のgateどおり未実施である。
+migration rehearsalを完了し、利用者の稼働開始指示後に本番rolloutまで実施した。
+
+- TET2 backup: `/var/backups/tet2/20260809T195837-900002`
+- SecurityAwareness backup: `/var/backups/security-awareness/20260809T200457-900003`
+- TET2: source drift 0、migration 7件、SQLite integrity/FK error 0、PHP test 35/35成功
+- service API: tokenなし401、tokenあり200、tenant 1固定、Bearer header転送を確認
+- Awareness: Prisma migration 2件、health 200、app/DBともloopback限定で起動
+- 初回preview: created 8、conflict 0。apply: created 8、group created 1、failed 0
+- 再preview: noop 8、conflict 0、TET2 external ID 8件がすべて一意
+- 毎日01:30（Asia/Tokyo）のparticipant syncをsystemd timerで運用する
 
 実装ではTET2のtenant固定Bearer API、永続idempotency、group/target archive、stable target ID付き結果、
 Awarenessの外部identity・journal・full snapshot・write-through UI・CSV preview/apply・single-run lockを追加した。
 API契約の正本は`docs/awareness-participant-integration.md`、Awareness側運用手順は
 `/root/SecurityAwareness/docs/TET2_PARTICIPANT_INTEGRATION.md`に記録した。
 
-残存する運用上の注意は、初回previewで実データconflictを確認すること、現在の約1,890 targetを大きく超える
-規模では逐次transactionの所要時間を再計測すること、TET2 API token rotationとproxy header trustを
-本番reverse proxy設定に合わせることである。
+残存する運用上の注意は、現在の約1,890 targetを大きく超える規模では逐次transactionの所要時間を
+再計測すること、TET2 API tokenを定期rotationすること、SecurityAwareness管理UIの外部公開先を
+既存TET2受講画面と競合しない形で別途決定することである。現状のAwareness appはloopback限定で稼働する。
 
 ## 目的
 
