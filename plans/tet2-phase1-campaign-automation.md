@@ -470,6 +470,7 @@ automation timerをdisableし、sourceを配備前backupへ戻す。DBは追加t
 | 2026-08-08 | 2 | `2457c96` 完了 | 22業務table再現、synthetic DB、migration二重実行no-op、production copy件数不変 |
 | 2026-08-08 | 3 | `2975860` 完了 | dry-run deploy、整合backup、atomic rollback、recoverable pruneを一時directoryで検証 |
 | 2026-08-09 | 4 | `ee4e53f` 完了 | DraftFactory分離、tenant/active/content検証、transaction rollback、duplicate API互換、PHP 28/28・Python PASS |
+| 2026-08-09 | 5 | `69dfcf2` 完了 | automation 3table、月次/四半期schedule、CRUD/preview/generate API、重複防止、PHP 30/30 PASS |
 
 Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件数が一致し、
 `PRAGMA foreign_key_check`は0件だった。本番DB自体へのmigration・source配備は未実施。
@@ -477,3 +478,6 @@ Step 2のproduction copy rehearsalは22業務tableすべてで適用前後の件
 Step 4の外部reviewは`codex-agy-delegate`へ読み取り専用で依頼したが、約98分応答がなく停止した。
 外部review結果は未取得で、source変更は発生していない。Codex側ではtenant分離、parameterized query、
 tracking IDの文字列性・一意性、transaction原子性を確認し、全28 PHP testとPython unittestを再実行した。
+
+Step 5のproduction copy rehearsalでは、未version管理の現行DB copyへ2 migrationを適用し、2回目はno-op、
+既存table件数不変、automation table 3件、`PRAGMA foreign_key_check` 0件を確認した。本番DBは未変更。
