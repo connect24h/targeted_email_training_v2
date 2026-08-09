@@ -42,3 +42,10 @@ proxyが外部から同headerを除去・上書きすることを確認した上
 - 削除: 両systemとも物理削除せずarchive
 
 本番適用は、DB backup、migration copy rehearsal、API疎通、SecurityAwareness previewでconflict件数を確認してから行う。
+
+## Apache
+
+`/tet2/`全体のBasic認証は維持し、連携endpointだけを
+`deploy/apache/tet2-awareness-location.conf`で除外する。
+API側のBearer認証が唯一の認証境界になるため、secret設定はversion管理せず、
+`/etc/apache2/tet2-awareness-secret.conf`へ`root:root 600`で配置する。
