@@ -17,17 +17,24 @@ function automationTemplate(string $kind, string $name, ?int $authFlag = null): 
     );
 }
 
-function automationSource(int $subjectId, int $bodyId, int $phishId): int
+function automationSource(
+    int $subjectId,
+    int $bodyId,
+    int $phishId,
+    string $status = 'done',
+    string $delivery = 'distribute',
+    int $contentCount = 6
+): int
 {
     $campaignId = Db::insert(
         'INSERT INTO campaigns
          (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
           from_address, link_mode, send_mode, content_delivery, created_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [1, 'Automation Source', 'done', $subjectId, $bodyId, $phishId,
-         'automation@example.test', 'link', 'normal', 'distribute', 1]
+        [1, 'Automation Source', $status, $subjectId, $bodyId, $phishId,
+         'automation@example.test', 'link', 'normal', $delivery, 1]
     );
-    foreach ([1, 2] as $contentNo) {
+    foreach (range(1, $contentCount) as $contentNo) {
         Db::run(
             'INSERT INTO campaign_contents
              (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id, link_mode)
@@ -57,6 +64,8 @@ function baseAutomationBody(int $sourceId, array $overrides = []): array
         'frequency' => 'monthly',
         'day_of_month' => 15,
         'generation_lead_days' => 5,
+        'assignment_mode' => 'rotate',
+        'max_occurrences' => 6,
         'time_mode' => 'fixed',
         'send_window_start' => '09:30',
         'group_ids' => [1],
@@ -70,6 +79,9 @@ $sourceId = automationSource($subjectId, $bodyId, $phishId);
 $group2 = Db::insert('INSERT INTO groups (tenant_id, name, kind) VALUES (?, ?, ?)', [1, 'Automation Group 2', 'custom']);
 Db::run('INSERT INTO target_group (target_id, group_id) VALUES (?, ?)', [2, $group2]);
 $otherGroup = Db::insert('INSERT INTO groups (tenant_id, name, kind) VALUES (?, ?, ?)', [2, 'Other Automation Group', 'custom']);
+$draftSourceId = automationSource($subjectId, $bodyId, $phishId, 'draft');
+$allDeliverySourceId = automationSource($subjectId, $bodyId, $phishId, 'done', 'all');
+$singleContentSourceId = automationSource($subjectId, $bodyId, $phishId, 'done', 'distribute', 1);
 
 echo "=== campaign automations API ===\n";
 
@@ -86,6 +98,8 @@ check($GLOBALS['__TET2_TEST_CSRF_CALLS'] === 1, 'rule作成はCSRF検証を呼�
 $automationId = (int) ($response['payload']['automation']['id'] ?? 0);
 check($automationId > 0, '作成したrule IDを返す');
 check(($response['payload']['automation']['status'] ?? '') === 'active', '初期statusはactive');
+check(($response['payload']['automation']['assignment_mode'] ?? '') === 'rotate', 'rotation modeを保存する');
+check((int) ($response['payload']['automation']['max_occurrences'] ?? 0) === 6, '実施回数を保存する');
 check(($response['payload']['automation']['group_ids'] ?? []) === [1, $group2], 'group IDsを保存する');
 check(!empty($response['payload']['automation']['next_due_at']), 'next_due_atを計算する');
 check($response['payload']['automation']['send_window_end'] === null, 'fixed modeのwindow終端をNULLへ正規化する');
@@ -127,6 +141,14 @@ $invalidBodies = [
     ]), '逆転random windowを拒否'],
     [baseAutomationBody(3), '他tenant sourceを拒否'],
     [baseAutomationBody($sourceId, ['group_ids' => [$otherGroup]]), '他tenant groupを拒否'],
+    [baseAutomationBody($sourceId, ['assignment_mode' => 'random']), '不正なassignment modeを拒否'],
+    [baseAutomationBody($sourceId, ['max_occurrences' => 0]), '実施回数0を拒否'],
+    [baseAutomationBody($sourceId, ['max_occurrences' => 121]), '実施回数121を拒否'],
+    [baseAutomationBody($sourceId, ['max_occurrences' => null]), 'rotationの実施回数未指定を拒否'],
+    [baseAutomationBody($sourceId, ['max_occurrences' => 7]), 'content数を超えるrotation回数を拒否'],
+    [baseAutomationBody($draftSourceId), '未完了sourceのrotationを拒否'],
+    [baseAutomationBody($allDeliverySourceId), '全員配信sourceのrotationを拒否'],
+    [baseAutomationBody($singleContentSourceId, ['max_occurrences' => 1]), '1contentのrotationを拒否'],
 ];
 foreach ($invalidBodies as [$invalidBody, $message]) {
     $response = automationCall('campaign_automations_handle_create', ['body' => $invalidBody]);
@@ -145,6 +167,8 @@ $response = automationCall('campaign_automations_handle_preview', [
 ]);
 check($response['code'] === 200, 'previewは200');
 check((int) ($response['payload']['preview']['target_count'] ?? 0) === 2, 'previewはactive対象者を重複除去して数える');
+check((int) ($response['payload']['preview']['content_count'] ?? 0) === 6, 'previewはcontent数を返す');
+check((int) ($response['payload']['preview']['completed_occurrences'] ?? -1) === 0, 'previewは完了回数を返す');
 check(!empty($response['payload']['preview']['occurrence_key']), 'previewはoccurrence keyを返す');
 check((int) Db::one('SELECT COUNT(*) AS n FROM campaign_automation_runs')['n'] === $beforePreviewRuns, 'previewはDBを変更しない');
 
@@ -183,5 +207,11 @@ $beforeDuplicate = (int) Db::one('SELECT COUNT(*) AS n FROM campaigns')['n'];
 $response = automationCall('campaign_automations_handle_generate_now', ['body' => ['id' => $automationId]]);
 check($response['code'] === 409, '同一occurrenceの再生成は409');
 check((int) Db::one('SELECT COUNT(*) AS n FROM campaigns')['n'] === $beforeDuplicate, '重複draftを作らない');
+
+Db::run('UPDATE campaign_automations SET max_occurrences = 1 WHERE id = ?', [$automationId]);
+$response = automationCall('campaign_automations_handle_pause', ['body' => ['id' => $automationId]]);
+check($response['code'] === 200, '完了済みruleをpauseできる');
+$response = automationCall('campaign_automations_handle_resume', ['body' => ['id' => $automationId]]);
+check($response['code'] === 409, '上限回数を完了したruleはresumeを拒否する');
 
 echo "ALL TESTS PASSED\n";

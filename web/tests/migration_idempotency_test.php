@@ -56,18 +56,26 @@ $pdo = new PDO('sqlite:' . $dbPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMO
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 2, '未適用migrationが2件ある');
-check($runner->migrate() === 2, '初回はmigrationを2件適用する');
+check(count($runner->pending()) === 3, '未適用migrationが3件ある');
+check($runner->migrate() === 3, '初回はmigrationを3件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 2,
-    'schema_migrationsへ2件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 3,
+    'schema_migrationsへ3件だけ記録される');
 check((int) $pdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, 'automation tableを3件追加する');
+check(in_array('assignment_mode', array_column(
+    $pdo->query('PRAGMA table_info(campaign_automations)')->fetchAll(),
+    'name'
+), true), 'automationへassignment_modeを追加する');
+check(in_array('max_occurrences', array_column(
+    $pdo->query('PRAGMA table_info(campaign_automations)')->fetchAll(),
+    'name'
+), true), 'automationへmax_occurrencesを追加する');
 check($pdo->query('PRAGMA foreign_key_check')->fetchAll() === [], 'foreign key違反がない');
 
 $currentPath = sys_get_temp_dir() . '/tet2-migration-current-' . getmypid() . '.sqlite';
@@ -80,11 +88,44 @@ $currentPdo->exec('DROP TABLE campaign_automation_groups');
 $currentPdo->exec('DROP TABLE campaign_automations');
 $currentPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $currentRunner = new MigrationRunner($currentPath);
-check($currentRunner->pending() === ['20260809-campaign-automations'], '現行DBはautomation migrationだけpending');
-check($currentRunner->migrate() === 1, '現行DBへautomation migrationを1件適用する');
+check($currentRunner->pending() === [
+    '20260809-campaign-automations',
+    '20260809-campaign-rotation',
+], '現行DBはautomationとrotation migrationがpending');
+check($currentRunner->migrate() === 2, '現行DBへautomationとrotation migrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
+
+$rotationPath = sys_get_temp_dir() . '/tet2-migration-rotation-' . getmypid() . '.sqlite';
+@unlink($rotationPath);
+register_shutdown_function(static fn() => @unlink($rotationPath));
+TestDatabase::create($rotationPath, false);
+$rotationPdo = new PDO('sqlite:' . $rotationPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$rotationPdo->exec('PRAGMA foreign_keys = OFF');
+$rotationPdo->exec('DROP TABLE campaign_automation_runs');
+$rotationPdo->exec('DROP TABLE campaign_automation_groups');
+$rotationPdo->exec('DROP TABLE campaign_automations');
+$rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AUTOINCREMENT)');
+$rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
+$rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
+$rotationRunner = new MigrationRunner($rotationPath);
+check($rotationRunner->migrate() === 1, '既存automation DBへrotation migrationだけ適用する');
+$rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
+$assignmentConstraint = false;
+try {
+    $rotationPdo->exec("UPDATE campaign_automations SET assignment_mode='random'");
+} catch (PDOException) {
+    $assignmentConstraint = true;
+}
+check($assignmentConstraint, 'upgrade DBでもassignment mode constraintを追加する');
+$occurrenceConstraint = false;
+try {
+    $rotationPdo->exec('UPDATE campaign_automations SET max_occurrences=0');
+} catch (PDOException) {
+    $occurrenceConstraint = true;
+}
+check($occurrenceConstraint, 'upgrade DBでもmax occurrences constraintを追加する');
 
 $unversionedPath = sys_get_temp_dir() . '/tet2-migration-unversioned-' . getmypid() . '.sqlite';
 @unlink($unversionedPath);
@@ -93,9 +134,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 2, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 2,
-    'version tableを作成して2件記録する');
+check($unversionedRunner->migrate() === 3, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 3,
+    'version tableを作成して3件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -108,7 +149,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 2, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 3, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets

@@ -44,7 +44,8 @@ final class CampaignDraftFactory
     }
 
     /**
-     * @param array{created_by:int|null,target_ids:array<int,int>,name?:string} $options
+     * @param array{created_by:int|null,target_ids:array<int,int>,name?:string,
+     *     content_no_by_target?:array<int,int>} $options
      */
     public function createFromSource(int $sourceCampaignId, int $tenantId, array $options): int
     {
@@ -58,6 +59,12 @@ final class CampaignDraftFactory
                 $tenantId,
                 $source['from_address'] !== null ? (string) $source['from_address'] : null
             );
+            $assignments = $this->validateContentAssignments(
+                $options['content_no_by_target'] ?? null,
+                $targetIds,
+                $contents,
+                (string) $source['content_delivery']
+            );
             $name = $this->draftName($options['name'] ?? null, (string) $source['name']);
 
             $draftId = $this->insertCampaign($source, $createdBy, $name);
@@ -66,7 +73,7 @@ final class CampaignDraftFactory
             if ((string) $source['content_delivery'] === 'all') {
                 $this->assignAllTargets($draftId, $targetIds, $contents);
             } else {
-                $this->assignDistributedTargets($draftId, $targetIds, $contents);
+                $this->assignDistributedTargets($draftId, $targetIds, $contents, $assignments);
             }
             return $draftId;
         };
@@ -175,6 +182,35 @@ final class CampaignDraftFactory
         }
     }
 
+    /** @return array<int, int>|null */
+    private function validateContentAssignments(
+        mixed $requested,
+        array $targetIds,
+        array $contents,
+        string $deliveryMode
+    ): ?array
+    {
+        if ($requested === null) {
+            return null;
+        }
+        if (!is_array($requested) || $deliveryMode !== 'distribute') {
+            throw new CampaignDraftValidationException('コンテンツ割当が不正です');
+        }
+        $validContentNos = array_map(static fn(array $row): int => (int) $row['content_no'], $contents);
+        $assignments = [];
+        foreach ($targetIds as $targetId) {
+            $contentNo = $requested[$targetId] ?? null;
+            if (!is_int($contentNo) || !in_array($contentNo, $validContentNos, true)) {
+                throw new CampaignDraftValidationException('対象者のコンテンツ割当が不正です');
+            }
+            $assignments[$targetId] = $contentNo;
+        }
+        if (count($assignments) !== count($requested)) {
+            throw new CampaignDraftValidationException('割当対象外の対象者が含まれています');
+        }
+        return $assignments;
+    }
+
     private function draftName(mixed $requestedName, string $sourceName): string
     {
         if ($requestedName === null) {
@@ -247,10 +283,21 @@ final class CampaignDraftFactory
     }
 
     /** @param array<int, int> $targetIds */
-    private function assignDistributedTargets(int $draftId, array $targetIds, array $contents): void
+    private function assignDistributedTargets(
+        int $draftId,
+        array $targetIds,
+        array $contents,
+        ?array $assignments
+    ): void
     {
+        $contentsByNo = [];
+        foreach ($contents as $content) {
+            $contentsByNo[(int) $content['content_no']] = $content;
+        }
         foreach ($targetIds as $index => $targetId) {
-            $content = $contents[$index % count($contents)];
+            $content = $assignments === null
+                ? $contents[$index % count($contents)]
+                : $contentsByNo[$assignments[$targetId]];
             $this->insertTarget($draftId, ['id' => $targetId, 'koban' => $index + 1], $content);
         }
     }

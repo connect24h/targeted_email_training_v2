@@ -118,3 +118,24 @@ body { background: #f4f6f9; }
 .view-panel { animation: fade .15s; }
 @keyframes fade { from {opacity:0;} to {opacity:1;} }
 .table td, .table th { font-size: .9rem; }
+
+/* ===== 大量コンテンツのキャンペーン編集 ===== */
+.campaign-content-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.content-row { background: #fff; }
+.content-row-header .min-w-0 { min-width: 0; }
+.content-row-summary {
+  display: inline-block;
+  max-width: 48rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .content-row-summary { max-width: 12rem; }
+}

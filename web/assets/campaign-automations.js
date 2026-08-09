@@ -29,7 +29,10 @@ function automationScheduleLabel(row) {
   const time = row.time_mode === 'random_window'
     ? `${row.send_window_start}〜${row.send_window_end}の間でランダム`
     : row.send_window_start;
-  return `${frequency} ${Number(row.day_of_month)}日 ${esc(time)}（${Number(row.generation_lead_days)}日前に生成）`;
+  const assignment = row.assignment_mode === 'rotate'
+    ? `個別rotation ${Number(row.completed_occurrences || 0)}/${Number(row.max_occurrences || 0)}回`
+    : '通常配分';
+  return `${frequency} ${Number(row.day_of_month)}日 ${esc(time)}（${Number(row.generation_lead_days)}日前に生成）<div class="small text-muted">${assignment}</div>`;
 }
 
 function automationActions(row, canOperate) {
@@ -80,13 +83,26 @@ function automationOptions(items, selectedIds) {
   return items.map((item) => `<option value="${Number(item.id)}"${selected.has(Number(item.id)) ? ' selected' : ''}>${esc(item.name)}</option>`).join('');
 }
 
+function automationCampaignOptions(items, selectedId) {
+  return items.map((item) => {
+    const count = Number(item.content_count || 0);
+    const label = `${item.name}（${count}コンテンツ / ${item.status}）`;
+    return `<option value="${Number(item.id)}" data-content-count="${count}" data-status="${esc(item.status)}" data-delivery="${esc(item.content_delivery)}"${Number(item.id) === Number(selectedId) ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
+
 function automationForm(row = {}) {
   const fixed = (row.time_mode || 'fixed') === 'fixed';
   const frequency = row.frequency || 'monthly';
+  const assignmentMode = row.assignment_mode || 'static';
   return `<form id="campaignAutomationForm">
     <div class="mb-2"><label class="form-label">ルール名</label><input class="form-control" name="name" maxlength="200" value="${esc(row.name)}" required></div>
-    <div class="mb-2"><label class="form-label">元キャンペーン</label><select class="form-select" name="source_campaign_id" required><option value="">選択してください</option>${automationOptions(campaignAutomationState.campaigns, [row.source_campaign_id])}</select></div>
+    <div class="mb-2"><label class="form-label">元キャンペーン</label><select class="form-select" name="source_campaign_id" required><option value="">選択してください</option>${automationCampaignOptions(campaignAutomationState.campaigns, row.source_campaign_id)}</select></div>
     <div class="mb-2"><label class="form-label">対象グループ</label><select class="form-select" name="group_ids" multiple size="5" required>${automationOptions(campaignAutomationState.groups, row.group_ids)}</select><div class="form-text">Ctrl / Command キーで複数選択できます。</div></div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-8"><label class="form-label">従業員への割当</label><select class="form-select" name="assignment_mode"><option value="static"${assignmentMode === 'static' ? ' selected' : ''}>通常の均等割り</option><option value="rotate"${assignmentMode === 'rotate' ? ' selected' : ''}>個別ローテーション（前回と別のコンテンツ）</option></select><div class="form-text" id="automationAssignmentHint">ローテーションは完了済み・均等割り・2コンテンツ以上の元キャンペーンで利用できます。</div></div>
+      <div class="col-sm-4"><label class="form-label">実施回数</label><div class="input-group"><input class="form-control" type="number" name="max_occurrences" min="1" max="120" value="${Number(row.max_occurrences || 6)}" required><span class="input-group-text">回</span></div></div>
+    </div>
     <div class="row g-2 mb-2">
       <div class="col-sm-4"><label class="form-label">周期</label><select class="form-select" name="frequency"><option value="monthly"${frequency === 'monthly' ? ' selected' : ''}>毎月</option><option value="quarterly"${frequency === 'quarterly' ? ' selected' : ''}>四半期</option></select></div>
       <div class="col-sm-4"><label class="form-label">実施日</label><input class="form-control" type="number" name="day_of_month" min="1" max="28" value="${Number(row.day_of_month || 15)}" required></div>
@@ -116,6 +132,8 @@ function automationPayload(form, id = null) {
     frequency: form.frequency.value,
     day_of_month: Number(form.day_of_month.value),
     generation_lead_days: Number(form.generation_lead_days.value),
+    assignment_mode: form.assignment_mode.value,
+    max_occurrences: Number(form.max_occurrences.value),
     time_mode: form.time_mode.value,
     send_window_start: form.send_window_start.value,
     send_window_end: form.time_mode.value === 'random_window' ? form.send_window_end.value : null,
@@ -130,6 +148,26 @@ function syncAutomationTimeMode() {
   form.send_window_end.required = random;
 }
 
+function syncAutomationAssignment() {
+  const form = $('#campaignAutomationForm');
+  const option = form.source_campaign_id.selectedOptions[0];
+  const rotate = form.assignment_mode.value === 'rotate';
+  const contentCount = Number(option?.dataset.contentCount || 0);
+  const validSource = option?.dataset.status === 'done'
+    && option?.dataset.delivery === 'distribute' && contentCount >= 2;
+  form.source_campaign_id.setCustomValidity(rotate && !validSource
+    ? '個別ローテーションには完了済み・均等割り・2コンテンツ以上のキャンペーンが必要です'
+    : '');
+  form.max_occurrences.max = String(rotate && contentCount > 0 ? Math.min(120, contentCount) : 120);
+  if (rotate && contentCount > 0 && Number(form.max_occurrences.value) > contentCount) {
+    form.max_occurrences.value = String(contentCount);
+  }
+  const hint = $('#automationAssignmentHint');
+  hint.textContent = rotate && contentCount > 0
+    ? `この元キャンペーンでは重複なしで最大${contentCount}回実施できます。`
+    : 'ローテーションは完了済み・均等割り・2コンテンツ以上の元キャンペーンで利用できます。';
+}
+
 function openAutomationModal(id = null) {
   const row = id === null ? {} : campaignAutomationState.rows[id];
   if (id !== null && !row) return;
@@ -142,7 +180,10 @@ function openAutomationModal(id = null) {
     await renderCampaignAutomations();
   });
   $('#campaignAutomationForm').time_mode.addEventListener('change', syncAutomationTimeMode);
+  $('#campaignAutomationForm').assignment_mode.addEventListener('change', syncAutomationAssignment);
+  $('#campaignAutomationForm').source_campaign_id.addEventListener('change', syncAutomationAssignment);
   syncAutomationTimeMode();
+  syncAutomationAssignment();
 }
 
 async function previewAutomation(id) {
@@ -152,6 +193,8 @@ async function previewAutomation(id) {
     <dl class="row mb-0">
       <dt class="col-5">ルール</dt><dd class="col-7">${esc(rule?.name)}</dd>
       <dt class="col-5">対象者</dt><dd class="col-7">${Number(preview.target_count || 0)}名</dd>
+      <dt class="col-5">コンテンツ</dt><dd class="col-7">${Number(preview.content_count || 0)}件</dd>
+      <dt class="col-5">進捗</dt><dd class="col-7">${Number(preview.completed_occurrences || 0)} / ${Number(rule?.max_occurrences || 0)}回</dd>
       <dt class="col-5">実施予定</dt><dd class="col-7">${esc(fmtDate(preview.send_window_start_at))}</dd>
       <dt class="col-5">draft生成予定</dt><dd class="col-7">${esc(fmtDate(preview.next_due_at))}</dd>
     </dl>

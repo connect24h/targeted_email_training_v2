@@ -1056,11 +1056,12 @@ async function loadCampaignFile(file, btn) {
 
 async function openCampaignModal(campaignId = null) {
   const isEdit = campaignId !== null;
-  const [tpls, tgts, grps, beacons] = await Promise.all([
+  const [tpls, tgts, grps, beacons, campaigns] = await Promise.all([
     api('api/templates.php', { query: { action: 'list' } }),
     api('api/targets.php', { query: { action: 'list' } }),
     api('api/groups.php', { query: { action: 'list' } }),
     api('api/campaigns.php', { query: { action: 'beacon_bases' } }),
+    api('api/campaigns.php', { query: { action: 'list' } }),
   ]);
   // 編集時は既存キャンペーンの値を取得してプリフィルする。
   let editData = null;
@@ -1091,12 +1092,29 @@ async function openCampaignModal(campaignId = null) {
   // 件名と本文が両方揃ったシナリオのみ選択肢にする。
   const scenarios = Object.values(scenarioMap).filter((s) => s.subject_id && s.body_id);
   const scenarioOptions = scenarios.map((s) => `<option value="${s.key}">${esc(s.label)}</option>`).join('');
+  const importableCampaigns = (campaigns.campaigns || []).filter((campaign) =>
+    Number(campaign.id) !== Number(campaignId) && Number(campaign.content_count || 0) > 0
+  );
+  const campaignImportOptions = importableCampaigns.map((campaign) =>
+    `<option value="${Number(campaign.id)}">${esc(campaign.name)}（${Number(campaign.content_count)}件）</option>`
+  ).join('');
   const body = `
     <form id="campaignForm">
       <div class="mb-2"><label class="form-label">キャンペーン名</label><input class="form-control" name="name" required></div>
-      <div class="d-flex justify-content-between align-items-center mb-1">
-        <label class="form-label mb-0">コンテンツ（複数選ぶと対象者へ均等配布されます）</label>
-        <button type="button" class="btn btn-sm btn-outline-primary" id="addContentBtn"><i class="bi bi-plus-lg"></i> コンテンツ追加</button>
+      <div class="campaign-content-toolbar border rounded p-2 mb-2 bg-light">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <label class="form-label mb-0">コンテンツ <span class="badge bg-primary" id="contentCountLabel">0 / 100件</span></label>
+          <div class="btn-group btn-group-sm">
+            <button type="button" class="btn btn-outline-secondary" id="collapseAllContents">すべて折りたたむ</button>
+            <button type="button" class="btn btn-outline-secondary" id="expandAllContents">すべて展開</button>
+            <button type="button" class="btn btn-outline-primary" id="addContentBtn"><i class="bi bi-plus-lg"></i> 追加</button>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-9"><label class="form-label small mb-1">過去キャンペーンから取り込む（複数選択可）</label>
+            <select class="form-select form-select-sm" id="contentImportCampaigns" multiple size="3">${campaignImportOptions}</select></div>
+          <div class="col-md-3 d-grid"><button type="button" class="btn btn-sm btn-outline-primary" id="importSelectedCampaigns">選択内容を追加</button></div>
+        </div>
       </div>
       <div id="contentsList" class="mb-2"></div>
       <div class="row g-2">
@@ -1151,11 +1169,18 @@ async function openCampaignModal(campaignId = null) {
     </form>`;
   // コンテンツ行のHTML（件名/本文/偽ログイン/配信形式/添付拡張子・zip/削除）
   const contentRow = (idx) => `
-    <div class="border rounded p-2 mb-2 content-row" data-idx="${idx}">
-      <div class="d-flex justify-content-between align-items-center mb-1">
-        <span class="badge bg-secondary">コンテンツ ${idx + 1}</span>
-        <button type="button" class="btn btn-sm btn-outline-danger del-content" ${idx === 0 ? 'style="visibility:hidden"' : ''}><i class="bi bi-trash"></i></button>
+    <div class="border rounded mb-2 content-row" data-idx="${idx}">
+      <div class="content-row-header d-flex justify-content-between align-items-center gap-2 p-2 bg-light">
+        <div class="min-w-0"><span class="badge bg-secondary">コンテンツ ${idx + 1}</span>
+          <span class="content-row-summary small text-muted ms-2"></span></div>
+        <div class="btn-group btn-group-sm flex-shrink-0">
+          <button type="button" class="btn btn-outline-secondary move-content-up" title="上へ"><i class="bi bi-arrow-up"></i></button>
+          <button type="button" class="btn btn-outline-secondary move-content-down" title="下へ"><i class="bi bi-arrow-down"></i></button>
+          <button type="button" class="btn btn-outline-secondary toggle-content" aria-expanded="true" title="折りたたむ"><i class="bi bi-chevron-up"></i></button>
+          <button type="button" class="btn btn-outline-danger del-content" ${idx === 0 ? 'style="visibility:hidden"' : ''}><i class="bi bi-trash"></i></button>
+        </div>
       </div>
+      <div class="content-row-body p-2">
       <div class="row g-2">
         <div class="col-md-12"><label class="form-label small fw-bold">シナリオ（選ぶと件名・本文が連動します）</label>
           <select class="form-select form-select-sm c-scenario">
@@ -1189,6 +1214,7 @@ async function openCampaignModal(campaignId = null) {
           <input class="form-control form-control-sm c-from" type="email" placeholder="このコンテンツ専用の送信元"></div>
         <div class="col-md-6"><label class="form-label small text-muted">ビーコンURL（任意・未指定ならキャンペーン既定）</label>
           <input class="form-control form-control-sm c-beacon" list="beaconBaseList" placeholder="このコンテンツ専用の追跡URL"></div>
+      </div>
       </div>
     </div>`;
   showModal(isEdit ? 'キャンペーン編集' : '新規キャンペーン', body, async () => {
@@ -1242,16 +1268,34 @@ async function openCampaignModal(campaignId = null) {
       toast('作成しました', 'ok');
     }
     renderCampaigns();
-  });
+  }, { size: 'xl' });
   // モーダル表示後: コンテンツリストを初期化（1行）+ 追加/削除ボタン配線
   let contentIdx = 0;
   const listEl = document.getElementById('contentsList');
+  const syncContentSummary = (row) => {
+    const scenario = row.querySelector('.c-scenario').selectedOptions[0]?.textContent || '個別指定';
+    const mode = row.querySelector('.c-linkmode').selectedOptions[0]?.textContent || '';
+    row.querySelector('.content-row-summary').textContent = `${scenario} / ${mode}`;
+  };
+  const setContentExpanded = (row, expanded) => {
+    row.querySelector('.content-row-body').classList.toggle('d-none', !expanded);
+    const button = row.querySelector('.toggle-content');
+    button.setAttribute('aria-expanded', String(expanded));
+    button.title = expanded ? '折りたたむ' : '展開する';
+    button.querySelector('i').className = expanded ? 'bi bi-chevron-up' : 'bi bi-chevron-down';
+  };
   const renumber = () => {
-    Array.from(listEl.querySelectorAll('.content-row')).forEach((row, i) => {
+    const rows = Array.from(listEl.querySelectorAll('.content-row'));
+    rows.forEach((row, i) => {
       row.querySelector('.badge').textContent = `コンテンツ ${i + 1}`;
       const del = row.querySelector('.del-content');
-      del.style.visibility = i === 0 && listEl.querySelectorAll('.content-row').length === 1 ? 'hidden' : 'visible';
+      del.style.visibility = i === 0 && rows.length === 1 ? 'hidden' : 'visible';
+      row.querySelector('.move-content-up').disabled = i === 0;
+      row.querySelector('.move-content-down').disabled = i === rows.length - 1;
+      syncContentSummary(row);
     });
+    const countLabel = document.getElementById('contentCountLabel');
+    if (countLabel) countLabel.textContent = `${rows.length} / 100件`;
   };
   // 配信形式に応じて添付拡張子/zipの有効・無効を切り替える(整合性ガード)。
   // link/form 型は本文中のリンクで追跡するため、添付拡張子・zipは意味を持たない→無効化。
@@ -1302,11 +1346,32 @@ async function openCampaignModal(campaignId = null) {
     area.classList.remove('d-none');
   };
   const addRow = (prefill = null) => {
+    if (listEl.querySelectorAll('.content-row').length >= 100) {
+      toast('コンテンツは100件までです', 'err');
+      return null;
+    }
     const wrap = document.createElement('div');
     wrap.innerHTML = contentRow(contentIdx++);
     const row = wrap.firstElementChild;
     row.querySelector('.del-content').addEventListener('click', () => { row.remove(); renumber(); });
-    row.querySelector('.c-linkmode').addEventListener('change', () => syncAttachment(row));
+    row.querySelector('.toggle-content').addEventListener('click', () => {
+      const expanded = row.querySelector('.toggle-content').getAttribute('aria-expanded') === 'true';
+      setContentExpanded(row, !expanded);
+    });
+    row.querySelector('.move-content-up').addEventListener('click', () => {
+      const previous = row.previousElementSibling;
+      if (previous) listEl.insertBefore(row, previous);
+      renumber();
+    });
+    row.querySelector('.move-content-down').addEventListener('click', () => {
+      const next = row.nextElementSibling;
+      if (next) listEl.insertBefore(next, row);
+      renumber();
+    });
+    row.querySelector('.c-linkmode').addEventListener('change', () => {
+      syncAttachment(row);
+      syncContentSummary(row);
+    });
     row.querySelector('.c-preview').addEventListener('click', () => previewContent(row));
     // シナリオ選択 → 件名・本文を連動セット。
     const scenSel = row.querySelector('.c-scenario');
@@ -1316,6 +1381,7 @@ async function openCampaignModal(campaignId = null) {
         row.querySelector('.c-subject').value = s.subject_id;
         row.querySelector('.c-body').value = s.body_id;
       }
+      syncContentSummary(row);
     });
     // 件名/本文を手動変更したら、シナリオ選択を「個別」に戻す(連動が崩れたことを示す)。
     const clearScenario = () => { scenSel.value = ''; };
@@ -1340,17 +1406,66 @@ async function openCampaignModal(campaignId = null) {
       // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
       if (scenarios.length) { scenSel.value = scenarios[0].key; scenSel.dispatchEvent(new Event('change')); }
     }
+    row.dataset.pristine = prefill ? 'false' : 'true';
+    row.addEventListener('input', () => { row.dataset.pristine = 'false'; });
+    row.addEventListener('change', () => { row.dataset.pristine = 'false'; syncContentSummary(row); });
+    setContentExpanded(row, true);
     renumber();
+    return row;
+  };
+  const importSelectedCampaigns = async () => {
+    const select = document.getElementById('contentImportCampaigns');
+    const campaignIds = Array.from(select?.selectedOptions || []).map((option) => Number(option.value));
+    if (!campaignIds.length) throw new Error('取り込むキャンペーンを選択してください');
+    const importedCampaigns = await Promise.all(campaignIds.map((id) =>
+      api('api/campaigns.php', { query: { action: 'get', id } })
+    ));
+    const importedContents = importedCampaigns.flatMap((campaign) => campaign.contents || []);
+    const rows = Array.from(listEl.querySelectorAll('.content-row'));
+    const replacePlaceholder = rows.length === 1 && rows[0].dataset.pristine === 'true';
+    const retainedCount = replacePlaceholder ? 0 : rows.length;
+    if (retainedCount + importedContents.length > 100) {
+      throw new Error(`取り込み後のコンテンツ数が100件を超えます（${retainedCount + importedContents.length}件）`);
+    }
+    if (replacePlaceholder) rows[0].remove();
+    listEl.querySelectorAll('.content-row').forEach((row) => setContentExpanded(row, false));
+    let firstImported = null;
+    importedContents.forEach((content) => {
+      const row = addRow(content);
+      if (row) setContentExpanded(row, false);
+      if (firstImported === null) firstImported = row;
+    });
+    if (firstImported) setContentExpanded(firstImported, true);
+    Array.from(select.options).forEach((option) => { option.selected = false; });
+    renumber();
+    toast(`${importedContents.length}件のコンテンツを取り込みました`, 'ok');
   };
   if (listEl) {
     const editContents = (isEdit && editData && editData.contents && editData.contents.length) ? editData.contents : null;
     if (editContents) {
-      editContents.forEach((c) => addRow(c));  // 既存コンテンツを行として復元
+      editContents.forEach((c, index) => {
+        const row = addRow(c);
+        if (row && index > 0) setContentExpanded(row, false);
+      });  // 既存コンテンツを行として復元
     } else {
       addRow(); // 初期1行(新規)
     }
     const addBtn = document.getElementById('addContentBtn');
-    if (addBtn) addBtn.addEventListener('click', () => addRow());
+    if (addBtn) addBtn.addEventListener('click', () => {
+      listEl.querySelectorAll('.content-row').forEach((row) => setContentExpanded(row, false));
+      const row = addRow();
+      if (row) setContentExpanded(row, true);
+    });
+    document.getElementById('collapseAllContents')?.addEventListener('click', () => {
+      listEl.querySelectorAll('.content-row').forEach((row) => setContentExpanded(row, false));
+    });
+    document.getElementById('expandAllContents')?.addEventListener('click', () => {
+      listEl.querySelectorAll('.content-row').forEach((row) => setContentExpanded(row, true));
+    });
+    document.getElementById('importSelectedCampaigns')?.addEventListener('click', async () => {
+      try { await importSelectedCampaigns(); }
+      catch (error) { toast(error.message, 'err'); }
+    });
   }
   // 編集時: キャンペーン本体フィールドをプリフィル。
   if (isEdit && editData && editData.campaign) {
@@ -2634,7 +2749,13 @@ function editTenant(id) {
 
 /* ========== モーダル ========== */
 let modalInstance = null;
-function showModal(title, bodyHtml, onSave) {
+function setAppModalSize(size = null) {
+  const dialog = $('#appModal .modal-dialog');
+  dialog.classList.remove('modal-sm', 'modal-lg', 'modal-xl', 'modal-fullscreen');
+  if (['sm', 'lg', 'xl', 'fullscreen'].includes(size)) dialog.classList.add(`modal-${size}`);
+}
+function showModal(title, bodyHtml, onSave, options = {}) {
+  setAppModalSize(options.size || null);
   $('#appModalTitle').textContent = title;
   $('#appModalBody').innerHTML = bodyHtml;
   const saveBtn = $('#appModalSave');
@@ -2651,6 +2772,7 @@ function showModal(title, bodyHtml, onSave) {
   modalInstance.show();
 }
 function showInfoModal(title, bodyHtml) {
+  setAppModalSize(null);
   $('#appModalTitle').textContent = title;
   $('#appModalBody').innerHTML = bodyHtml;
   const saveBtn = $('#appModalSave');

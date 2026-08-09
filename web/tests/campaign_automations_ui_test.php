@@ -27,6 +27,11 @@ ui_check(str_contains($script, "action: 'preview'"), 'preview APIを利用する
 ui_check(str_contains($script, "action: 'generate_now'"), 'draft生成APIを利用する');
 ui_check(str_contains($script, "roleAtLeast(State.user.role, 'operator')"), '動的操作をroleで制限する');
 ui_check(str_contains($script, 'last_run_status'), '最終run結果を一覧表示する');
+ui_check(str_contains($script, 'assignment_mode'), '従業員別rotation modeを設定する');
+ui_check(str_contains($script, 'max_occurrences'), '実施回数を設定する');
+ui_check(str_contains($script, 'completed_occurrences'), '完了回数を表示する');
+ui_check(str_contains($script, 'syncAutomationAssignment'), 'rotation回数をcontent数へ制限する');
+ui_check(str_contains($script, 'data-content-count'), '元campaignのcontent数をformへ渡す');
 ui_check(str_contains($script, 'esc('), 'API由来文字列をescapeする');
 ui_check(str_contains($script, 'confirm('), 'draft生成前に確認する');
 

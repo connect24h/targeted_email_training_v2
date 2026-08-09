@@ -70,12 +70,18 @@ final class CampaignAutomationRunner
         if ($targets === []) {
             return $this->recordFailure($rule, $occurrence, 'zero_targets');
         }
+        try {
+            $assignments = $this->rotationAssignments($rule, $targets);
+        } catch (Throwable $error) {
+            return $this->recordFailure($rule, $occurrence, $this->errorCode($error));
+        }
         $createdBy = array_key_exists('created_by', $options)
             ? $options['created_by']
             : ($rule['created_by'] !== null ? (int) $rule['created_by'] : null);
         return $this->generateAtomic($rule, [
             'occurrence' => $occurrence,
             'target_ids' => $targets,
+            'content_no_by_target' => $assignments,
             'created_by' => $createdBy,
         ]);
     }
@@ -107,17 +113,56 @@ final class CampaignAutomationRunner
         return array_map(static fn(array $row): int => (int) $row['id'], $rows);
     }
 
+    /** @param array<int, int> $targetIds @return array<int, int>|null */
+    private function rotationAssignments(array $rule, array $targetIds): ?array
+    {
+        if (($rule['assignment_mode'] ?? 'static') !== 'rotate') {
+            return null;
+        }
+        $contents = Db::all(
+            "SELECT cc.content_no FROM campaign_contents cc
+             JOIN campaigns c ON c.id=cc.campaign_id
+             WHERE cc.campaign_id=? AND c.tenant_id=? AND c.deleted_at IS NULL
+               AND c.content_delivery='distribute'
+             ORDER BY cc.content_no",
+            [(int) $rule['source_campaign_id'], (int) $rule['tenant_id']]
+        );
+        if (count($contents) < 2) {
+            throw new CampaignDraftValidationException('rotationには2件以上のコンテンツが必要です');
+        }
+        $generated = Db::one(
+            "SELECT COUNT(*) AS n FROM campaign_automation_runs
+             WHERE automation_id=? AND status='generated'",
+            [(int) $rule['id']]
+        );
+        $step = (int) ($generated['n'] ?? 0);
+        $contentNos = array_map(static fn(array $row): int => (int) $row['content_no'], $contents);
+        $assignments = [];
+        foreach ($targetIds as $targetId) {
+            $index = ((int) $rule['id'] + $targetId + $step) % count($contentNos);
+            $assignments[$targetId] = $contentNos[$index];
+        }
+        return $assignments;
+    }
+
     private function generateAtomic(array $rule, array $context): array
     {
         try {
             return Db::tx(function () use ($rule, $context): array {
                 $occurrence = $context['occurrence'];
                 $runId = $this->insertRun((int) $rule['id'], $occurrence, ['status' => 'claimed']);
+                $factoryOptions = [
+                    'created_by' => $context['created_by'],
+                    'target_ids' => $context['target_ids'],
+                    'name' => mb_substr($rule['name'] . ' ' . $occurrence['occurrence_key'], 0, 200),
+                ];
+                if ($context['content_no_by_target'] !== null) {
+                    $factoryOptions['content_no_by_target'] = $context['content_no_by_target'];
+                }
                 $draftId = $this->draftFactory->createFromSource(
                     (int) $rule['source_campaign_id'],
                     (int) $rule['tenant_id'],
-                    ['created_by' => $context['created_by'], 'target_ids' => $context['target_ids'],
-                     'name' => mb_substr($rule['name'] . ' ' . $occurrence['occurrence_key'], 0, 200)]
+                    $factoryOptions
                 );
                 Db::run(
                     "UPDATE campaign_automation_runs SET status='generated', generated_campaign_id=?,
@@ -179,10 +224,25 @@ final class CampaignAutomationRunner
     {
         $after = new DateTimeImmutable($occurrence['send_window_end_at'], new DateTimeZone('Asia/Tokyo'));
         $next = $this->schedule->next($rule, $after->modify('+1 second'));
+        $status = $this->hasReachedMaxOccurrences($rule) ? 'paused' : 'active';
         Db::run(
-            "UPDATE campaign_automations SET next_due_at=?, updated_at=datetime('now','localtime') WHERE id=?",
-            [$next['next_due_at'], $rule['id']]
+            "UPDATE campaign_automations SET next_due_at=?, status=?,
+             updated_at=datetime('now','localtime') WHERE id=?",
+            [$next['next_due_at'], $status, $rule['id']]
         );
+    }
+
+    private function hasReachedMaxOccurrences(array $rule): bool
+    {
+        if ($rule['max_occurrences'] === null) {
+            return false;
+        }
+        $row = Db::one(
+            "SELECT COUNT(*) AS n FROM campaign_automation_runs
+             WHERE automation_id=? AND status='generated'",
+            [(int) $rule['id']]
+        );
+        return (int) ($row['n'] ?? 0) >= (int) $rule['max_occurrences'];
     }
 
     private function errorCode(Throwable $error): string

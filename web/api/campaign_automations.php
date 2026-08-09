@@ -5,6 +5,8 @@ require_once __DIR__ . '/../lib/CampaignAutomationRunner.php';
 
 const CAMPAIGN_AUTOMATION_FREQUENCIES = ['monthly', 'quarterly'];
 const CAMPAIGN_AUTOMATION_TIME_MODES = ['fixed', 'random_window'];
+const CAMPAIGN_AUTOMATION_ASSIGNMENT_MODES = ['static', 'rotate'];
+const CAMPAIGN_AUTOMATION_MAX_OCCURRENCES = 120;
 
 function campaign_automations_required_role(string $action, string $method): string
 {
@@ -90,15 +92,50 @@ function campaign_automations_assert_owned(int $id, int $tenantId): array
     return $row;
 }
 
-function campaign_automations_assert_source(int $sourceId, int $tenantId): void
+function campaign_automations_assert_source(int $sourceId, int $tenantId): array
 {
     $source = Db::one(
-        'SELECT id FROM campaigns WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL',
+        'SELECT c.id, c.status, c.content_delivery,
+                (SELECT COUNT(*) FROM campaign_contents cc WHERE cc.campaign_id=c.id) AS content_count
+         FROM campaigns c WHERE c.id = ? AND c.tenant_id = ? AND c.deleted_at IS NULL',
         [$sourceId, $tenantId]
     );
     if ($source === null) {
         json_error('元キャンペーンが見つかりません', 404);
     }
+    return $source;
+}
+
+function campaign_automations_assert_assignment_source(
+    array $source,
+    string $assignmentMode,
+    ?int $maxOccurrences
+): void
+{
+    if ($assignmentMode !== 'rotate') {
+        return;
+    }
+    if ($maxOccurrences === null) {
+        json_error('個別ローテーションの実施回数は必須です', 400);
+    }
+    if ($source['status'] !== 'done') {
+        json_error('個別ローテーションの元キャンペーンは完了済みを選択してください', 400);
+    }
+    if ($source['content_delivery'] !== 'distribute' || (int) $source['content_count'] < 2) {
+        json_error('個別ローテーションには均等割りのコンテンツが2件以上必要です', 400);
+    }
+    if ($maxOccurrences !== null && $maxOccurrences > (int) $source['content_count']) {
+        json_error('個別ローテーションの実施回数はコンテンツ数以下で指定してください', 400);
+    }
+}
+
+function campaign_automations_completed_count(int $automationId): int
+{
+    $row = Db::one(
+        "SELECT COUNT(*) AS n FROM campaign_automation_runs WHERE automation_id=? AND status='generated'",
+        [$automationId]
+    );
+    return (int) ($row['n'] ?? 0);
 }
 
 /** @param array<int, int> $groupIds */
@@ -126,6 +163,10 @@ function campaign_automations_row(int $id, int $tenantId): array
     $row = Db::one(
         'SELECT ca.*, c.name AS source_campaign_name,
                 (SELECT COUNT(*) FROM campaign_automation_runs r WHERE r.automation_id = ca.id) AS run_count,
+                (SELECT COUNT(*) FROM campaign_automation_runs r WHERE r.automation_id = ca.id
+                 AND r.status = \'generated\') AS completed_occurrences,
+                (SELECT COUNT(*) FROM campaign_contents cc
+                 WHERE cc.campaign_id = ca.source_campaign_id) AS content_count,
                 lr.status AS last_run_status, lr.error_code AS last_run_error_code,
                 lr.generated_campaign_id AS last_generated_campaign_id,
                 COALESCE(lr.finished_at, lr.created_at) AS last_run_at
@@ -156,6 +197,8 @@ function campaign_automations_rule_data(array $body, ?array $existing = null): a
         'frequency' => $value('frequency'),
         'day_of_month' => $value('day_of_month'),
         'generation_lead_days' => $value('generation_lead_days'),
+        'assignment_mode' => $value('assignment_mode') ?? 'static',
+        'max_occurrences' => $value('max_occurrences'),
         'time_mode' => $value('time_mode'),
         'send_window_start' => $value('send_window_start'),
         'send_window_end' => $value('send_window_end'),
@@ -167,6 +210,16 @@ function campaign_automations_rule_data(array $body, ?array $existing = null): a
     $candidate['source_campaign_id'] = campaign_automations_int($candidate, 'source_campaign_id');
     $candidate['day_of_month'] = campaign_automations_int($candidate, 'day_of_month');
     $candidate['generation_lead_days'] = campaign_automations_int($candidate, 'generation_lead_days', 0);
+    $candidate['assignment_mode'] = campaign_automations_string($candidate, 'assignment_mode');
+    if (!in_array($candidate['assignment_mode'], CAMPAIGN_AUTOMATION_ASSIGNMENT_MODES, true)) {
+        json_error('assignment_mode が不正です', 400);
+    }
+    if ($candidate['max_occurrences'] !== null) {
+        $candidate['max_occurrences'] = campaign_automations_int($candidate, 'max_occurrences');
+        if ($candidate['max_occurrences'] > CAMPAIGN_AUTOMATION_MAX_OCCURRENCES) {
+            json_error('max_occurrences は120以下で指定してください', 400);
+        }
+    }
     if ($candidate['time_mode'] === 'fixed') {
         $candidate['send_window_end'] = null;
     }
@@ -238,19 +291,21 @@ function campaign_automations_handle_create(array $actor): never
     $tenantId = campaign_automations_tenant($actor, $body);
     $data = campaign_automations_rule_data($body);
     $groupIds = campaign_automations_int_array($body, 'group_ids');
-    campaign_automations_assert_source($data['source_campaign_id'], $tenantId);
+    $source = campaign_automations_assert_source($data['source_campaign_id'], $tenantId);
+    campaign_automations_assert_assignment_source($source, $data['assignment_mode'], $data['max_occurrences']);
     campaign_automations_assert_groups($groupIds, $tenantId);
     $next = campaign_automations_next($data);
     $id = Db::tx(function () use ($actor, $tenantId, $data, $groupIds, $next): int {
         $id = Db::insert(
             'INSERT INTO campaign_automations
              (tenant_id, name, source_campaign_id, frequency, day_of_month, generation_lead_days,
-              time_mode, send_window_start, send_window_end, next_due_at, status, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              assignment_mode, max_occurrences, time_mode, send_window_start, send_window_end,
+              next_due_at, status, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [$tenantId, $data['name'], $data['source_campaign_id'], $data['frequency'],
-             $data['day_of_month'], $data['generation_lead_days'], $data['time_mode'],
-             $data['send_window_start'], $data['send_window_end'], $next['next_due_at'],
-             'active', (int) ($actor['id'] ?? 0)]
+             $data['day_of_month'], $data['generation_lead_days'], $data['assignment_mode'],
+             $data['max_occurrences'], $data['time_mode'], $data['send_window_start'],
+             $data['send_window_end'], $next['next_due_at'], 'active', (int) ($actor['id'] ?? 0)]
         );
         campaign_automations_replace_groups($id, $groupIds);
         return $id;
@@ -270,17 +325,20 @@ function campaign_automations_handle_update(array $actor): never
     $groupIds = array_key_exists('group_ids', $body)
         ? campaign_automations_int_array($body, 'group_ids')
         : campaign_automations_group_ids($id);
-    campaign_automations_assert_source($data['source_campaign_id'], $tenantId);
+    $source = campaign_automations_assert_source($data['source_campaign_id'], $tenantId);
+    campaign_automations_assert_assignment_source($source, $data['assignment_mode'], $data['max_occurrences']);
     campaign_automations_assert_groups($groupIds, $tenantId);
     $next = campaign_automations_next($data);
     Db::tx(function () use ($id, $data, $groupIds, $next): void {
         Db::run(
             "UPDATE campaign_automations SET name=?, source_campaign_id=?, frequency=?, day_of_month=?,
-             generation_lead_days=?, time_mode=?, send_window_start=?, send_window_end=?, next_due_at=?,
-             updated_at=datetime('now','localtime') WHERE id=?",
+             generation_lead_days=?, assignment_mode=?, max_occurrences=?, time_mode=?,
+             send_window_start=?, send_window_end=?, next_due_at=?, updated_at=datetime('now','localtime')
+             WHERE id=?",
             [$data['name'], $data['source_campaign_id'], $data['frequency'], $data['day_of_month'],
-             $data['generation_lead_days'], $data['time_mode'], $data['send_window_start'],
-             $data['send_window_end'], $next['next_due_at'], $id]
+             $data['generation_lead_days'], $data['assignment_mode'], $data['max_occurrences'],
+             $data['time_mode'], $data['send_window_start'], $data['send_window_end'],
+             $next['next_due_at'], $id]
         );
         campaign_automations_replace_groups($id, $groupIds);
     });
@@ -295,6 +353,10 @@ function campaign_automations_set_status(array $actor, string $status): never
     $tenantId = campaign_automations_tenant($actor, $body);
     $id = campaign_automations_int($body, 'id');
     $rule = campaign_automations_assert_owned($id, $tenantId);
+    if ($status === 'active' && $rule['max_occurrences'] !== null
+        && campaign_automations_completed_count($id) >= (int) $rule['max_occurrences']) {
+        json_error('上限回数を完了した自動化ルールは再開できません', 409);
+    }
     $nextDueAt = $status === 'active' ? campaign_automations_next($rule)['next_due_at'] : $rule['next_due_at'];
     Db::run(
         "UPDATE campaign_automations SET status=?, next_due_at=?, updated_at=datetime('now','localtime') WHERE id=?",
@@ -319,11 +381,18 @@ function campaign_automations_handle_preview(array $actor): never
     $tenantId = campaign_automations_query_tenant($actor);
     $id = campaign_automations_query_id();
     $rule = campaign_automations_assert_owned($id, $tenantId);
-    campaign_automations_assert_source((int) $rule['source_campaign_id'], $tenantId);
+    $source = campaign_automations_assert_source((int) $rule['source_campaign_id'], $tenantId);
+    campaign_automations_assert_assignment_source(
+        $source,
+        (string) ($rule['assignment_mode'] ?? 'static'),
+        $rule['max_occurrences'] === null ? null : (int) $rule['max_occurrences']
+    );
     $preview = campaign_automations_next($rule);
     $preview['target_count'] = count(campaign_automations_target_ids($id, $tenantId));
     $preview['source_campaign_id'] = (int) $rule['source_campaign_id'];
     $preview['group_ids'] = campaign_automations_group_ids($id);
+    $preview['content_count'] = (int) $source['content_count'];
+    $preview['completed_occurrences'] = campaign_automations_completed_count($id);
     json_out(['success' => true, 'preview' => $preview]);
 }
 

@@ -6,6 +6,7 @@ final class MigrationRunner
     private const VERSIONS = [
         '20260808-current-schema',
         '20260809-campaign-automations',
+        '20260809-campaign-rotation',
     ];
 
     private string $dbPath;
@@ -80,7 +81,23 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-automation.sql'));
             return;
         }
+        if ($version === '20260809-campaign-rotation') {
+            $this->applyCampaignRotation($pdo);
+            return;
+        }
         throw new RuntimeException("未知のmigrationです: {$version}");
+    }
+
+    private function applyCampaignRotation(PDO $pdo): void
+    {
+        if (!$this->columnExists($pdo, 'campaign_automations', 'assignment_mode')) {
+            $pdo->exec("ALTER TABLE campaign_automations ADD COLUMN assignment_mode TEXT NOT NULL
+                DEFAULT 'static' CHECK (assignment_mode IN ('static','rotate'))");
+        }
+        if (!$this->columnExists($pdo, 'campaign_automations', 'max_occurrences')) {
+            $pdo->exec('ALTER TABLE campaign_automations ADD COLUMN max_occurrences INTEGER
+                CHECK (max_occurrences BETWEEN 1 AND 120)');
+        }
     }
 
     private function applyCurrentSchema(PDO $pdo): void

@@ -4,6 +4,7 @@ require_once __DIR__ . '/../lib/CampaignDraftFactory.php';
 const CAMPAIGN_LINK_MODES = ['link', 'attachment', 'form', 'qr'];
 const CAMPAIGN_SEND_MODES = ['normal', 'split', 'slow'];
 const CAMPAIGN_SPLIT_INTERVALS = [5, 15, 30, 60];
+const CAMPAIGN_MAX_CONTENTS = 100;
 
 function campaigns_string(array $body, string $key): string
 {
@@ -344,11 +345,13 @@ function campaigns_handle_list(array $actor): never
     $tenantId = effective_tenant_id($actor, campaigns_query_int('tenant_id'));
     $campaigns = Db::all(
         'SELECT c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test, c.created_at,
-                COUNT(ct.id) AS target_count
+                c.content_delivery, COUNT(DISTINCT ct.target_id) AS target_count,
+                (SELECT COUNT(*) FROM campaign_contents cc WHERE cc.campaign_id=c.id) AS content_count
          FROM campaigns c
          LEFT JOIN campaign_targets ct ON ct.campaign_id = c.id
          WHERE c.tenant_id = ? AND c.deleted_at IS NULL
-         GROUP BY c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test, c.created_at
+         GROUP BY c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test,
+                  c.created_at, c.content_delivery
          ORDER BY c.id DESC',
         [$tenantId]
     );
@@ -447,6 +450,9 @@ function campaigns_parse_contents(array $body, int $tenantId): array
     }
     if (count($rawContents) === 0) {
         json_error('contents は1件以上必須です', 400);
+    }
+    if (count($rawContents) > CAMPAIGN_MAX_CONTENTS) {
+        json_error('contents は100件以内で指定してください', 400);
     }
 
     $contents = [];

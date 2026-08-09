@@ -137,6 +137,18 @@ check(count($draftTargets) === 2, 'distributeは対象者ごとに1行作る');
 check(array_column($draftTargets, 'content_no') === [1, 2], 'distributeはround-robinで割り当てる');
 check(array_column($draftTargets, 'tracking_id') === ['0000009901', '0000009902'], 'tracking IDの先頭ゼロを保持する');
 
+$rotatedFactory = new CampaignDraftFactory(trackingSequence(9921));
+$rotatedDraftId = $rotatedFactory->createFromSource($sourceId, FACTORY_TENANT_ID, [
+    'created_by' => FACTORY_USER_ID,
+    'target_ids' => [$target1, $target2],
+    'content_no_by_target' => [$target1 => 2, $target2 => 1],
+]);
+$rotatedTargets = Db::all(
+    'SELECT target_id, content_no FROM campaign_targets WHERE campaign_id = ? ORDER BY koban',
+    [$rotatedDraftId]
+);
+check(array_column($rotatedTargets, 'content_no') === [2, 1], '従業員別の指定contentを割り当てる');
+
 $allSourceId = factorySource('all');
 $allFactory = new CampaignDraftFactory(trackingSequence(9911));
 $allDraftId = $allFactory->createFromSource($allSourceId, FACTORY_TENANT_ID, [

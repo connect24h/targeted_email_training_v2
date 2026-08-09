@@ -16,7 +16,7 @@ function runnerTemplate(string $kind, string $name, ?int $authFlag = null): int
     );
 }
 
-function runnerSource(int $subjectId, int $bodyId, int $phishId): int
+function runnerSource(int $subjectId, int $bodyId, int $phishId, int $contentCount = 1): int
 {
     $id = Db::insert(
         'INSERT INTO campaigns
@@ -26,12 +26,14 @@ function runnerSource(int $subjectId, int $bodyId, int $phishId): int
         [1, 'Runner Source', 'done', $subjectId, $bodyId, $phishId,
          'runner@example.test', 'link', 'normal', 'distribute', 1]
     );
-    Db::run(
-        'INSERT INTO campaign_contents
-         (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id, link_mode)
-         VALUES (?, ?, ?, ?, ?, ?)',
-        [$id, 1, $subjectId, $bodyId, $phishId, 'link']
-    );
+    for ($contentNo = 1; $contentNo <= $contentCount; $contentNo++) {
+        Db::run(
+            'INSERT INTO campaign_contents
+             (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id, link_mode)
+             VALUES (?, ?, ?, ?, ?, ?)',
+            [$id, $contentNo, $subjectId, $bodyId, $phishId, 'link']
+        );
+    }
     return $id;
 }
 
@@ -41,14 +43,16 @@ function runnerRule(int $sourceId, int $groupId, array $overrides = []): int
         'name' => 'Runner Rule',
         'status' => 'active',
         'next_due_at' => '2026-08-09 11:00:00',
+        'assignment_mode' => 'static',
+        'max_occurrences' => null,
     ], $overrides);
     $id = Db::insert(
         'INSERT INTO campaign_automations
          (tenant_id, name, source_campaign_id, frequency, day_of_month, generation_lead_days,
-          time_mode, send_window_start, next_due_at, status, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          time_mode, send_window_start, next_due_at, assignment_mode, max_occurrences, status, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [1, $data['name'], $sourceId, 'monthly', 15, 5, 'fixed', '09:30',
-         $data['next_due_at'], $data['status'], 1]
+         $data['next_due_at'], $data['assignment_mode'], $data['max_occurrences'], $data['status'], 1]
     );
     Db::run(
         'INSERT INTO campaign_automation_groups (automation_id, group_id) VALUES (?, ?)',
@@ -116,5 +120,59 @@ $again = $runner->runDue($now);
 check($again['examined'] === 0, '次回更新後の同時刻再実行はno-op');
 $audit = Db::all("SELECT detail FROM audit_log WHERE action LIKE 'campaign_automation.runner.%'");
 check(!str_contains(json_encode($audit), '@example.test'), 'runner auditへPIIを記録しない');
+
+$rotationSourceId = runnerSource($subjectId, $bodyId, $phishId, 3);
+$rotationGroup = Db::insert(
+    'INSERT INTO groups (tenant_id, name, kind) VALUES (?, ?, ?)',
+    [1, 'Runner Rotation', 'custom']
+);
+Db::run('INSERT INTO target_group (target_id, group_id) VALUES (?, ?)', [1, $rotationGroup]);
+Db::run('INSERT INTO target_group (target_id, group_id) VALUES (?, ?)', [2, $rotationGroup]);
+$rotationRuleId = runnerRule($rotationSourceId, $rotationGroup, [
+    'name' => 'Runner Rotation',
+    'assignment_mode' => 'rotate',
+    'max_occurrences' => 2,
+]);
+$firstRotation = $runner->generateOne($rotationRuleId, ['now' => $now]);
+check($firstRotation['status'] === 'generated', 'rotation初回draftを生成する');
+$firstAssignments = Db::all(
+    'SELECT target_id, content_no FROM campaign_targets WHERE campaign_id=? ORDER BY target_id',
+    [(int) $firstRotation['campaign_id']]
+);
+$secondNow = new DateTimeImmutable('2026-09-10 12:00:00', $timezone);
+$secondRotation = $runner->generateOne($rotationRuleId, ['now' => $secondNow]);
+check($secondRotation['status'] === 'generated', 'rotation2回目draftを生成する');
+$secondAssignments = Db::all(
+    'SELECT target_id, content_no FROM campaign_targets WHERE campaign_id=? ORDER BY target_id',
+    [(int) $secondRotation['campaign_id']]
+);
+foreach ($firstAssignments as $index => $firstAssignment) {
+    check(
+        $firstAssignment['target_id'] === $secondAssignments[$index]['target_id']
+        && $firstAssignment['content_no'] !== $secondAssignments[$index]['content_no'],
+        '同じ従業員へ前回と異なるcontentを割り当てる'
+    );
+}
+$rotationRule = Db::one('SELECT status FROM campaign_automations WHERE id=?', [$rotationRuleId]);
+check(($rotationRule['status'] ?? null) === 'paused', '上限回数でrotation ruleを自動pauseする');
+$thirdRotation = $runner->generateOne($rotationRuleId, [
+    'now' => new DateTimeImmutable('2026-10-10 12:00:00', $timezone),
+]);
+check($thirdRotation['status'] === 'skipped', '完了済みrotation ruleは追加生成しない');
+
+$invalidRotationRuleId = runnerRule($sourceId, $validGroup, [
+    'name' => 'Runner Invalid Rotation',
+    'assignment_mode' => 'rotate',
+    'max_occurrences' => 1,
+]);
+$invalidRotation = $runner->generateOne($invalidRotationRuleId, ['now' => $now]);
+check($invalidRotation['status'] === 'failed', '実行時に壊れたrotation sourceをfailed扱いにする');
+$invalidRotationRun = Db::one(
+    'SELECT status, error_code FROM campaign_automation_runs WHERE automation_id=?',
+    [$invalidRotationRuleId]
+);
+check(($invalidRotationRun['error_code'] ?? null) === 'draft_validation', 'rotation source不備を記録する');
+$invalidRotationRule = Db::one('SELECT next_due_at FROM campaign_automations WHERE id=?', [$invalidRotationRuleId]);
+check($invalidRotationRule['next_due_at'] > '2026-08-09 12:00:00', '壊れたrotation ruleも次回へ進める');
 
 echo "ALL TESTS PASSED\n";

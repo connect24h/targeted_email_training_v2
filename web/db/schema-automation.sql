@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS campaign_automations (
   send_window_start    TEXT NOT NULL,
   send_window_end      TEXT,
   next_due_at          TEXT NOT NULL,
+  assignment_mode      TEXT NOT NULL DEFAULT 'static'
+                       CHECK (assignment_mode IN ('static', 'rotate')),
+  max_occurrences      INTEGER CHECK (max_occurrences BETWEEN 1 AND 120),
   status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused')),
   created_by           INTEGER,
   created_at           TEXT NOT NULL DEFAULT (datetime('now','localtime')),

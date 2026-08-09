@@ -12,7 +12,7 @@ web/        Web アプリ本体（本番: /var/www/html/tet2）
   lib/        リポジトリ層・PipelineRunner 等
   db/         現行スキーマ、migration runner、seed スクリプト
   assets/     SPA アセット（app.css, vendor/ にBootstrap/Chart.jsローカル配置）
-  tests/      PHP テスト（32ファイル、合成DBを使い tests/run.sh で一括実行）
+  tests/      PHP テスト（33ファイル、合成DBを使い tests/run.sh で一括実行）
   index.html app.js take.php  SPA エントリ + 受講ページ
 bin/        メール送信処理（本番: /opt/training/bin）
   tet2-worker.py       send_schedule ポーリング → 送信起動（systemd常駐）
@@ -50,6 +50,11 @@ deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 月次・四半期のルールからレビュー用draftを自動生成できる。管理画面の「定期キャンペーン」で
 元キャンペーン、対象group、実施日、固定時刻またはランダム時間帯を設定する。生成処理は
 `send_schedule`を作らず、既存のlaunch操作を行うまでメールを送信しない。
+
+完了済みの「均等割り」キャンペーンをコンテンツpoolとして選ぶと、従業員ごとに前回とは別の
+コンテンツを割り当てる個別rotationを設定できる。実施回数はpool内のコンテンツ数以下に制限され、
+上限到達後はruleが自動停止する。キャンペーン編集画面は最大100コンテンツに対応し、過去の
+複数キャンペーンからの一括取込、折りたたみ、並べ替えを利用できる。
 
 runner、DB migration、systemd unitは本番へ配備済みである。2026-08-09に停止状態の
 pilotでdraft生成まで確認し、automation timerはenabled・activeである。24時間の

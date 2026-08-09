@@ -205,6 +205,27 @@ $res = create(base_body([
 ]));
 check($res['code'] === 201, 'CB-2 multi-content 2件 → 201');
 
+$baseContent = [
+    'subject_template_id' => 9001,
+    'body_template_id' => 9002,
+    'phish_template_id' => 9003,
+    'link_mode' => 'link',
+];
+$twentyContents = array_fill(0, 20, $baseContent);
+$res = create(base_body(['name' => 'CB-20', 'contents' => $twentyContents]));
+check($res['code'] === 201, 'CB-20 multi-content 20件 → 201');
+$twentyCampaignId = (int) ($res['payload']['campaign']['id'] ?? 0);
+check((int) Db::one(
+    'SELECT COUNT(*) AS n FROM campaign_contents WHERE campaign_id=?',
+    [$twentyCampaignId]
+)['n'] === 20, 'CB-20 contentを20件保存する');
+
+$res = create(base_body([
+    'name' => 'CB-101',
+    'contents' => array_fill(0, 101, $baseContent),
+]));
+check($res['code'] === 400, 'CB-101 multi-content 101件を拒否する');
+
 // CB-4: テンプレートも contents も指定なし → 400
 $res = create([
     'name'         => 'CB-4',
