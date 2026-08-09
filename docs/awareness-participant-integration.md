@@ -45,7 +45,8 @@ proxyが外部から同headerを除去・上書きすることを確認した上
 
 ## Apache
 
-`/tet2/`全体のBasic認証は維持し、連携endpointだけを
-`deploy/apache/tet2-awareness-location.conf`で除外する。
+`/tet2/`全体のBasic認証は維持し、filesend SSL VirtualHost内の既存
+`<Location /tet2>`を`deploy/apache/filesend-vhost-awareness.inc`の内容へ置き換える。
+`RequireAny`の環境変数条件に一致する連携endpointだけをBasic認証から除外する。
 API側のBearer認証が唯一の認証境界になるため、secret設定はversion管理せず、
 `/etc/apache2/tet2-awareness-secret.conf`へ`root:root 600`で配置する。
