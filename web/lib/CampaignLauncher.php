@@ -29,6 +29,14 @@ final class CampaignLauncher
             return [false, $error, 0];
         }
 
+        // 生成済みCSVの宛先を、scheduleを公開する前に検証する。
+        // 生成時のリダイレクトだけでは、生成後にCSVが差し替わった場合や
+        // 古い本番CSVが残っていた場合に本番アドレスへ送られてしまう。
+        [$safeOk, $safeErr] = self::assertTestRecipientsOnly($campaignId, $dataDir);
+        if (!$safeOk) {
+            return [false, $safeErr, 0];
+        }
+
         try {
             $batches = Scheduler::expand($campaignId);
         } catch (Throwable $e) {
@@ -38,6 +46,91 @@ final class CampaignLauncher
             return [false, '対象者がいません', 0];
         }
         return [true, '', $batches];
+    }
+
+    /**
+     * 再開(resume)など prepare を経由しない経路から宛先検証だけを行うための入口。
+     *
+     * @return array{0:bool,1:string}
+     */
+    public static function assertTestRecipientsSafe(int $campaignId, string $dataDir): array
+    {
+        return self::assertTestRecipientsOnly($campaignId, $dataDir);
+    }
+
+    /**
+     * is_test=1 のとき、生成済み list.csv の宛先が test_redirect_emails だけであることを保証する。
+     *
+     * 1件でも本番アドレスが混ざっていれば schedule を公開せず中止する。
+     * 生成時のリダイレクトとは独立した最終関門で、送信直前の実ファイルを見る。
+     * 送信scriptは is_test を見ずCSVの「送信先情報」列をそのまま使うため、
+     * ここを通さないと本番アドレスへの誤送信を止められない。
+     *
+     * @return array{0:bool,1:string}
+     */
+    private static function assertTestRecipientsOnly(int $campaignId, string $dataDir): array
+    {
+        $campaign = Db::one(
+            'SELECT is_test, test_redirect_emails FROM campaigns WHERE id = ?',
+            [$campaignId]
+        );
+        if ($campaign === null || (int) ($campaign['is_test'] ?? 0) !== 1) {
+            return [true, ''];  // 本番送信はここでは判定しない
+        }
+
+        $allowed = [];
+        foreach (preg_split('/[,\s]+/', (string) ($campaign['test_redirect_emails'] ?? '')) as $email) {
+            $email = strtolower(trim($email));
+            if ($email !== '') {
+                $allowed[$email] = true;
+            }
+        }
+        if ($allowed === []) {
+            return [false, 'テスト送信ですがテスト宛先が未設定です'];
+        }
+
+        $csvPath = rtrim($dataDir, '/') . '/list.csv';
+        if (!is_file($csvPath)) {
+            return [false, '送信データ(list.csv)が見つかりません'];
+        }
+        $handle = fopen($csvPath, 'r');
+        if ($handle === false) {
+            return [false, '送信データ(list.csv)を読み取れません'];
+        }
+
+        try {
+            $header = fgetcsv($handle);
+            if ($header === false) {
+                return [false, '送信データ(list.csv)が空です'];
+            }
+            $toIndex = array_search('送信先情報', $header, true);
+            if ($toIndex === false) {
+                return [false, '送信データに「送信先情報」列がありません'];
+            }
+
+            $line = 1;
+            while (($row = fgetcsv($handle)) !== false) {
+                $line++;
+                if ($row === [null] || $row === []) {
+                    continue;  // 空行
+                }
+                $to = strtolower(trim((string) ($row[$toIndex] ?? '')));
+                if ($to === '') {
+                    return [false, "送信データ{$line}行目の宛先が空です"];
+                }
+                if (!isset($allowed[$to])) {
+                    // 混入したアドレスは晒さない。行番号だけ返して調査の起点にする
+                    return [
+                        false,
+                        "テスト送信ですが{$line}行目にテスト宛先以外が含まれるため中止しました",
+                    ];
+                }
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        return [true, ''];
     }
 
     /** @return array{0:bool,1:string} */

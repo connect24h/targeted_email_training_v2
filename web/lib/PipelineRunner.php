@@ -138,12 +138,13 @@ final class PipelineRunner
         $base = rtrim($urlBase, '/');
         // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
         $redirect = self::resolveTestRedirect($c);
-        $targets = self::selectTestMatrixTargets($targets, $redirect);
+        $ri = 0;
         foreach ($targets as $t) {
             $surname = self::surname((string) $t['to_name']);
             $tid = (string) $t['tracking_id'];
             // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
-            $sendTo = (string) ($t['test_send_to'] ?? $t['to_email']);
+            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
+            $ri++;
             if ($linkMode === 'attachment') {
                 $bodyUrl = $base . '/';         // 添付型: 本文はトップ。追跡は添付内ビーコン(kunren-beacon-{tid}.png)
                 $attachNo = 1;                   // 添付を付ける
@@ -256,7 +257,7 @@ final class PipelineRunner
         $fromAddr = (string) ($c['from_address'] ?? '');
         // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
         $redirect = self::resolveTestRedirect($c);
-        $targets = self::selectTestMatrixTargets($targets, $redirect);
+        $ri = 0;
 
         foreach ($targets as $t) {
             $targetContentNo = (int) ($t['content_no'] ?? 1); // デフォルトは1
@@ -305,7 +306,8 @@ final class PipelineRunner
             }
 
             // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
-            $sendTo = (string) ($t['test_send_to'] ?? $t['to_email']);
+            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
+            $ri++;
 
             $rows[] = [
                 (int) $t['koban'],                 // 項番
@@ -412,32 +414,6 @@ final class PipelineRunner
         return $emails;
     }
 
-    /**
-     * TESTは本番対象全件を転送せず、各contentを各test宛先へ1通ずつ割り当てる。
-     * tracking IDを使い回さず、各contentで利用可能な元行数を上限にする。
-     */
-    private static function selectTestMatrixTargets(array $targets, array $redirect): array
-    {
-        if ($redirect === []) {
-            return $targets;
-        }
-        $byContent = [];
-        foreach ($targets as $target) {
-            $contentNo = (int) ($target['content_no'] ?? 1);
-            $byContent[$contentNo][] = $target;
-        }
-
-        $selected = [];
-        foreach ($byContent as $contentTargets) {
-            $recipientLimit = min(count($contentTargets), count($redirect));
-            foreach (array_slice($redirect, 0, $recipientLimit) as $index => $email) {
-                $target = $contentTargets[$index];
-                $target['test_send_to'] = $email;
-                $selected[] = $target;
-            }
-        }
-        return $selected;
-    }
 
     private static function writeCsv(string $path, array $rows): void
     {

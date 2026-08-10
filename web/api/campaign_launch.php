@@ -87,6 +87,12 @@ try {
                 @unlink($flag);
             }
         }
+        // 再開は prepare を通らず既存の list.csv をそのまま使うため、ここでも宛先を検証する。
+        // 停止中にCSVが差し替わっていた場合に本番アドレスへ送るのを防ぐ。
+        [$safeOk, $safeErr] = CampaignLauncher::assertTestRecipientsSafe($campaignId, $dir);
+        if (!$safeOk) {
+            json_error($safeErr, 409);
+        }
         // 未送信 koban を再展開。Scheduler::expand は send_status='sent' を除外して未送信のみを
         // バッチ化する(停止点からの再開)。running/claimed の実行中バッチは触らない。
         $count = Scheduler::expandRemaining($campaignId);

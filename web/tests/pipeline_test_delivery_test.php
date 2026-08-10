@@ -58,10 +58,19 @@ $trackingIndex = array_search('乱数列', $header, true);
 $recipients = array_column($rows, $toIndex);
 $trackingIds = array_column($rows, $trackingIndex);
 
-check(count($rows) === 12, 'TESTは4content×3テスト宛先=12通だけ生成する');
-foreach (['tester1@example.test', 'tester2@example.test', 'tester3@example.test'] as $recipient) {
-    check(count(array_keys($recipients, $recipient, true)) === 4, "{$recipient}へ各contentを1通ずつ割り当てる");
+// TESTでも本番対象の全行(5人×4content=20行)を生成する。差し込みデータと
+// tracking_id は本番同等のまま、実際の送信先(To)だけをテスト宛先へ均等分配する。
+// これが元の仕様であり、件数を絞ると「全職員分のデータを送るテスト」ができない。
+check(count($rows) === 20, 'TESTでも本番対象の全行を生成する(5人×4content)');
+
+// 20行を3宛先へ i % 3 で分配するので 7 / 7 / 6 になる
+$expected = ['tester1@example.test' => 7, 'tester2@example.test' => 7, 'tester3@example.test' => 6];
+foreach ($expected as $recipient => $count) {
+    check(
+        count(array_keys($recipients, $recipient, true)) === $count,
+        "{$recipient}へ均等分配される({$count}通)"
+    );
 }
-check(count(array_unique($trackingIds)) === 12, 'TEST行もtracking IDを重複させない');
+check(count(array_unique($trackingIds)) === 20, 'TEST行もtracking IDを重複させない');
 
 echo "ALL TESTS PASSED\n";
