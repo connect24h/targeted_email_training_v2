@@ -62,6 +62,16 @@ def next_window(now, campaign):
     return candidate
 
 
+def validate_data_dir(data_dir):
+    """送信プロセスが必要なcampaign directoryへ書き込めることを事前検証する。"""
+    for path in (data_dir, os.path.join(data_dir, "logs")):
+        if not os.path.isdir(path):
+            return f"送信ディレクトリがありません: {path}"
+        if not os.access(path, os.W_OK | os.X_OK):
+            return f"送信ディレクトリへ書き込みできません: {path}"
+    return None
+
+
 def claim_batch(conn, busy_campaign_ids=None):
     """queued かつ scheduled_at 到来のバッチを1件、排他クレームして返す。
 
@@ -138,6 +148,11 @@ def start_batch(conn, batch):
         conn.execute("UPDATE send_schedule SET status='cancelled' WHERE id=?", (batch["id"],))
         conn.commit()
         log(f"batch {batch['id']} 停止フラグ検出 → cancelled")
+        return None
+
+    permission_error = validate_data_dir(data_dir)
+    if permission_error is not None:
+        _fail(conn, batch, permission_error)
         return None
 
     interval = str(batch["interval_sec"] or 3)
@@ -281,6 +296,17 @@ def _fail(conn, batch, reason):
     conn.execute(
         "UPDATE send_schedule SET status='failed', attempts=attempts+1 WHERE id=?",
         (batch["id"],),
+    )
+    # 失敗後に後続batchが走り続けないよう同一campaignを安全側へ停止する。
+    conn.execute(
+        "UPDATE send_schedule SET status='cancelled' "
+        "WHERE campaign_id=? AND status='queued'",
+        (batch["campaign_id"],),
+    )
+    conn.execute(
+        "UPDATE campaigns SET status='paused' "
+        "WHERE id=? AND status IN ('draft','scheduled','running')",
+        (batch["campaign_id"],),
     )
     conn.commit()
     log(f"batch {batch['id']} 失敗: {reason}")

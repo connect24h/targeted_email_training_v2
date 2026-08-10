@@ -64,6 +64,19 @@ Db::run('UPDATE campaigns SET data_dir = ? WHERE id = ?', [$tmpDir, $campaignId]
 require_once __DIR__ . '/../lib/PipelineRunner.php';
 $dir = PipelineRunner::generateCsv($campaignId);
 
+// Web(PHP)がumask=0022で作成したディレクトリでも、送信worker(training:www-data)が
+// ログ・状態ファイルを書けるよう、生成のたびにgroup write + setgidへ正規化する。
+chmod($dir, 0755);
+chmod($dir . '/logs', 0755);
+chmod($dir . '/Attachment', 0755);
+PipelineRunner::generateCsv($campaignId);
+clearstatcache(true, $dir);
+clearstatcache(true, $dir . '/logs');
+clearstatcache(true, $dir . '/Attachment');
+check((fileperms($dir) & 07777) === 02775, 'data_dirを2775へ正規化する');
+check((fileperms($dir . '/logs') & 07777) === 02775, 'logsを2775へ正規化する');
+check((fileperms($dir . '/Attachment') & 07777) === 02775, 'Attachmentを2775へ正規化する');
+
 $attachCsv = array_map('str_getcsv', array_filter(explode("\n", str_replace("\r", '', file_get_contents($dir . '/Attachment.csv'))), fn($l) => $l !== ''));
 $extByNo = [];
 foreach (array_slice($attachCsv, 1) as $row) { $extByNo[$row[0]] = $row[2]; }

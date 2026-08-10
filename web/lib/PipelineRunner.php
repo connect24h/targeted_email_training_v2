@@ -376,8 +376,13 @@ final class PipelineRunner
 
     private static function ensureDir(string $dir): void
     {
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        if (!is_dir($dir) && !mkdir($dir, 02775, true) && !is_dir($dir)) {
             throw new RuntimeException("ディレクトリ作成に失敗: {$dir}");
+        }
+        // mkdirのmodeはプロセスumaskで削られるため、作成済みの場合も毎回正規化する。
+        // setgidにより配下をwww-data groupへ継承し、Webと送信workerの双方が書き込める。
+        if (!chmod($dir, 02775)) {
+            throw new RuntimeException("ディレクトリ権限の設定に失敗: {$dir}");
         }
     }
 
