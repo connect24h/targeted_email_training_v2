@@ -138,13 +138,12 @@ final class PipelineRunner
         $base = rtrim($urlBase, '/');
         // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
         $redirect = self::resolveTestRedirect($c);
-        $ri = 0;
+        $targets = self::selectTestMatrixTargets($targets, $redirect);
         foreach ($targets as $t) {
             $surname = self::surname((string) $t['to_name']);
             $tid = (string) $t['tracking_id'];
             // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
-            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
-            $ri++;
+            $sendTo = (string) ($t['test_send_to'] ?? $t['to_email']);
             if ($linkMode === 'attachment') {
                 $bodyUrl = $base . '/';         // 添付型: 本文はトップ。追跡は添付内ビーコン(kunren-beacon-{tid}.png)
                 $attachNo = 1;                   // 添付を付ける
@@ -257,7 +256,7 @@ final class PipelineRunner
         $fromAddr = (string) ($c['from_address'] ?? '');
         // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
         $redirect = self::resolveTestRedirect($c);
-        $ri = 0;
+        $targets = self::selectTestMatrixTargets($targets, $redirect);
 
         foreach ($targets as $t) {
             $targetContentNo = (int) ($t['content_no'] ?? 1); // デフォルトは1
@@ -306,8 +305,7 @@ final class PipelineRunner
             }
 
             // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
-            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
-            $ri++;
+            $sendTo = (string) ($t['test_send_to'] ?? $t['to_email']);
 
             $rows[] = [
                 (int) $t['koban'],                 // 項番
@@ -389,10 +387,7 @@ final class PipelineRunner
     /**
      * テストモードの宛先リダイレクト先を返す。
      * is_test=1 かつ test_redirect_emails が設定されていれば、その email 配列を返す。
-     * そうでなければ空配列(=リダイレクトしない=本番の宛先をそのまま使う)。
-     *
-     * これにより「本番の1000名分の差し込みデータ・tracking_id はそのまま生成しつつ、
-     * 実際の送信先(To)だけを少数のテストアカウントに均等分配」できる。
+     * 本番宛先への誤送信を防ぐため、test modeで有効な宛先がなければ失敗させる。
      */
     private static function resolveTestRedirect(array $c): array
     {
@@ -401,7 +396,7 @@ final class PipelineRunner
         }
         $raw = trim((string) ($c['test_redirect_emails'] ?? ''));
         if ($raw === '') {
-            return [];
+            throw new RuntimeException('テスト送信先が未設定です');
         }
         $emails = [];
         foreach (preg_split('/[,\s]+/', $raw) as $e) {
@@ -410,7 +405,38 @@ final class PipelineRunner
                 $emails[] = $e;
             }
         }
+        $emails = array_values(array_unique($emails));
+        if ($emails === []) {
+            throw new RuntimeException('有効なテスト送信先がありません');
+        }
         return $emails;
+    }
+
+    /**
+     * TESTは本番対象全件を転送せず、各contentを各test宛先へ1通ずつ割り当てる。
+     * tracking IDを使い回さず、各contentで利用可能な元行数を上限にする。
+     */
+    private static function selectTestMatrixTargets(array $targets, array $redirect): array
+    {
+        if ($redirect === []) {
+            return $targets;
+        }
+        $byContent = [];
+        foreach ($targets as $target) {
+            $contentNo = (int) ($target['content_no'] ?? 1);
+            $byContent[$contentNo][] = $target;
+        }
+
+        $selected = [];
+        foreach ($byContent as $contentTargets) {
+            $recipientLimit = min(count($contentTargets), count($redirect));
+            foreach (array_slice($redirect, 0, $recipientLimit) as $index => $email) {
+                $target = $contentTargets[$index];
+                $target['test_send_to'] = $email;
+                $selected[] = $target;
+            }
+        }
+        return $selected;
     }
 
     private static function writeCsv(string $path, array $rows): void

@@ -37,13 +37,21 @@ deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 
 ## メール送信フロー
 
-`tet2-worker.py`（systemd常駐）が `send_schedule` をポーリングし、送信バッチを検出すると:
+管理画面の開始操作は送信scheduleを公開する前に、次を同期実行する:
 
 1. `PipelineRunner::generateCsv(campaignId)`（PHP CLI）で DB → 送信用CSV生成
 2. `create_beacon_files.py` でビーコン/リンク/添付を生成
-3. `send_email.py --data-dir ... --interval ... --auto-pause` で SMTP 送信
+3. 全行の必須生成物を検証し、成功後にだけ`send_schedule`を作成
 
-緊急停止は data_dir に `stop_sending.flag` を置くとバッチが `cancelled` になる。
+`tet2-worker.py`（systemd常駐）は`scheduled/running`キャンペーンのdue batchだけを取得し、
+生成済みデータを再検証して`send_email.py`でSMTP送信する。必須添付の欠落・読取不能・
+追加失敗は本文だけで送信せず、campaignを一時停止する。
+
+TESTキャンペーンは本番対象全件をテスト宛先へ転送しない。各contentにつき各テスト宛先へ
+最大1通の検証matrixを作り、元のtracking IDを重複利用しない。全content配信のsplit/slowは
+content行数ではなく重複のない従業員項番で分割する。
+
+緊急停止は data_dir に `stop_sending.flag` を置くとバッチが`cancelled`、campaignが`paused`になる。
 
 ## 定期キャンペーン
 

@@ -26,7 +26,8 @@ final class Scheduler
         Db::run("DELETE FROM send_schedule WHERE campaign_id = ? AND status IN ('queued','cancelled')", [$campaignId]);
 
         $kobans = Db::all(
-            'SELECT koban FROM campaign_targets WHERE campaign_id = ? ORDER BY koban',
+            'SELECT DISTINCT koban FROM campaign_targets
+             WHERE campaign_id = ? AND koban IS NOT NULL ORDER BY koban',
             [$campaignId]
         );
         if (count($kobans) === 0) {
@@ -115,8 +116,9 @@ final class Scheduler
         Db::run("DELETE FROM send_schedule WHERE campaign_id = ? AND status IN ('queued','cancelled')", [$campaignId]);
 
         $kobans = Db::all(
-            "SELECT koban FROM campaign_targets
+            "SELECT DISTINCT koban FROM campaign_targets
              WHERE campaign_id = ? AND send_status != 'sent'
+               AND koban IS NOT NULL
              ORDER BY koban",
             [$campaignId]
         );

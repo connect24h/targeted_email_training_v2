@@ -76,20 +76,25 @@ print_plan() {
 }
 
 backup_sources() {
-  local source category relative destination state destination_hash backup_file
+  local source category relative destination state destination_hash backup_file mode uid gid
   mkdir -p "$TET2_BACKUP_DIR/files" "$TET2_BACKUP_DIR/db"
-  printf '# category\trelative\tstate\tsha256\n' > "$TET2_BACKUP_DIR/files.tsv"
+  printf '# category\trelative\tstate\tsha256\tmode\tuid\tgid\n' > "$TET2_BACKUP_DIR/files.tsv"
   while IFS=$'\t' read -r source category relative destination; do
     state=MISSING
     destination_hash=-
+    mode=-
+    uid=-
+    gid=-
     if [[ -f $destination ]]; then
       state=PRESENT
       destination_hash=$(sha256sum "$destination" | awk '{print $1}')
+      read -r mode uid gid < <(stat -c '%a %u %g' "$destination")
       backup_file="$TET2_BACKUP_DIR/files/$category/$relative"
       mkdir -p "$(dirname "$backup_file")"
-      cp --preserve=mode,timestamps "$destination" "$backup_file"
+      cp --preserve=all "$destination" "$backup_file"
     fi
-    printf '%s\t%s\t%s\t%s\n' "$category" "$relative" "$state" "$destination_hash" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$category" "$relative" "$state" "$destination_hash" "$mode" "$uid" "$gid" \
       >> "$TET2_BACKUP_DIR/files.tsv"
   done < "$TET2_MAPPING_FILE"
   sqlite3 -readonly "$TET2_DB_PATH" "VACUUM INTO '$TET2_BACKUP_DIR/db/tet2.sqlite';"
@@ -124,11 +129,13 @@ verify_runtime_access() {
 }
 
 write_deployed_manifest() {
-  local source category relative destination
-  printf '# category\trelative\tsha256\n' > "$TET2_BACKUP_DIR/deployed.tsv"
+  local source category relative destination mode uid gid
+  printf '# category\trelative\tsha256\tmode\tuid\tgid\n' > "$TET2_BACKUP_DIR/deployed.tsv"
   while IFS=$'\t' read -r source category relative destination; do
-    printf '%s\t%s\t%s\n' "$category" "$relative" \
-      "$(sha256sum "$destination" | awk '{print $1}')" >> "$TET2_BACKUP_DIR/deployed.tsv"
+    read -r mode uid gid < <(stat -c '%a %u %g' "$destination")
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$category" "$relative" \
+      "$(sha256sum "$destination" | awk '{print $1}')" "$mode" "$uid" "$gid" \
+      >> "$TET2_BACKUP_DIR/deployed.tsv"
   done < "$TET2_MAPPING_FILE"
 }
 

@@ -70,9 +70,9 @@ validate_config() {
 }
 
 validate_manifest() {
-  local category relative state expected backup_file actual key
+  local category relative state expected mode uid gid backup_file actual key metadata
   declare -A seen=()
-  while IFS=$'\t' read -r category relative state expected; do
+  while IFS=$'\t' read -r category relative state expected mode uid gid; do
     [[ $category == \#* ]] && continue
     destination_for "$category" "$relative" > /dev/null
     key="$category/$relative"
@@ -85,8 +85,17 @@ validate_manifest() {
         [[ -f $backup_file && ! -L $backup_file ]] || { echo "backup fileが不正です: $key" >&2; return 1; }
         actual=$(sha256sum "$backup_file" | awk '{print $1}')
         [[ $actual == "$expected" ]] || { echo "backup checksum不一致: $key" >&2; return 1; }
+        if [[ -n ${mode:-} ]]; then
+          [[ $mode =~ ^[0-7]{3,4}$ && $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ ]] \
+            || { echo "backup metadata形式が不正です: $key" >&2; return 1; }
+          metadata=$(stat -c '%a:%u:%g' "$backup_file")
+          [[ $metadata == "$mode:$uid:$gid" ]] \
+            || { echo "backup metadata不一致: $key" >&2; return 1; }
+        fi
         ;;
-      MISSING) [[ $expected == - ]] || { echo "MISSING entryが不正です: $key" >&2; return 1; } ;;
+      MISSING)
+        [[ $expected == - ]] || { echo "MISSING entryが不正です: $key" >&2; return 1; }
+        ;;
       *) echo "manifest stateが不正です: $state" >&2; return 1 ;;
     esac
   done < "$TET2_BACKUP_DIR/files.tsv"
@@ -135,13 +144,13 @@ save_current_file() {
   local saved="$TET2_BACKUP_DIR/rollback-current/$category/$relative"
   if [[ -f $destination && ! -e $saved ]]; then
     mkdir -p "$(dirname "$saved")"
-    cp --preserve=mode,timestamps "$destination" "$saved"
+    cp --preserve=all "$destination" "$saved"
   fi
 }
 
 restore_files() {
-  local category relative state expected destination backup_file removed mode actual
-  while IFS=$'\t' read -r category relative state expected; do
+  local category relative state expected mode uid gid destination backup_file removed actual
+  while IFS=$'\t' read -r category relative state expected mode uid gid; do
     [[ $category == \#* ]] && continue
     destination=$(destination_for "$category" "$relative")
     save_current_file "$destination" "$category" "$relative"
@@ -150,8 +159,12 @@ restore_files() {
       actual=$(sha256sum "$backup_file" | awk '{print $1}')
       [[ $actual == "$expected" ]] || { echo "backup checksum不一致: $category/$relative" >&2; exit 1; }
       mkdir -p "$(dirname "$destination")"
-      mode=$(stat -c '%a' "$backup_file")
-      install -m "$mode" "$backup_file" "$destination"
+      if [[ -n ${mode:-} ]]; then
+        install -o "$uid" -g "$gid" -m "$mode" "$backup_file" "$destination"
+      else
+        mode=$(stat -c '%a' "$backup_file")
+        install -m "$mode" "$backup_file" "$destination"
+      fi
     elif [[ $state == MISSING && -e $destination ]]; then
       removed="$TET2_BACKUP_DIR/rollback-removed/$category/$relative"
       mkdir -p "$(dirname "$removed")"

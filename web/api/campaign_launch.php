@@ -49,12 +49,12 @@ try {
             }
             json_error('送信データの生成に失敗しました: ' . $genErr, 500);
         }
-        Db::run("UPDATE campaigns SET status='scheduled' WHERE id=?", [$campaignId]);
-        // 停止フラグが残っていれば解除
+        // scheduleをworkerから見える状態へ変える前に、前回の停止フラグを解除する。
         $flag = rtrim((string) $campaign['data_dir'], '/') . '/stop_sending.flag';
-        if ($flag !== '/stop_sending.flag' && is_file($flag)) {
-            @unlink($flag);
+        if ($flag !== '/stop_sending.flag' && is_file($flag) && !unlink($flag)) {
+            json_error('停止フラグを解除できないため開始を中止しました', 500);
         }
+        Db::run("UPDATE campaigns SET status='scheduled' WHERE id=?", [$campaignId]);
         audit('campaign.launch', 'campaign_id=' . $campaignId . ',batches=' . $count);
         json_out(['success' => true, 'batches' => $count, 'status' => 'scheduled']);
     }

@@ -2,6 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SEND_EMAIL_PATH = Path(__file__).resolve().parents[1] / "send_email.py"
@@ -39,6 +40,22 @@ class RequiredAttachmentValidationTest(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+
+    def test_should_never_clear_operator_stop_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stop_file = Path(temp_dir) / "stop_sending.flag"
+            stop_file.write_text("stopped\n", encoding="utf-8")
+            sender = send_email.TargetedEmailSender.__new__(send_email.TargetedEmailSender)
+            sender.stop_file = str(stop_file)
+            sender.logger = mock.Mock()
+            sender.operation_logger = mock.Mock()
+            sender.update_status = mock.Mock()
+            sender.validate_email_data = mock.Mock(side_effect=ValueError("fixture"))
+
+            with self.assertRaises(ValueError):
+                sender.send_bulk_emails()
+
+            self.assertTrue(stop_file.exists())
 
 
 if __name__ == "__main__":

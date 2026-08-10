@@ -745,11 +745,6 @@ class TargetedEmailSender:
         self.logger.info("一括メール送信開始")
         self.operation_logger.info(f"一括メール送信開始 (送信間隔: {interval}秒, 開始行: {(start_row or 0) + 1}, 終了行: {(end_row + 1) if end_row is not None else '最後まで'})")
 
-        # 停止ファイルを削除（新規開始時）。キャンペーン別の data_dir 配下。
-        if os.path.exists(self.stop_file):
-            os.remove(self.stop_file)
-            self.logger.info("停止ファイルをクリアしました")
-
         # データ検証
         try:
             valid_count, invalid_count, validation_errors = self.validate_email_data()

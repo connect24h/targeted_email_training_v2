@@ -7,6 +7,9 @@
 - `bin/config.ini`、DB実体、log、runtime data、credentialはsource deploy対象外
 - delete同期、migration、`daemon-reload`、service restartは自動実行しない
 - apply前に上書き対象source、unit、cronとSQLiteの整合backupを作る
+- 配備modeはsourceのambient modeを使わず、web/static=0644、Python=0755をpolicyとして適用する
+- 配備ファイルは`root:root`とし、ビーコン素材は`www-data`と`training`のread可否を検証する
+- backup manifestにはchecksumに加えてmode/uid/gidを保存し、rollbackで復元する
 - rollbackは明示したbackup IDだけを使い、manifest全件のpath/state/checksumを事前検証する
 - DB rollbackは`--restore-db --db-offline-confirmed`の二重flagが必須
 - `tet2-campaign-automation.timer`は配備だけではenableせず、pilot承認後に別工程でenableする

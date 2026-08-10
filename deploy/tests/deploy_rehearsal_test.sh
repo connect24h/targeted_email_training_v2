@@ -18,6 +18,7 @@ backup_id="20260808T000000-4242"
 
 mkdir -p "$web_dest" "$bin_dest" "$systemd_dest" "$cron_dest"
 printf 'old-index\n' > "$web_dest/index.html"
+chmod 0600 "$web_dest/index.html"
 printf 'local-config\n' > "$bin_dest/config.ini"
 printf 'old-unit\n' > "$systemd_dest/tet2-worker.service"
 printf 'old-cron\n' > "$cron_dest/tet2-purge-campaigns"
@@ -34,6 +35,7 @@ common_args=(
 
 "$deploy_script" "${common_args[@]}" > /dev/null
 grep -qx 'old-index' "$web_dest/index.html"
+test "$(stat -c '%a:%U:%G' "$web_dest/index.html")" = '600:root:root'
 test ! -e "$backup_root"
 
 "$deploy_script" --apply "--backup-id=$backup_id" "${common_args[@]}" > /dev/null
@@ -45,6 +47,8 @@ test "$(stat -c '%U:%G' "$bin_dest/__BeaconMst.png")" = 'root:root'
 grep -qx 'local-config' "$bin_dest/config.ini"
 test -f "$backup_root/$backup_id/files.tsv"
 test -f "$backup_root/$backup_id/db/tet2.sqlite"
+awk -F '\t' '$1 == "web" && $2 == "index.html" {ok = ($5 == "600" && $6 ~ /^[0-9]+$/ && $7 ~ /^[0-9]+$/)} END {exit !ok}' \
+  "$backup_root/$backup_id/files.tsv"
 
 sqlite3 "$db_path" "UPDATE state SET value='after';"
 "$rollback_script" --restore-db "--backup-id=$backup_id" "${common_args[@]}" > /dev/null
@@ -54,6 +58,7 @@ test "$(sqlite3 "$db_path" 'SELECT value FROM state')" = 'after'
 "$rollback_script" --apply --restore-db --db-offline-confirmed \
   "--backup-id=$backup_id" "${common_args[@]}" > /dev/null
 grep -qx 'old-index' "$web_dest/index.html"
+test "$(stat -c '%a:%U:%G' "$web_dest/index.html")" = '600:root:root'
 grep -qx 'old-unit' "$systemd_dest/tet2-worker.service"
 grep -qx 'old-cron' "$cron_dest/tet2-purge-campaigns"
 grep -qx 'local-config' "$bin_dest/config.ini"
