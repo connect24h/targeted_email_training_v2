@@ -403,6 +403,18 @@
             <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduQuestion()"><i class="bi bi-plus-lg me-1"></i>新規設問</button>
           </div>
         </div>
+        <div class="card mb-4">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <div><i class="bi bi-easel me-1"></i><strong>eラーニング スライド教材</strong>
+              <span class="small text-muted ms-2">配信後も教材内容を差し替えできます</span></div>
+            <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduMaterial()"><i class="bi bi-plus-lg me-1"></i>新規教材</button>
+          </div>
+          <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+            <thead><tr><th>教材名</th><th>説明</th><th>スライド</th><th>操作</th></tr></thead>
+            <tbody id="eduMaterialsBody"></tbody>
+          </table></div>
+        </div>
+        <h6 class="mb-2"><i class="bi bi-patch-question me-1"></i>確認テスト設問</h6>
         <ul class="nav nav-pills mb-2 flex-wrap" id="eduCatTabs"></ul>
         <div class="mb-3" id="eduCatToolbar"></div>
         <div class="table-responsive"><table class="table table-hover align-middle">

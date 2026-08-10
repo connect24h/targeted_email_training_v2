@@ -4,13 +4,13 @@
  * 教育配信(edu_deliveries)管理 + launch(受講割当の採番)API。
  * templates.php / campaigns.php と同じ流儀。
  * - delivery_type: elearning(合格制約あり) / awareness_quiz(継続型・合格制約なし)
- * - target_type  : all(テナント全target) / group(target_group) / risk(訓練失敗者=events で auth|click)
+ * - target_type  : all(実対象者) / group(target_group) / risk(訓練失敗者) / individual(個別指定)
  * - launch       : 対象者を確定し edu_assignments を採番(access_token 発行) + edu_delivery_questions を確定。
  *   設問は明示指定(question_ids) か 条件抽出(category_ids/difficulty_range/question_count/randomize)。
  */
 
 const EDU_DELIVERY_TYPES = ['elearning', 'awareness_quiz'];
-const EDU_TARGET_TYPES   = ['all', 'group', 'risk'];
+const EDU_TARGET_TYPES   = ['all', 'group', 'risk', 'individual'];
 const EDU_DELIVERY_STATUSES = ['draft', 'scheduled', 'running', 'done', 'cancelled'];
 
 function edu_d_query_int(string $key): ?int
@@ -106,6 +106,31 @@ function edu_d_assert_group_owned(int $groupId, int $tenantId): void
     }
 }
 
+function edu_d_assert_material_owned(int $materialId, int $tenantId): void
+{
+    $material = Db::one(
+        'SELECT id FROM edu_materials
+         WHERE id = ? AND (tenant_id = ? OR tenant_id IS NULL) AND is_active = 1',
+        [$materialId, $tenantId]
+    );
+    if ($material === null) {
+        json_error('教材が見つかりません', 404);
+    }
+}
+
+function edu_d_assert_targets_owned(array $targetIds, int $tenantId): void
+{
+    foreach ($targetIds as $targetId) {
+        $target = Db::one(
+            "SELECT id FROM targets WHERE id = ? AND tenant_id = ? AND status = 'active'",
+            [$targetId, $tenantId]
+        );
+        if ($target === null) {
+            json_error('対象者が見つかりません', 404);
+        }
+    }
+}
+
 /** access_token: 32桁hex。受講者URLに露出するため campaign の10桁より長く、推測困難に。 */
 function edu_d_generate_token(): string
 {
@@ -123,7 +148,11 @@ function edu_d_resolve_targets(array $delivery, int $tenantId): array
 {
     $type = (string) $delivery['target_type'];
     if ($type === 'all') {
-        $rows = Db::all("SELECT id FROM targets WHERE tenant_id = ? AND status = 'active' ORDER BY id", [$tenantId]);
+        $rows = Db::all(
+            "SELECT id FROM targets
+             WHERE tenant_id = ? AND status = 'active' AND is_test = 0 ORDER BY id",
+            [$tenantId]
+        );
     } elseif ($type === 'group') {
         $groupId = $delivery['target_group_id'] !== null ? (int) $delivery['target_group_id'] : 0;
         if ($groupId < 1) {
@@ -138,7 +167,15 @@ function edu_d_resolve_targets(array $delivery, int $tenantId): array
              ORDER BY t.id',
             [$tenantId, $groupId]
         );
-    } else { // risk: 訓練で失敗(auth or click)した対象者
+    } elseif ($type === 'individual') {
+        $rows = Db::all(
+            "SELECT t.id FROM edu_delivery_targets dt
+             INNER JOIN targets t ON t.id = dt.target_id
+             WHERE dt.delivery_id = ? AND t.tenant_id = ? AND t.status = 'active'
+             ORDER BY t.id",
+            [(int) $delivery['id'], $tenantId]
+        );
+    } else { // risk: 訓練で失敗(auth or click)した実対象者
         $campaignId = $delivery['phish_campaign_id'] !== null ? (int) $delivery['phish_campaign_id'] : 0;
         // phish_campaign_id 指定時はそのキャンペーン、未指定時はテナント全体の失敗者
         if ($campaignId > 0) {
@@ -147,18 +184,22 @@ function edu_d_resolve_targets(array $delivery, int $tenantId): array
                 "SELECT DISTINCT ct.target_id AS id
                  FROM events e
                  INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
+                 INNER JOIN targets t ON t.id = ct.target_id
                  WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('auth','click')
+                   AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
                  ORDER BY ct.target_id",
-                [$tenantId, $campaignId]
+                [$tenantId, $campaignId, $tenantId]
             );
         } else {
             $rows = Db::all(
                 "SELECT DISTINCT ct.target_id AS id
                  FROM events e
                  INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
+                 INNER JOIN targets t ON t.id = ct.target_id
                  WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')
+                   AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
                  ORDER BY ct.target_id",
-                [$tenantId]
+                [$tenantId, $tenantId]
             );
         }
     }
@@ -269,6 +310,11 @@ function edu_d_handle_create(array $actor): never
     $passScore = edu_d_body_optional_int($body, 'pass_score');
     $targetGroupId = edu_d_body_optional_int($body, 'target_group_id');
     $phishCampaignId = edu_d_body_optional_int($body, 'phish_campaign_id');
+    $materialId = edu_d_body_optional_int($body, 'material_id');
+    $targetIds = edu_d_int_array($body, 'target_ids') ?? [];
+    if ($targetType !== 'individual') {
+        $targetIds = [];
+    }
     $triggeredBy = 'manual';
 
     // difficulty_range: [min,max] 各1-3
@@ -293,6 +339,15 @@ function edu_d_handle_create(array $actor): never
         }
         edu_d_assert_group_owned($targetGroupId, $tenantId);
     }
+    if ($targetType === 'individual') {
+        if ($targetIds === []) {
+            json_error('individual 配信には target_ids が必要です', 400);
+        }
+        edu_d_assert_targets_owned($targetIds, $tenantId);
+    }
+    if ($materialId !== null) {
+        edu_d_assert_material_owned($materialId, $tenantId);
+    }
     // category_ids 所有確認(他テナントのカテゴリ混入=IDOR防止)
     if ($categoryIds !== null && $categoryIds !== []) {
         foreach ($categoryIds as $cid) {
@@ -308,16 +363,23 @@ function edu_d_handle_create(array $actor): never
     $id = Db::insert(
         'INSERT INTO edu_deliveries
          (tenant_id, title, status, delivery_type, question_count, category_ids, difficulty_range,
-          randomize, pass_score, target_type, target_group_id, triggered_by, phish_campaign_id, created_by)
-         VALUES (?, ?, \'draft\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          randomize, pass_score, material_id, target_type, target_group_id, triggered_by, phish_campaign_id, created_by)
+         VALUES (?, ?, \'draft\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
             $tenantId, $title, $deliveryType, $questionCount,
             $categoryIds !== null ? json_encode($categoryIds) : null,
             $diffRange !== null ? json_encode($diffRange) : null,
-            $randomize, $passScore, $targetType, $targetGroupId, $triggeredBy, $phishCampaignId,
+            $randomize, $passScore, $materialId, $targetType, $targetGroupId, $triggeredBy, $phishCampaignId,
             $actor['id'],
         ]
     );
+
+    foreach ($targetIds as $targetId) {
+        Db::run(
+            'INSERT OR IGNORE INTO edu_delivery_targets (delivery_id, target_id) VALUES (?, ?)',
+            [$id, $targetId]
+        );
+    }
 
     // question_ids 明示指定があれば edu_delivery_questions に積む(テナント所有確認)
     $questionIds = edu_d_int_array($body, 'question_ids');

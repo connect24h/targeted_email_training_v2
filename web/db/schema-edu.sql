@@ -43,7 +43,23 @@ CREATE TABLE IF NOT EXISTS edu_questions (
 CREATE INDEX IF NOT EXISTS idx_edu_questions_tenant   ON edu_questions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_edu_questions_category ON edu_questions(category_id);
 
--- 教育配信(eラーニング=合格制約あり / awareness_quiz=継続型・合格制約なし。LRM二層モデル準拠)
+-- スライド教材。本文はplain textのJSON配列として保持し、受講画面ではtextContent相当で描画する。
+-- 共有教材はtenant_id NULL。テナント独自教材は後からスライドを差し替えられる。
+CREATE TABLE IF NOT EXISTS edu_materials (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id   INTEGER,
+  title       TEXT NOT NULL,
+  description TEXT,
+  slides      TEXT NOT NULL,                            -- JSON [{"title":"...","body":"..."}]
+  is_active   INTEGER NOT NULL DEFAULT 1,
+  is_shared   INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+CREATE INDEX IF NOT EXISTS idx_edu_materials_tenant ON edu_materials(tenant_id, is_active);
+
+-- 教育配信(eラーニング=合格制約あり / awareness_quiz=継続型・合格制約なし)
 CREATE TABLE IF NOT EXISTS edu_deliveries (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id        INTEGER NOT NULL,
@@ -57,18 +73,30 @@ CREATE TABLE IF NOT EXISTS edu_deliveries (
   scheduled_at     TEXT,
   deadline         TEXT,
   pass_score       INTEGER,                             -- elearning のみ必達
-  target_type      TEXT,                                -- all / group / risk
+  material_id      INTEGER,
+  target_type      TEXT,                                -- all / group / risk / individual
   target_group_id  INTEGER,
   triggered_by     TEXT,                                -- manual / phishing_failure / new_target
   phish_campaign_id INTEGER,
   created_by       INTEGER,
   created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id)         REFERENCES tenants(id),
+  FOREIGN KEY (material_id)       REFERENCES edu_materials(id),
   FOREIGN KEY (target_group_id)   REFERENCES groups(id),
   FOREIGN KEY (phish_campaign_id) REFERENCES campaigns(id),
   FOREIGN KEY (created_by)        REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_edu_deliveries_tenant ON edu_deliveries(tenant_id, status);
+
+-- 個別対象者指定。delivery経由でtenantを担保し、APIでもtarget所有を確認する。
+CREATE TABLE IF NOT EXISTS edu_delivery_targets (
+  delivery_id INTEGER NOT NULL,
+  target_id   INTEGER NOT NULL,
+  PRIMARY KEY (delivery_id, target_id),
+  FOREIGN KEY (delivery_id) REFERENCES edu_deliveries(id) ON DELETE CASCADE,
+  FOREIGN KEY (target_id)   REFERENCES targets(id)
+);
+CREATE INDEX IF NOT EXISTS idx_edu_dt_delivery ON edu_delivery_targets(delivery_id);
 
 -- 配信-設問 結合表(delivery 経由でテナント担保。tenant_id なし)
 CREATE TABLE IF NOT EXISTS edu_delivery_questions (

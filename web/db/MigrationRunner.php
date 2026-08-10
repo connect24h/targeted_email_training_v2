@@ -12,6 +12,7 @@ final class MigrationRunner
         '20260809-targets-is-test',
         '20260810-position-masters',
         '20260810-all-members-group',
+        '20260810-elearning-materials',
     ];
 
     /**
@@ -162,7 +163,58 @@ final class MigrationRunner
             $pdo->exec("UPDATE groups SET kind = 'all' WHERE name = '全職員' AND status = 'active'");
             return;
         }
+        if ($version === '20260810-elearning-materials') {
+            $this->applyElearningMaterials($pdo);
+            return;
+        }
         throw new RuntimeException("未知のmigrationです: {$version}");
+    }
+
+    private function applyElearningMaterials(PDO $pdo): void
+    {
+        $pdo->exec('CREATE TABLE IF NOT EXISTS edu_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, title TEXT NOT NULL,
+            description TEXT, slides TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1,
+            is_shared INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')),
+            updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id))');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_edu_materials_tenant
+            ON edu_materials(tenant_id, is_active)');
+        if (!$this->columnExists($pdo, 'edu_deliveries', 'material_id')) {
+            $pdo->exec('ALTER TABLE edu_deliveries ADD COLUMN material_id INTEGER
+                REFERENCES edu_materials(id)');
+        }
+        $pdo->exec('CREATE TABLE IF NOT EXISTS edu_delivery_targets (
+            delivery_id INTEGER NOT NULL, target_id INTEGER NOT NULL,
+            PRIMARY KEY (delivery_id, target_id),
+            FOREIGN KEY (delivery_id) REFERENCES edu_deliveries(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_id) REFERENCES targets(id))');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_edu_dt_delivery
+            ON edu_delivery_targets(delivery_id)');
+        $this->seedPhishingRemedialMaterial($pdo);
+    }
+
+    private function seedPhishingRemedialMaterial(PDO $pdo): void
+    {
+        $title = '標的型メール訓練 フォローアップ基礎';
+        $exists = $pdo->prepare('SELECT 1 FROM edu_materials WHERE tenant_id IS NULL AND title = ?');
+        $exists->execute([$title]);
+        if ($exists->fetchColumn() !== false) {
+            return;
+        }
+        $slides = [
+            ['title' => '訓練は失敗ではなく学習の入口です', 'body' => "訓練メールを開いた経験を、次の攻撃を止める判断力に変えます。\n落ち着いて、どこに違和感があったかを確認しましょう。"],
+            ['title' => '送信者を表示名だけで判断しない', 'body' => "表示名が知人や取引先でも、実際のメールアドレスとドメインを確認します。\n返信や転送を急がせる文面にも注意します。"],
+            ['title' => 'リンク先を開く前に確認する', 'body' => "リンクにマウスを合わせ、表示先のドメインを確認します。\n短縮URLや綴りの似た偽ドメインは、正規サイトを別途開いて確認します。"],
+            ['title' => '添付ファイルと認証要求を疑う', 'body' => "予期しない添付ファイルや、突然のパスワード入力要求は開かないでください。\n判断に迷ったら送信者へ別経路で確認します。"],
+            ['title' => '気づいたらすぐ報告する', 'body' => "クリックや入力をしても、隠さず速やかに管理者へ報告してください。\n早い報告が被害拡大を防ぎます。"],
+        ];
+        $insert = $pdo->prepare('INSERT INTO edu_materials
+            (tenant_id, title, description, slides, is_active, is_shared)
+            VALUES (NULL, ?, ?, ?, 1, 1)');
+        $insert->execute([$title, '標的型メール訓練で防衛失敗した受講者向けの短時間教材',
+            json_encode($slides, JSON_UNESCAPED_UNICODE)]);
     }
 
     private function applyCampaignRotation(PDO $pdo): void

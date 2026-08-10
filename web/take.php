@@ -26,6 +26,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
     .opt-btn.selected { border-color: #0d6efd; background: #e7f1ff; }
     .fb-correct { border-left: 4px solid #198754; }
     .fb-wrong { border-left: 4px solid #dc3545; }
+    .lesson-body { white-space: pre-wrap; line-height: 1.9; }
   </style>
 </head>
 <body>
@@ -51,6 +52,23 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       <span class="spinner-border spinner-border-sm d-none" id="startSpin"></span>
       はじめる
     </button>
+  </div>
+
+  <!-- スライド教材 -->
+  <div id="lessonView" class="d-none mt-4">
+    <div class="mb-2 d-flex justify-content-between align-items-center">
+      <span class="small text-muted" id="lessonProgress"></span>
+      <span class="badge bg-primary">教材</span>
+    </div>
+    <div class="progress mb-3" style="height:6px"><div class="progress-bar" id="lessonProgressBar" style="width:0%"></div></div>
+    <div class="quiz-card p-4">
+      <h4 id="lessonTitle"></h4>
+      <div class="lesson-body mt-3" id="lessonBody"></div>
+    </div>
+    <div class="d-flex justify-content-between mt-3">
+      <button class="btn btn-outline-secondary" id="lessonPrevBtn"><i class="bi bi-chevron-left"></i> 前へ</button>
+      <button class="btn btn-primary" id="lessonNextBtn">次へ <i class="bi bi-chevron-right"></i></button>
+    </div>
   </div>
 
   <!-- クイズ -->
@@ -84,6 +102,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       <div class="text-muted" id="resultScore"></div>
     </div>
     <div id="feedbackList"></div>
+    <button class="btn btn-primary w-100 mt-3 d-none" id="retryBtn"><i class="bi bi-arrow-repeat"></i> もう一度受講</button>
   </div>
 
   <!-- エラー -->
@@ -102,15 +121,17 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
   const TOKEN = <?= json_encode($token) ?>;
   const API = 'api/edu_take.php';
   let questions = [];
+  let materialSlides = [];
   let answers = {};   // question_id -> [index,...]
   let cur = 0;
+  let lessonCur = 0;
 
   const $ = (id) => document.getElementById(id);
   const show = (id) => $(id).classList.remove('d-none');
   const hide = (id) => $(id).classList.add('d-none');
 
   function fail(msg) {
-    ['landingView','quizView','resultView'].forEach(hide);
+    ['landingView','lessonView','quizView','resultView'].forEach(hide);
     $('errorMsg').textContent = msg || 'エラーが発生しました';
     show('errorView');
   }
@@ -123,8 +144,28 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       $('landingTitle').textContent = j.delivery.title || 'セキュリティ教育クイズ';
       $('landingMeta').textContent = `全 ${j.delivery.question_count} 問`;
       questions = j.questions;
+      materialSlides = j.material?.slides || [];
       show('landingView');
     } catch (e) { fail('通信に失敗しました'); }
+  }
+
+  function beginCourse() {
+    hide('landingView');
+    if (materialSlides.length) {
+      lessonCur = 0; show('lessonView'); renderLesson(); return;
+    }
+    show('quizView'); renderQuestion();
+  }
+
+  function renderLesson() {
+    const slide = materialSlides[lessonCur];
+    $('lessonProgress').textContent = `${lessonCur + 1} / ${materialSlides.length}`;
+    $('lessonProgressBar').style.width = `${Math.round((lessonCur + 1) / materialSlides.length * 100)}%`;
+    $('lessonTitle').textContent = slide.title;
+    $('lessonBody').textContent = slide.body;
+    $('lessonPrevBtn').disabled = lessonCur === 0;
+    $('lessonNextBtn').innerHTML = lessonCur === materialSlides.length - 1
+      ? '確認テストへ <i class="bi bi-patch-question"></i>' : '次へ <i class="bi bi-chevron-right"></i>';
   }
 
   function renderQuestion() {
@@ -199,6 +240,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
     } else {
       badge.innerHTML = '<span class="badge bg-primary fs-6"><i class="bi bi-flag"></i> 受講完了</span>';
     }
+    $('retryBtn').classList.toggle('d-none', res.passed !== false);
     const list = $('feedbackList');
     list.innerHTML = '';
     j.feedback.forEach((f, n) => {
@@ -236,10 +278,20 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
   }
 
-  $('startBtn').onclick = () => { hide('landingView'); show('quizView'); renderQuestion(); };
+  $('startBtn').onclick = beginCourse;
+  $('lessonPrevBtn').onclick = () => { if (lessonCur > 0) { lessonCur--; renderLesson(); } };
+  $('lessonNextBtn').onclick = () => {
+    if (lessonCur < materialSlides.length - 1) { lessonCur++; renderLesson(); return; }
+    hide('lessonView'); show('quizView'); renderQuestion();
+  };
   $('prevBtn').onclick = () => { if (cur > 0) { cur--; renderQuestion(); } };
   $('nextBtn').onclick = () => { if (cur < questions.length - 1) { cur++; renderQuestion(); } };
   $('submitBtn').onclick = submit;
+  $('retryBtn').onclick = () => {
+    answers = {}; cur = 0; hide('resultView'); $('submitBtn').disabled = false; $('submitSpin').classList.add('d-none');
+    if (materialSlides.length) { lessonCur = 0; show('lessonView'); renderLesson(); }
+    else { show('quizView'); renderQuestion(); }
+  };
 
   start();
 })();

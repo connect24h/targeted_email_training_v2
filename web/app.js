@@ -2449,46 +2449,97 @@ async function renderEduDeliveries() {
       </td></tr>`).join('') : emptyRow(9);
 }
 function eduDeliveryForm() {
-  const catOpts = (Cache.eduCats || []).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  const catOpts = (Cache.eduCats || []).map((c) =>
+    `<option value="${c.id}"${c.slug === 'phishing' ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+  const materialOpts = (Cache.eduMaterialList || []).map((m) =>
+    `<option value="${m.id}">${esc(m.title)}（${m.slide_count}枚）</option>`).join('');
+  const targetOpts = (Cache.eduTargets || []).map((t) =>
+    `<option value="${t.id}">${Number(t.is_test) === 1 ? '[テスト] ' : ''}${esc(t.email)}（${esc(t.name || '')}）</option>`).join('');
   return `<form id="eduDeliveryForm">
-    <div class="mb-2"><label class="form-label">タイトル</label><input class="form-control" name="title" required></div>
+    <div class="alert alert-primary py-2"><button type="button" class="btn btn-sm btn-primary me-2" id="eduRiskPreset">訓練失敗者向けを設定</button><span class="small">標的型メール訓練の直後に、スライド教材と確認テストを配信します。</span></div>
+    <div class="mb-2"><label class="form-label">タイトル</label><input class="form-control" name="title" value="標的型メール訓練 フォローアップ" required></div>
     <div class="mb-2"><label class="form-label">種別</label>
       <select class="form-select" name="delivery_type" id="eduDType">
-        <option value="awareness_quiz">アウェアネス(合格制約なし)</option>
-        <option value="elearning">eラーニング(合格制約あり)</option>
-      </select></div>
+        <option value="elearning">eラーニング（合格点まで再受講）</option>
+        <option value="awareness_quiz">アウェアネス（回答提出で完了・合否なし）</option>
+      </select><div class="form-text" id="eduTypeHelp"></div></div>
+    <div class="mb-2" id="eduMaterialField"><label class="form-label">スライド教材</label>
+      <select class="form-select" name="material_id"><option value="">教材なし</option>${materialOpts}</select></div>
     <div class="mb-2"><label class="form-label">配信対象</label>
-      <select class="form-select" name="target_type">
-        <option value="all">全対象者</option>
-        <option value="risk">訓練失敗者のみ</option>
+      <select class="form-select" name="target_type" id="eduTargetType">
+        <option value="risk">訓練失敗者のみ（実対象者）</option>
+        <option value="all">全対象者（テスト宛先を除く）</option>
+        <option value="individual">個別選択（テスト宛先も選択可）</option>
       </select></div>
-    <div class="mb-2"><label class="form-label">出題カテゴリ(任意・複数選択可)</label>
+    <div class="mb-2 d-none" id="eduIndividualTargets"><label class="form-label">個別対象者</label>
+      <input class="form-control form-control-sm mb-2" id="eduTargetSearch" placeholder="氏名またはメールアドレスで絞り込み">
+      <select class="form-select" name="target_ids" multiple size="7">${targetOpts}</select>
+      <div class="form-text"><span id="eduTargetCount">0名選択</span>・Ctrl / commandキーで複数選択できます。</div></div>
+    <div class="mb-2"><label class="form-label">確認テストのカテゴリ（複数選択可）</label>
       <select class="form-select" name="category_ids" multiple size="4">${catOpts}</select></div>
     <div class="row">
-      <div class="col-6 mb-2"><label class="form-label">出題数</label><input class="form-control" type="number" name="question_count" min="1" value="5"></div>
-      <div class="col-6 mb-2"><label class="form-label">合格点(eラーニング時)</label><input class="form-control" type="number" name="pass_score" min="0" max="100" value="80"></div>
+      <div class="col-6 mb-2"><label class="form-label">出題数</label><input class="form-control" type="number" name="question_count" min="1" value="3"></div>
+      <div class="col-6 mb-2" id="eduPassScoreField"><label class="form-label">合格点</label><input class="form-control" type="number" name="pass_score" min="1" max="100" value="80"></div>
     </div>
   </form>`;
 }
-async function newEduDelivery() {
-  // カテゴリを取得してフォームに反映
-  const { categories } = await api('api/edu_categories.php', { query: { action: 'list' } });
-  Cache.eduCats = categories || [];
-  showModal('新規教育配信', eduDeliveryForm(), async () => {
-    const f = $('#eduDeliveryForm');
-    const cats = Array.from(f.category_ids.selectedOptions).map((o) => parseInt(o.value, 10));
-    const type = f.delivery_type.value;
-    const body = {
-      title: f.title.value.trim(),
-      delivery_type: type,
-      target_type: f.target_type.value,
-      question_count: parseInt(f.question_count.value, 10) || 5,
-      category_ids: cats.length ? cats : undefined,
-    };
-    if (type === 'elearning') body.pass_score = parseInt(f.pass_score.value, 10);
-    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'create' }, body });
-    toast('配信を作成しました', 'ok'); renderEduDeliveries();
+
+function syncEduDeliveryForm() {
+  const f = $('#eduDeliveryForm');
+  const elearning = f.delivery_type.value === 'elearning';
+  $('#eduMaterialField').classList.toggle('d-none', !elearning);
+  $('#eduPassScoreField').classList.toggle('d-none', !elearning);
+  $('#eduIndividualTargets').classList.toggle('d-none', f.target_type.value !== 'individual');
+  $('#eduTypeHelp').textContent = elearning
+    ? '教材を読んで確認テストに合格すると完了します。不合格の場合は再受講できます。'
+    : '理解度を測る継続教育です。回答提出で完了し、合格・不合格は付けません。';
+}
+
+function filterEduIndividualTargets() {
+  const form = $('#eduDeliveryForm');
+  const keyword = $('#eduTargetSearch').value.trim().toLowerCase();
+  Array.from(form.target_ids.options).forEach((option) => {
+    option.hidden = keyword !== '' && !option.textContent.toLowerCase().includes(keyword);
   });
+  $('#eduTargetCount').textContent = `${form.target_ids.selectedOptions.length}名選択`;
+}
+
+function eduDeliveryPayload(form) {
+  const categories = Array.from(form.category_ids.selectedOptions).map((o) => Number(o.value));
+  const targets = Array.from(form.target_ids.selectedOptions).map((o) => Number(o.value));
+  const type = form.delivery_type.value;
+  if (form.target_type.value === 'individual' && !targets.length) throw new Error('個別対象者を選択してください');
+  const body = { title: form.title.value.trim(), delivery_type: type, target_type: form.target_type.value,
+    question_count: Number(form.question_count.value) || 3, category_ids: categories.length ? categories : undefined };
+  if (type === 'elearning') {
+    body.pass_score = Number(form.pass_score.value) || 80;
+    body.material_id = Number(form.material_id.value) || undefined;
+  }
+  if (form.target_type.value === 'individual') body.target_ids = targets;
+  return body;
+}
+
+async function newEduDelivery() {
+  const [cats, materials, targets] = await Promise.all([
+    api('api/edu_categories.php', { query: { action: 'list' } }),
+    api('api/edu_materials.php', { query: { action: 'list' } }),
+    api('api/targets.php', { query: { action: 'list' } }),
+  ]);
+  Cache.eduCats = cats.categories || []; Cache.eduMaterialList = materials.materials || []; Cache.eduTargets = targets.targets || [];
+  showModal('新規教育配信', eduDeliveryForm(), async () => {
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'create' }, body: eduDeliveryPayload($('#eduDeliveryForm')) });
+    toast('配信を作成しました', 'ok'); renderEduDeliveries();
+  }, { size: 'lg' });
+  $('#eduDType').addEventListener('change', syncEduDeliveryForm);
+  $('#eduTargetType').addEventListener('change', syncEduDeliveryForm);
+  $('#eduTargetSearch').addEventListener('input', filterEduIndividualTargets);
+  $('#eduDeliveryForm').target_ids.addEventListener('change', filterEduIndividualTargets);
+  $('#eduRiskPreset').addEventListener('click', () => {
+    const f = $('#eduDeliveryForm'); f.delivery_type.value = 'elearning'; f.target_type.value = 'risk';
+    const preset = Array.from(f.material_id.options).find((option) => option.textContent.includes('フォローアップ基礎'));
+    if (preset) f.material_id.value = preset.value; syncEduDeliveryForm();
+  });
+  $('#eduRiskPreset').click();
 }
 async function launchEduDelivery(id) {
   if (!confirm('この配信を開始し、対象者に受講を割り当てますか？')) return;
@@ -2522,8 +2573,72 @@ async function viewEduDelivery(id) {
 }
 
 /* ========== セキュリティ教育: 教材バンク ========== */
+async function renderEduMaterials() {
+  const { materials } = await api('api/edu_materials.php', { query: { action: 'list' } });
+  Cache.eduMaterialList = materials || [];
+  const canEdit = (material) => Number(material.is_shared) !== 1 || State.user.role === 'superadmin';
+  $('#eduMaterialsBody').innerHTML = Cache.eduMaterialList.length ? Cache.eduMaterialList.map((material) => `
+    <tr><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
+      <td class="small text-muted">${esc(material.description || '')}</td><td>${material.slide_count}枚</td>
+      <td>${canEdit(material) ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(4);
+}
+
+function eduMaterialSlideRow(slide = {}) {
+  return `<div class="border rounded p-2 mb-2 edu-material-slide">
+    <div class="d-flex justify-content-between mb-2"><strong class="small">スライド</strong><button type="button" class="btn btn-sm btn-outline-danger eduMaterialRemove"><i class="bi bi-trash"></i></button></div>
+    <input class="form-control mb-2" name="slide_title" placeholder="スライドタイトル" value="${esc(slide.title || '')}" required>
+    <textarea class="form-control" name="slide_body" rows="4" placeholder="本文（改行可）" required>${esc(slide.body || '')}</textarea>
+  </div>`;
+}
+
+function eduMaterialForm(material = null) {
+  const slides = material?.slides?.length ? material.slides : [{ title: '', body: '' }];
+  return `<form id="eduMaterialForm">
+    <div class="mb-2"><label class="form-label">教材名</label><input class="form-control" name="title" value="${esc(material?.title || '')}" required></div>
+    <div class="mb-3"><label class="form-label">説明</label><textarea class="form-control" name="description" rows="2">${esc(material?.description || '')}</textarea></div>
+    <div class="d-flex justify-content-between align-items-center mb-2"><label class="form-label mb-0">スライド</label><button type="button" class="btn btn-sm btn-outline-primary" id="eduMaterialAdd"><i class="bi bi-plus-lg"></i> 追加</button></div>
+    <div id="eduMaterialSlides">${slides.map(eduMaterialSlideRow).join('')}</div>
+  </form>`;
+}
+
+function bindEduMaterialEditor() {
+  $('#eduMaterialAdd').addEventListener('click', () => $('#eduMaterialSlides').insertAdjacentHTML('beforeend', eduMaterialSlideRow()));
+  $('#eduMaterialSlides').addEventListener('click', (event) => {
+    const remove = event.target.closest('.eduMaterialRemove');
+    if (!remove) return;
+    if ($('#eduMaterialSlides').querySelectorAll('.edu-material-slide').length <= 1) return toast('スライドは1枚以上必要です', 'err');
+    remove.closest('.edu-material-slide').remove();
+  });
+}
+
+function readEduMaterialForm() {
+  const form = $('#eduMaterialForm');
+  const slides = Array.from(form.querySelectorAll('.edu-material-slide')).map((row) => ({
+    title: row.querySelector('[name=slide_title]').value.trim(),
+    body: row.querySelector('[name=slide_body]').value.trim(),
+  }));
+  return { title: form.title.value.trim(), description: form.description.value.trim(), slides };
+}
+
+function openEduMaterial(material = null) {
+  showModal(material ? 'スライド教材の差し替え' : '新規スライド教材', eduMaterialForm(material), async () => {
+    const body = readEduMaterialForm();
+    if (material) body.id = material.id;
+    await api('api/edu_materials.php', { method: 'POST', query: { action: material ? 'update' : 'create' }, body });
+    toast(material ? '教材を差し替えました' : '教材を作成しました', 'ok'); renderEduMaterials();
+  }, { size: 'lg' });
+  bindEduMaterialEditor();
+}
+
+function newEduMaterial() { openEduMaterial(); }
+function editEduMaterial(id) {
+  const material = (Cache.eduMaterialList || []).find((row) => Number(row.id) === Number(id));
+  if (material) openEduMaterial(material);
+}
+
 let eduCatFilter = null;
 async function renderEduQuestions() {
+  await renderEduMaterials();
   const { categories } = await api('api/edu_categories.php', { query: { action: 'list' } });
   Cache.eduCats = categories || [];
   if (eduCatFilter === null && categories && categories.length) eduCatFilter = categories[0].id;

@@ -155,6 +155,75 @@ function take_delivery_questions(int $deliveryId): array
     );
 }
 
+function take_delivery_material(int $deliveryId): ?array
+{
+    $material = Db::one(
+        'SELECT m.id, m.title, m.description, m.slides
+         FROM edu_deliveries d
+         INNER JOIN edu_materials m ON m.id = d.material_id
+         WHERE d.id = ? AND m.is_active = 1',
+        [$deliveryId]
+    );
+    if ($material === null) {
+        return null;
+    }
+    $material['id'] = (int) $material['id'];
+    $material['slides'] = json_decode((string) $material['slides'], true) ?: [];
+    return $material;
+}
+
+function take_upsert_response(array $assignment, array $result): int
+{
+    $existing = Db::one('SELECT id FROM edu_responses WHERE assignment_id = ?', [(int) $assignment['id']]);
+    if ($existing !== null) {
+        $responseId = (int) $existing['id'];
+        Db::run(
+            "UPDATE edu_responses SET total_score=?, max_score=?, percentage=?,
+             completed_at=datetime('now','localtime') WHERE id=?",
+            [$result['total_score'], $result['max_score'], $result['percentage'], $responseId]
+        );
+        Db::run('DELETE FROM edu_response_answers WHERE response_id = ?', [$responseId]);
+        return $responseId;
+    }
+    return Db::insert(
+        "INSERT INTO edu_responses
+         (tenant_id, assignment_id, total_score, max_score, percentage, started_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))",
+        [(int) $assignment['tenant_id'], (int) $assignment['id'], $result['total_score'],
+            $result['max_score'], $result['percentage'], $assignment['started_at']]
+    );
+}
+
+function take_save_attempt(array $assignment, array $result, array $questionMeta, bool $completed): void
+{
+    Db::tx(function () use ($assignment, $result, $questionMeta, $completed) {
+        $responseId = take_upsert_response($assignment, $result);
+        foreach ($result['answers'] as $answer) {
+            if (!isset($questionMeta[$answer['question_id']])) {
+                continue;
+            }
+            Db::run(
+                'INSERT INTO edu_response_answers
+                 (response_id, question_id, answer, is_correct, score_earned) VALUES (?, ?, ?, ?, ?)',
+                [$responseId, $answer['question_id'], json_encode($answer['answer']),
+                    $answer['is_correct'] ? 1 : 0, $answer['score_earned']]
+            );
+        }
+        if ($completed) {
+            Db::run(
+                "UPDATE edu_assignments SET status='completed',
+                 completed_at=datetime('now','localtime'), score=? WHERE id=?",
+                [$result['percentage'], (int) $assignment['id']]
+            );
+        } else {
+            Db::run(
+                "UPDATE edu_assignments SET status='started', completed_at=NULL, score=? WHERE id=?",
+                [$result['percentage'], (int) $assignment['id']]
+            );
+        }
+    });
+}
+
 function take_handle_start(): never
 {
     $token = take_token('get');
@@ -196,6 +265,7 @@ function take_handle_start(): never
             'delivery_type' => $a['delivery_type'],
             'question_count' => count($out),
         ],
+        'material' => take_delivery_material((int) $a['delivery_id']),
         'questions' => $out,
     ]);
 }
@@ -261,50 +331,11 @@ function take_handle_submit(): never
     }
     $result = take_score($answersForScoring, $questionMap);
 
-    // 保存(トランザクション)。二重受講防止: assignment を completed に。
+    // eラーニングは合格時だけ完了。アウェアネスは提出時点で完了。
     $passScore = $a['pass_score'] !== null ? (int) $a['pass_score'] : null;
     $passed = $passScore !== null ? ($result['percentage'] >= $passScore) : null;
-
-    Db::tx(function () use ($a, $result, $qMeta) {
-        // 既存の response があれば作らない(二重防止の保険。通常は completed ガードで来ない)
-        $existing = Db::one('SELECT id FROM edu_responses WHERE assignment_id = ?', [(int) $a['id']]);
-        if ($existing !== null) {
-            return;
-        }
-        $responseId = Db::insert(
-            'INSERT INTO edu_responses (tenant_id, assignment_id, total_score, max_score, percentage, started_at, completed_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\',\'localtime\'))',
-            [
-                (int) $a['tenant_id'],
-                (int) $a['id'],
-                $result['total_score'],
-                $result['max_score'],
-                $result['percentage'],
-                $a['started_at'],
-            ]
-        );
-        foreach ($result['answers'] as $sa) {
-            // 配信外設問(max_score=0)は保存しない
-            if (!isset($qMeta[$sa['question_id']])) {
-                continue;
-            }
-            Db::run(
-                'INSERT INTO edu_response_answers (response_id, question_id, answer, is_correct, score_earned)
-                 VALUES (?, ?, ?, ?, ?)',
-                [
-                    $responseId,
-                    $sa['question_id'],
-                    json_encode($sa['answer']),
-                    $sa['is_correct'] ? 1 : 0,
-                    $sa['score_earned'],
-                ]
-            );
-        }
-        Db::run(
-            "UPDATE edu_assignments SET status='completed', completed_at=datetime('now','localtime'), score=? WHERE id=?",
-            [$result['percentage'], (int) $a['id']]
-        );
-    });
+    $completed = (string) $a['delivery_type'] !== 'elearning' || $passed === true;
+    take_save_attempt($a, $result, $qMeta, $completed);
 
     // 即時結果(解説つき)。ここで初めて correct_answer と explanation を返す。
     $feedback = [];
@@ -331,6 +362,7 @@ function take_handle_submit(): never
             'percentage' => $result['percentage'],
             'pass_score' => $passScore,
             'passed' => $passed,
+            'completed' => $completed,
         ],
         'feedback' => $feedback,
     ]);
