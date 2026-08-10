@@ -63,6 +63,8 @@ Db::run("INSERT OR IGNORE INTO targets (id, tenant_id, email, name) VALUES
   (9901, 99, 'target1@test-tenant-99.local', 'Target One')");
 Db::run("INSERT OR IGNORE INTO targets (id, tenant_id, email, name) VALUES
   (9902, 99, 'target2@test-tenant-99.local', 'Target Two')");
+Db::run("INSERT OR IGNORE INTO targets (id, tenant_id, email, name, is_test) VALUES
+  (9903, 99, 'redirect@test-tenant-99.local', 'Test Recipient', 1)");
 
 // テナント 98 のターゲット(他テナント → IDOR テスト用)
 Db::run("INSERT OR IGNORE INTO targets (id, tenant_id, email, name) VALUES
@@ -71,6 +73,8 @@ Db::run("INSERT OR IGNORE INTO targets (id, tenant_id, email, name) VALUES
 // テナント 99 のグループ
 Db::run("INSERT OR IGNORE INTO groups (id, tenant_id, name) VALUES
   (9901, 99, 'TestGroup99')");
+Db::run("INSERT OR IGNORE INTO groups (id, tenant_id, name, kind) VALUES
+  (9902, 99, '全職員', 'all')");
 
 // グループにターゲットを追加
 Db::run("INSERT OR IGNORE INTO target_group (target_id, group_id) VALUES (9901, 9901)");
@@ -271,6 +275,11 @@ check($res['code'] === 201, 'CC-1 target_ids のみ → 201');
 $res = create(base_body(['name' => 'CC-2', 'group_ids' => [9901]]));
 check($res['code'] === 201, 'CC-2 group_ids のみ → 201');
 
+// CC-2b: kind=all はtarget_groupが空でも全active対象者を動的に解決する
+$res = create(base_body(['name' => 'CC-2b', 'group_ids' => [9902]]));
+check($res['code'] === 201, 'CC-2b 全職員groupのみ → 201');
+check((int) ($res['payload']['target_count'] ?? 0) === 2, 'CC-2b テスト対象者を除く全職員2名を割り当てる');
+
 // CC-3: target_ids + group_ids 両方 → 201
 $res = create(base_body(['name' => 'CC-3', 'target_ids' => [9901], 'group_ids' => [9901]]));
 check($res['code'] === 201, 'CC-3 target_ids + group_ids 両方 → 201');
@@ -346,6 +355,19 @@ echo "\n=== Update アクション ===\n";
 $cid_u1 = create_draft(['name' => 'CU-1用']);
 $res = update(['id' => $cid_u1, 'name' => '更新後キャンペーン名']);
 check($res['code'] === 200, 'CU-1 draft + name 変更 → 200');
+
+// CU-2: 前回の個別対象者を空にして全職員groupへ切替
+$cid_u2 = create_draft(['name' => 'CU-2用', 'target_ids' => [9901]]);
+$res = update(['id' => $cid_u2, 'target_ids' => [], 'group_ids' => [9902]]);
+check($res['code'] === 200, 'CU-2 個別対象者から全職員groupへ切替 → 200');
+check((int) Db::one(
+    'SELECT COUNT(DISTINCT target_id) AS c FROM campaign_targets WHERE campaign_id = ?',
+    [$cid_u2]
+)['c'] === 2, 'CU-2 前回1名を残さず全active対象者2名へ置換する');
+check((int) Db::one(
+    'SELECT COUNT(*) AS c FROM campaign_targets WHERE campaign_id = ? AND content_no IS NULL',
+    [$cid_u2]
+)['c'] === 0, 'CU-2 対象者切替後もcontentを割り当てる');
 
 // CU-5: scheduled ステータス → 409
 $cid_u5 = create_draft(['name' => 'CU-5用']);

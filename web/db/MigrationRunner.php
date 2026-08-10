@@ -11,6 +11,7 @@ final class MigrationRunner
         '20260809-targets-archived-at',
         '20260809-targets-is-test',
         '20260810-position-masters',
+        '20260810-all-members-group',
     ];
 
     /**
@@ -155,6 +156,10 @@ final class MigrationRunner
         }
         if ($version === '20260810-position-masters') {
             $this->applyPositionMasters($pdo);
+            return;
+        }
+        if ($version === '20260810-all-members-group') {
+            $pdo->exec("UPDATE groups SET kind = 'all' WHERE name = '全職員' AND status = 'active'");
             return;
         }
         throw new RuntimeException("未知のmigrationです: {$version}");

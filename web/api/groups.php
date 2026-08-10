@@ -1,6 +1,11 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 
-const GROUP_KINDS = ['department', 'custom'];
+const GROUP_KINDS = ['department', 'custom', 'all'];
+
+function groups_is_all_members(array $group): bool
+{
+    return ($group['kind'] ?? '') === 'all' || ($group['name'] ?? '') === '全職員';
+}
 
 function groups_string(array $body, string $key): string
 {
@@ -109,7 +114,11 @@ function groups_handle_list(array $actor): never
     $tenantId = effective_tenant_id($actor, groups_query_int('tenant_id'));
     // target_count は現役(アーカイブ=退職を除く)メンバー数。空グループの視認用。
     $groups = Db::all(
-        "SELECT g.id, g.tenant_id, g.name, g.kind, COUNT(DISTINCT t.id) AS target_count
+        "SELECT g.id, g.tenant_id, g.name, g.kind,
+                CASE WHEN g.kind = 'all' OR g.name = '全職員'
+                     THEN (SELECT COUNT(*) FROM targets ta
+                           WHERE ta.tenant_id = g.tenant_id AND ta.status = 'active' AND ta.is_test = 0)
+                     ELSE COUNT(DISTINCT t.id) END AS target_count
          FROM groups g
          LEFT JOIN target_group tg ON tg.group_id = g.id
          LEFT JOIN targets t ON t.id = tg.target_id AND t.tenant_id = ? AND t.status != 'archived'
@@ -189,7 +198,10 @@ function groups_handle_add_targets(array $actor): never
     $tenantId = effective_tenant_id($actor, groups_body_optional_int($body, 'tenant_id'));
     $groupId = groups_int($body, 'group_id');
     $targetIds = groups_int_array($body, 'target_ids');
-    groups_assert_active($groupId, $tenantId);
+    $group = groups_assert_active($groupId, $tenantId);
+    if (groups_is_all_members($group)) {
+        json_error('全職員グループのメンバーは自動管理されます', 409);
+    }
     groups_assert_targets_owned($targetIds, $tenantId);
 
     Db::tx(function () use ($groupId, $targetIds, $tenantId): void {
@@ -214,7 +226,10 @@ function groups_handle_remove_targets(array $actor): never
     $tenantId = effective_tenant_id($actor, groups_body_optional_int($body, 'tenant_id'));
     $groupId = groups_int($body, 'group_id');
     $targetIds = groups_int_array($body, 'target_ids');
-    groups_assert_active($groupId, $tenantId);
+    $group = groups_assert_active($groupId, $tenantId);
+    if (groups_is_all_members($group)) {
+        json_error('全職員グループのメンバーは自動管理されます', 409);
+    }
     groups_assert_targets_owned($targetIds, $tenantId);
 
     Db::tx(function () use ($groupId, $targetIds, $tenantId): void {
@@ -239,15 +254,22 @@ function groups_handle_members(array $actor): never
     if ($groupId === null) {
         json_error('group_id が不正です', 400);
     }
-    groups_assert_active($groupId, $tenantId);
-    $members = Db::all(
-        "SELECT t.id, t.email, t.name, t.company, t.department
-         FROM target_group tg
-         JOIN targets t ON t.id = tg.target_id
-         WHERE tg.group_id = ? AND t.tenant_id = ? AND t.status != 'archived'
-         ORDER BY t.tenant_no",
-        [$groupId, $tenantId]
-    );
+    $group = groups_assert_active($groupId, $tenantId);
+    $members = groups_is_all_members($group)
+        ? Db::all(
+            "SELECT id, email, name, company, department
+             FROM targets
+             WHERE tenant_id = ? AND status = 'active' AND is_test = 0 ORDER BY tenant_no",
+            [$tenantId]
+        )
+        : Db::all(
+            "SELECT t.id, t.email, t.name, t.company, t.department
+             FROM target_group tg
+             JOIN targets t ON t.id = tg.target_id
+             WHERE tg.group_id = ? AND t.tenant_id = ? AND t.status = 'active'
+             ORDER BY t.tenant_no",
+            [$groupId, $tenantId]
+        );
     json_out(['success' => true, 'members' => $members]);
 }
 

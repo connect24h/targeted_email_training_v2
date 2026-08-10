@@ -117,6 +117,22 @@ check($found !== null, 'GC-10: 作成したグループが一覧に含まれる'
 check(array_key_exists('target_count', $found), 'GC-10: target_count フィールドが存在する');
 check((int) $found['target_count'] >= 1, 'GC-10: target_count >= 1 (追加した分が反映)');
 
+// GC-11: 全職員groupはmembership rowなしでも全active対象者を動的に返す
+$r = call_handler('groups_handle_create', ['name' => '全職員', 'kind' => 'all'], 'operator');
+check($r['code'] === 201, 'GC-11: kind=all groupを作成できる');
+$allGroupId = (int) $r['payload']['group']['id'];
+$_GET = [];
+$r = call_handler('groups_handle_list', [], 'viewer');
+$allListed = array_values(array_filter(
+    $r['payload']['groups'],
+    static fn(array $group): bool => (int) $group['id'] === $allGroupId
+));
+check((int) $allListed[0]['target_count'] === count($targets), 'GC-11: 全active対象者数を返す');
+$_GET = ['group_id' => (string) $allGroupId];
+$r = call_handler('groups_handle_members', [], 'viewer');
+check(count($r['payload']['members']) === count($targets), 'GC-11: 全active対象者をmembersで返す');
+$_GET = [];
+
 // -----------------------------------------------------------------------
 // add_targets / remove_targets テスト
 // -----------------------------------------------------------------------

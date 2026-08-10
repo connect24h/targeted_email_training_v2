@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS groups (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id INTEGER NOT NULL,
   name      TEXT NOT NULL,
-  kind      TEXT NOT NULL DEFAULT 'custom',     -- department / custom
+  kind      TEXT NOT NULL DEFAULT 'custom',     -- department / custom / all（全active対象者）
   status    TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
   archived_at TEXT,
   UNIQUE (tenant_id, name),

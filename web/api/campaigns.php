@@ -159,11 +159,16 @@ function campaigns_assert_template_visible(int $id, int $tenantId, string $kind)
     return $template;
 }
 
-function campaigns_assert_group_owned(int $groupId, int $tenantId): void
+function campaigns_assert_group_owned(int $groupId, int $tenantId): array
 {
-    if (Db::one('SELECT id FROM groups WHERE id = ? AND tenant_id = ?', [$groupId, $tenantId]) === null) {
+    $group = Db::one(
+        "SELECT id, name, kind FROM groups WHERE id = ? AND tenant_id = ? AND status = 'active'",
+        [$groupId, $tenantId]
+    );
+    if ($group === null) {
         json_error('グループが見つかりません', 404);
     }
+    return $group;
 }
 
 function campaigns_assert_targets_owned(array $targetIds, int $tenantId): void
@@ -177,15 +182,22 @@ function campaigns_target_ids_from_groups(array $groupIds, int $tenantId): array
 {
     $ids = [];
     foreach ($groupIds as $groupId) {
-        campaigns_assert_group_owned($groupId, $tenantId);
-        $rows = Db::all(
-            'SELECT t.id
-             FROM targets t
-             INNER JOIN target_group tg ON tg.target_id = t.id
-             WHERE t.tenant_id = ? AND tg.group_id = ?
-             ORDER BY t.id',
-            [$tenantId, $groupId]
-        );
+        $group = campaigns_assert_group_owned($groupId, $tenantId);
+        $isAllMembers = ($group['kind'] ?? '') === 'all' || ($group['name'] ?? '') === '全職員';
+        $rows = $isAllMembers
+            ? Db::all(
+                "SELECT id FROM targets
+                 WHERE tenant_id = ? AND status = 'active' AND is_test = 0 ORDER BY id",
+                [$tenantId]
+            )
+            : Db::all(
+                "SELECT t.id
+                 FROM targets t
+                 INNER JOIN target_group tg ON tg.target_id = t.id
+                 WHERE t.tenant_id = ? AND tg.group_id = ? AND t.status = 'active'
+                 ORDER BY t.id",
+                [$tenantId, $groupId]
+            );
         foreach ($rows as $row) {
             $ids[] = (int) $row['id'];
         }
@@ -774,6 +786,7 @@ function campaigns_handle_update(array $actor): never
             $authFlag = $phishTemplate !== null ? ($phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null) : ($campaign['phish_template_id'] !== null ? (int) campaigns_assert_template_visible((int) $campaign['phish_template_id'], $tenantId, 'phish_login')['auth_flag'] : null);
             $fromAddress = array_key_exists('from_address', $fields) ? $fields['from_address'] : ($campaign['from_address'] !== null ? (string) $campaign['from_address'] : null);
             campaigns_insert_targets($id, $targetIds, $authFlag, $fromAddress);
+            campaigns_distribute_contents($id, $targetIds);
         } else {
             if ($phishTemplate !== null) {
                 Db::run(

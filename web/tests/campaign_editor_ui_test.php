@@ -25,5 +25,10 @@ campaign_editor_ui_check(str_contains($script, "size: 'xl'"), 'campaign modalを
 campaign_editor_ui_check(str_contains($index, 'modal-dialog-scrollable'), 'modal bodyをviewport内でscrollする');
 campaign_editor_ui_check(str_contains($css, '.campaign-content-toolbar'), '大量content向けstyleがある');
 campaign_editor_ui_check(!str_contains($script, 'onclick="content'), 'inline content handlerを使わない');
+campaign_editor_ui_check(str_contains($script, 'campaignTargetSummary'), '送付予定人数を表示する');
+campaign_editor_ui_check(str_contains($script, 'syncCampaignTargetSummary'), 'グループと個別対象者の合計を同期する');
+campaign_editor_ui_check(str_contains($script, 'clearIndividualTargets'), 'グループ変更時に前回の個別選択を解除する');
+campaign_editor_ui_check(str_contains($script, 'selectedGroupIds.some((groupId) => allMembersGroupIds.has(groupId))'), '全職員選択時だけ個別選択を解除する');
+campaign_editor_ui_check(str_contains($script, "action: 'members'"), '選択グループの実メンバーを取得する');
 
 echo "ALL TESTS PASSED\n";

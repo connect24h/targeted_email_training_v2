@@ -1167,9 +1167,11 @@ async function openCampaignModal(campaignId = null) {
       </div>
       <hr>
       <div class="mb-2"><label class="form-label">対象グループ</label>
-        <select class="form-select" name="group_ids" multiple size="3">${(grps.groups||[]).map((g)=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select></div>
-      <div class="mb-2"><label class="form-label">個別対象者</label>
+        <select class="form-select" name="group_ids" multiple size="3">${(grps.groups||[]).map((g)=>`<option value="${g.id}">${esc(g.name)}（${Number(g.target_count || 0)}名）</option>`).join('')}</select>
+        <div class="form-text">グループを変更すると、前回の個別対象者選択は解除されます。</div></div>
+      <div class="mb-2"><label class="form-label">個別対象者（グループへ追加する場合）</label>
         <select class="form-select" name="target_ids" multiple size="4">${(tgts.targets||[]).map((t)=>`<option value="${t.id}">${esc(t.email)}（${esc(t.name||'')}）</option>`).join('')}</select></div>
+      <div class="alert alert-info py-2 mb-0" id="campaignTargetSummary">送付予定人数を計算しています...</div>
     </form>`;
   // コンテンツ行のHTML（件名/本文/偽ログイン/配信形式/添付拡張子・zip/削除）
   const contentRow = (idx) => `
@@ -1498,6 +1500,46 @@ async function openCampaignModal(campaignId = null) {
       Array.from(f.target_ids.options).forEach((o) => { o.selected = tids.includes(o.value); });
     }
   }
+  const campaignForm = document.getElementById('campaignForm');
+  const campaignTargetSummary = document.getElementById('campaignTargetSummary');
+  const allMembersGroupIds = new Set((grps.groups || [])
+    .filter((group) => group.kind === 'all' || group.name === '全職員')
+    .map((group) => Number(group.id)));
+  let cachedGroupMemberIds = new Set();
+  let targetSummaryRequest = 0;
+  const clearIndividualTargets = () => {
+    Array.from(campaignForm.target_ids.options).forEach((option) => { option.selected = false; });
+  };
+  const renderCampaignTargetSummary = () => {
+    const individualIds = new Set(multiVals(campaignForm.target_ids));
+    const combinedIds = new Set([...cachedGroupMemberIds, ...individualIds]);
+    const addedIndividuals = [...individualIds].filter((id) => !cachedGroupMemberIds.has(id)).length;
+    campaignTargetSummary.textContent = `送付予定: ${combinedIds.size}名（グループ ${cachedGroupMemberIds.size}名 + 個別追加 ${addedIndividuals}名）`;
+  };
+  const syncCampaignTargetSummary = async () => {
+    const requestId = ++targetSummaryRequest;
+    const groupIds = multiVals(campaignForm.group_ids);
+    try {
+      const responses = await Promise.all(groupIds.map((groupId) =>
+        api('api/groups.php', { query: { action: 'members', group_id: groupId } })
+      ));
+      if (requestId !== targetSummaryRequest) return;
+      cachedGroupMemberIds = new Set(responses.flatMap((response) =>
+        (response.members || []).map((member) => Number(member.id))
+      ));
+      renderCampaignTargetSummary();
+    } catch (error) {
+      if (requestId !== targetSummaryRequest) return;
+      campaignTargetSummary.textContent = `送付予定人数を取得できません（${error.message}）`;
+    }
+  };
+  campaignForm.group_ids.addEventListener('change', () => {
+    const selectedGroupIds = multiVals(campaignForm.group_ids);
+    if (selectedGroupIds.some((groupId) => allMembersGroupIds.has(groupId))) clearIndividualTargets();
+    syncCampaignTargetSummary();
+  });
+  campaignForm.target_ids.addEventListener('change', renderCampaignTargetSummary);
+  syncCampaignTargetSummary();
   // P6: ビーコンベースURLの疎通確認ボタン
   const checkBtn = document.getElementById('beaconCheckBtn');
   if (checkBtn) checkBtn.addEventListener('click', checkBeaconUrl);
@@ -1934,7 +1976,7 @@ function groupForm(g = {}) {
   return `<form id="groupForm">
     <div class="mb-2"><label class="form-label">名称</label><input class="form-control" name="name" value="${esc(g.name)}" required></div>
     <div class="mb-2"><label class="form-label">種別</label>
-      <select class="form-select" name="kind"><option value="custom"${g.kind==='custom'?' selected':''}>カスタム</option><option value="department"${g.kind==='department'?' selected':''}>部署</option></select></div>
+      <select class="form-select" name="kind"><option value="custom"${g.kind==='custom'?' selected':''}>カスタム</option><option value="department"${g.kind==='department'?' selected':''}>部署</option><option value="all"${g.kind==='all'?' selected':''}>全職員（自動）</option></select></div>
   </form>`;
 }
 function newGroup() {
