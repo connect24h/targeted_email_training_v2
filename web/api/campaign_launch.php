@@ -6,35 +6,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/../lib/bootstrap.php';
-require_once __DIR__ . '/../lib/Scheduler.php';
-require_once __DIR__ . '/../lib/PipelineRunner.php';
-
-/**
- * launch 時の前処理: DB→CSV 生成 + ビーコン/リンク/添付生成を1回だけ行う。
- * 成功なら [true, '']、失敗なら [false, エラー文字列] を返す。
- * 生成物は data_dir 配下(CSV)と docroot(link/beacon)・Attachment に作られる。
- * 送信ワーカーは以後これを再生成せず、送信のみ行う。
- */
-function campaign_launch_pregenerate(int $campaignId, string $dataDir): array
-{
-    try {
-        // 前処理1: DB→CSV 生成(PHP から直接呼ぶ)。
-        PipelineRunner::generateCsv($campaignId);
-    } catch (Throwable $e) {
-        return [false, 'CSV生成: ' . $e->getMessage()];
-    }
-    if ($dataDir === '') {
-        return [false, 'data_dir 未設定'];
-    }
-    // 前処理2: ビーコン/リンク/添付生成(Python スクリプトを exec)。
-    $cmd = escapeshellcmd('/usr/bin/python3') . ' ' . escapeshellarg('/opt/training/bin/create_beacon_files.py')
-         . ' --data-dir ' . escapeshellarg($dataDir) . ' 2>&1';
-    exec($cmd, $out, $rc);
-    if ($rc !== 0) {
-        return [false, 'ビーコン生成(rc=' . $rc . '): ' . implode(' / ', array_slice($out, -3))];
-    }
-    return [true, ''];
-}
+require_once __DIR__ . '/../lib/CampaignLauncher.php';
 
 try {
     $actor  = require_role('operator');
@@ -64,15 +36,17 @@ try {
             json_error('送信日時（開始・終了）が未設定です。「修正」から開始日時・終了日時を設定してください', 400);
         }
         // テスト送信でない本番キャンペーンは、ここでは追加の承認を要する運用も可能（今回は is_test を尊重）。
-        $count = Scheduler::expand($campaignId);
-        if ($count === 0) {
-            json_error('対象者がいません', 400);
-        }
         // 前処理をこの launch 時点で1回だけ実行する(CSV・ビーコン・リンク・添付を生成)。
         // 開始日時が来たら worker は送信のみ行う。前処理失敗はここで即座にユーザーへ返す(早期発見)。
         // launch 後に対象者/テンプレを変えた場合は、下書きに戻して再launchで作り直す(手動反映)。
-        [$genOk, $genErr] = campaign_launch_pregenerate($campaignId, (string) ($campaign['data_dir'] ?? ''));
+        [$genOk, $genErr, $count] = CampaignLauncher::prepare(
+            $campaignId,
+            (string) ($campaign['data_dir'] ?? '')
+        );
         if (!$genOk) {
+            if ($genErr === '対象者がいません') {
+                json_error($genErr, 400);
+            }
             json_error('送信データの生成に失敗しました: ' . $genErr, 500);
         }
         Db::run("UPDATE campaigns SET status='scheduled' WHERE id=?", [$campaignId]);

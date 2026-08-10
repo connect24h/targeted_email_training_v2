@@ -14,6 +14,7 @@ import configparser
 import html
 import qrcode
 from datetime import datetime
+from pathlib import Path
 
 # QR埋め込み文書生成（同ディレクトリに配置。ロジックは qr_doc_gen.py 側を正とし、ここでは import のみ行う）。
 from qr_doc_gen import generate_qr_document
@@ -70,6 +71,38 @@ QR_DOCUMENT_FORMATS = {
     'qr_pdf': 'pdf',
     'qr_html': 'html',
 }
+
+WEB_ROOT = Path("/var/www/html")
+
+
+def _has_csv_value(value):
+    return not pd.isna(value) and str(value).strip() not in ("", "nan")
+
+
+def validate_generated_artifacts(list_df, web_root=WEB_ROOT):
+    """送信に必要な生成物が全行分揃っていることを検証する。"""
+    errors = []
+    root = Path(web_root)
+    for index, row in list_df.iterrows():
+        tracking_id = str(row.get('乱数列', '')).strip().zfill(10)
+        for label, path in (
+            ('ビーコン', root / f"kunren-beacon-{tracking_id}.png"),
+            ('リンクページ', root / f"link-{tracking_id}.html"),
+        ):
+            if not path.is_file() or path.stat().st_size == 0 or not os.access(path, os.R_OK):
+                errors.append(f"行 {index + 1}: {label}が未生成または読取不可: {path}")
+
+        if not _has_csv_value(row.get('添付ファイル番号', '')):
+            continue
+        attachment_value = row.get('添付ファイル', '')
+        if not _has_csv_value(attachment_value):
+            errors.append(f"行 {index + 1}: 必須添付のパスが空です")
+            continue
+        attachment_path = Path(str(attachment_value).strip())
+        if (not attachment_path.is_file() or attachment_path.stat().st_size == 0
+                or not os.access(attachment_path, os.R_OK)):
+            errors.append(f"行 {index + 1}: 必須添付が未生成、空、または読取不可: {attachment_path}")
+    return errors
 
 
 def resolve_qr_extension(extension):
@@ -177,15 +210,17 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
         error_msg = f"[ERROR] CSVファイル読み込みエラー: {str(e)}"
         print(error_msg)
         logger.error(error_msg)
-        return
+        return 1
     
     # ビーコンマスターファイルパス
     # ビーコンマスターファイルとHTMLマスターファイルは固定パス
     beacon_master = "/opt/training/bin/__BeaconMst.png"
 
-    if not os.path.exists(beacon_master):
-        logger.info(f"エラー: ビーコンマスターファイルが見つかりません: {beacon_master}")
-        return
+    if (not os.path.isfile(beacon_master) or not os.access(beacon_master, os.R_OK)):
+        error_msg = f"[ERROR] ビーコンマスターファイルが未配置または読取不可: {beacon_master}"
+        print(error_msg, flush=True)
+        logger.error(error_msg)
+        return 1
 
     # HTMLマスターファイルの読み込み関数
     def load_html_master(auth_flag):
@@ -510,12 +545,24 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
         logger.info(f"\nlist.csv更新完了: {list_csv_path}")
     except Exception as e:
         print(f"[ERROR] list.csv保存エラー: {str(e)}", flush=True)
-        logger.info(f"list.csv保存エラー: {str(e)}")
+        logger.error(f"list.csv保存エラー: {str(e)}")
+        return 1
+
+    validation_errors = validate_generated_artifacts(list_df)
+    if validation_errors:
+        for error in validation_errors[:20]:
+            print(f"[ERROR] {error}", flush=True)
+            logger.error(error)
+        if len(validation_errors) > 20:
+            logger.error(f"生成物検証エラー: 他 {len(validation_errors) - 20} 件")
+        print(f"[ERROR] 生成物検証に失敗しました: {len(validation_errors)}件", flush=True)
+        return 1
 
     print(f"\n{'='*60}", flush=True)
     print("[OK] ビーコンファイル作成プログラム完了", flush=True)
     print(f"{'='*60}", flush=True)
     logger.info("ビーコンファイル作成プログラム完了")
+    return 0
 
 def main():
     import argparse
@@ -526,7 +573,7 @@ def main():
                         help='データディレクトリのパス')
     args = parser.parse_args()
     
-    create_beacon_files(args.data_dir)
+    return create_beacon_files(args.data_dir)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

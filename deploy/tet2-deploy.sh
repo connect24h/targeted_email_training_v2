@@ -100,9 +100,27 @@ deploy_sources() {
   local source category relative destination mode
   while IFS=$'\t' read -r source category relative destination; do
     mkdir -p "$(dirname "$destination")"
-    mode=$(stat -c '%a' "$source")
-    install -m "$mode" "$source" "$destination"
+    mode=$(tet2_deploy_mode "$category" "$relative")
+    install -o root -g root -m "$mode" "$source" "$destination"
   done < "$TET2_MAPPING_FILE"
+}
+
+verify_runtime_access() {
+  local beacon="$TET2_BIN_DEST/__BeaconMst.png"
+  local runtime_user
+  if [[ $(stat -c '%U:%G:%a' "$beacon") != 'root:root:644' ]]; then
+    echo "ビーコン素材のowner/modeがpolicy違反です: $(stat -c '%U:%G:%a' "$beacon")" >&2
+    return 1
+  fi
+  # Rehearsalの一時destinationではuser namespace制約を避け、mode検証までとする。
+  [[ $TET2_BIN_DEST == /opt/training/bin ]] || return 0
+  for runtime_user in www-data training; do
+    if id -u "$runtime_user" >/dev/null 2>&1 \
+      && ! runuser -u "$runtime_user" -- test -r "$beacon"; then
+      echo "runtime userがビーコン素材を読めません: $runtime_user ($beacon)" >&2
+      return 1
+    fi
+  done
 }
 
 write_deployed_manifest() {
@@ -134,6 +152,7 @@ main() {
   fi
   backup_sources
   deploy_sources
+  verify_runtime_access
   write_deployed_manifest
   echo "[APPLY] 配備完了 backup_id=$TET2_BACKUP_ID"
   echo 'migration・service reload・backup自動削除は実行していません'

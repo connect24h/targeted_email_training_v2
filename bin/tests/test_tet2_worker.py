@@ -66,6 +66,63 @@ class WorkerFailureTest(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("書き込み", error)
 
+    def test_should_preserve_paused_campaign_when_running_batch_stops_cleanly(self) -> None:
+        self.conn.execute("DELETE FROM send_schedule WHERE id=33")
+        self.conn.execute("UPDATE campaigns SET status='paused' WHERE id=82")
+        self.conn.commit()
+        batch = self.conn.execute("SELECT * FROM send_schedule WHERE id=32").fetchone()
+        proc = mock.Mock(returncode=0, stderr=None)
+
+        tet2_worker.finish_batch(
+            self.conn,
+            {
+                "proc": proc,
+                "batch": batch,
+                "cid": 82,
+                "data_dir": "/nonexistent",
+                "batch_no": 1,
+            },
+        )
+
+        status = self.conn.execute("SELECT status FROM campaigns WHERE id=82").fetchone()["status"]
+        self.assertEqual(status, "paused")
+
+
+class WorkerClaimTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE campaigns (id INTEGER PRIMARY KEY, status TEXT NOT NULL);
+            CREATE TABLE send_schedule (
+                id INTEGER PRIMARY KEY,
+                campaign_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                scheduled_at TEXT NOT NULL,
+                claimed_at TEXT,
+                worker_pid INTEGER
+            );
+            INSERT INTO campaigns VALUES (1, 'draft'), (2, 'scheduled');
+            INSERT INTO send_schedule (id, campaign_id, status, scheduled_at) VALUES
+                (1, 1, 'queued', '2000-01-01 00:00:00'),
+                (2, 2, 'queued', '2000-01-01 00:00:00');
+            """
+        )
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_should_claim_only_scheduled_or_running_campaign(self) -> None:
+        batch = tet2_worker.claim_batch(self.conn)
+
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch["campaign_id"], 2)
+        draft_status = self.conn.execute(
+            "SELECT status FROM send_schedule WHERE id=1"
+        ).fetchone()["status"]
+        self.assertEqual(draft_status, "queued")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,17 +84,21 @@ def claim_batch(conn, busy_campaign_ids=None):
     if busy:
         placeholders = ",".join("?" * len(busy))
         sql = (
-            f"SELECT * FROM send_schedule "
-            f"WHERE status='queued' AND scheduled_at <= ? "
-            f"AND campaign_id NOT IN ({placeholders}) "
-            f"ORDER BY scheduled_at LIMIT 1"
+            f"SELECT s.* FROM send_schedule s "
+            f"JOIN campaigns c ON c.id=s.campaign_id "
+            f"WHERE s.status='queued' AND s.scheduled_at <= ? "
+            f"AND c.status IN ('scheduled','running') "
+            f"AND s.campaign_id NOT IN ({placeholders}) "
+            f"ORDER BY s.scheduled_at LIMIT 1"
         )
         row = conn.execute(sql, (now, *busy)).fetchone()
     else:
         row = conn.execute(
-            """SELECT * FROM send_schedule
-               WHERE status='queued' AND scheduled_at <= ?
-               ORDER BY scheduled_at LIMIT 1""",
+            """SELECT s.* FROM send_schedule s
+               JOIN campaigns c ON c.id=s.campaign_id
+               WHERE s.status='queued' AND s.scheduled_at <= ?
+                 AND c.status IN ('scheduled','running')
+               ORDER BY s.scheduled_at LIMIT 1""",
             (now,),
         ).fetchone()
     if row is None:
@@ -124,6 +128,11 @@ def start_batch(conn, batch):
     campaign = conn.execute("SELECT * FROM campaigns WHERE id=?", (cid,)).fetchone()
     if campaign is None:
         _fail(conn, batch, "campaign not found")
+        return None
+    if campaign["status"] not in ("scheduled", "running"):
+        conn.execute("UPDATE send_schedule SET status='cancelled' WHERE id=?", (batch["id"],))
+        conn.commit()
+        log(f"batch {batch['id']} campaign status={campaign['status']} → cancelled")
         return None
 
     now = datetime.now()
@@ -212,10 +221,17 @@ def finish_batch(conn, job):
         _fail(conn, batch, f"send_email 失敗(rc={rc}): {stderr.decode('utf-8', 'ignore')[:300]}")
         return
 
-    conn.execute("UPDATE send_schedule SET status='done' WHERE id=?", (batch["id"],))
     # list.csv の送信フラグ(1)を campaign_targets.send_status='sent' に同期
     _sync_send_status(conn, cid, data_dir)
     _log_delivery(conn, cid, data_dir)
+    if os.path.isfile(os.path.join(data_dir, "stop_sending.flag")):
+        conn.execute("UPDATE send_schedule SET status='cancelled' WHERE id=?", (batch["id"],))
+        conn.execute("UPDATE campaigns SET status='paused' WHERE id=?", (cid,))
+        conn.commit()
+        log(f"送信停止 campaign={cid} batch={job['batch_no']}")
+        return
+
+    conn.execute("UPDATE send_schedule SET status='done' WHERE id=?", (batch["id"],))
     conn.execute(
         "UPDATE campaigns SET status='running' WHERE id=? AND status IN ('scheduled','draft')",
         (cid,),
@@ -226,7 +242,10 @@ def finish_batch(conn, job):
         (cid,),
     ).fetchone()["c"]
     if remaining == 0:
-        conn.execute("UPDATE campaigns SET status='done' WHERE id=?", (cid,))
+        conn.execute(
+            "UPDATE campaigns SET status='done' WHERE id=? AND status='running'",
+            (cid,),
+        )
     conn.commit()
     log(f"送信完了 campaign={cid} batch={job['batch_no']}")
 

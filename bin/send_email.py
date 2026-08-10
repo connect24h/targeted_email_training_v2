@@ -40,6 +40,27 @@ ALERT_FILE = "/opt/training/bin/data/send_alerts.json"
 STATUS_FILE = "/opt/training/bin/data/send_status.json"
 
 
+def _has_csv_value(value):
+    return not pd.isna(value) and str(value).strip() not in ("", "nan")
+
+
+def required_attachment_error(row):
+    """添付指定行のpath・実体・size・read権限をfail-closedで検証する。"""
+    if not _has_csv_value(row.get('添付ファイル番号', '')):
+        return None
+    attachment_value = row.get('添付ファイル', '')
+    if not _has_csv_value(attachment_value):
+        return "必須添付のパスが空です"
+    path = str(attachment_value).strip()
+    if not os.path.isfile(path):
+        return f"必須添付が見つかりません: {path}"
+    if os.path.getsize(path) == 0:
+        return f"必須添付が空です: {path}"
+    if not os.access(path, os.R_OK):
+        return f"必須添付を読み取れません: {path}"
+    return None
+
+
 class FlushingStreamHandler(logging.StreamHandler):
     """リアルタイム出力用のStreamHandler（自動フラッシュ付き）"""
     def emit(self, record):
@@ -388,7 +409,8 @@ class TargetedEmailSender:
                 if "nan" in str(attachment_path).lower() and str(attachment_path).endswith(".nan"):
                     self.logger.info(f"nanファイルのため添付をスキップ: {attachment_path}")
                 elif not self.attach_file(msg, attachment_path):
-                    self.logger.warning(f"添付ファイル処理失敗、メール本文のみ送信: {to_email}")
+                    self.logger.error(f"添付ファイル処理失敗、送信を中止: {to_email}")
+                    return False
             
             # SMTPサーバー接続とメール送信
             try:
@@ -442,6 +464,7 @@ class TargetedEmailSender:
         max_consecutive_empty = 10  # 連続空行の許容数
         
         validation_errors = []
+        required_attachment_errors = []
         
         for index, row in self.email_list.iterrows():
             # 送信先情報チェック
@@ -479,7 +502,14 @@ class TargetedEmailSender:
                 invalid_count += 1
                 continue
                 
-            # 添付ファイルチェック
+            # 添付ファイルチェック。添付指定行は本文だけ送ることを禁止する。
+            required_error = required_attachment_error(row)
+            if required_error is not None:
+                message = f"行 {index + 1}: {required_error}"
+                validation_errors.append(message)
+                required_attachment_errors.append(message)
+                invalid_count += 1
+                continue
             attachment_path = row.get('添付ファイル')
             if attachment_path and not pd.isna(attachment_path) and str(attachment_path).strip():
                 if not os.path.exists(attachment_path):
@@ -497,6 +527,10 @@ class TargetedEmailSender:
             if len(validation_errors) > 20:
                 self.logger.warning(f"  ... 他 {len(validation_errors) - 20} 件のエラー")
                 
+        if required_attachment_errors:
+            raise ValueError(
+                f"必須添付の検証に失敗しました: {len(required_attachment_errors)}件"
+            )
         if valid_count == 0:
             raise ValueError("有効な送信データが見つかりません")
             
@@ -723,7 +757,7 @@ class TargetedEmailSender:
         except ValueError as e:
             self.logger.error(f"データ検証エラー: {str(e)}")
             self.update_status("error", 0, 0, 0, 0, "")
-            return
+            raise
 
         success_count = 0
         error_count = 0
@@ -828,6 +862,9 @@ class TargetedEmailSender:
                     body = "本文作成エラーが発生しました"
                 
                 # 添付ファイル検証
+                required_error = required_attachment_error(row)
+                if required_error is not None:
+                    raise ValueError(f"行 {index + 1}: {required_error}")
                 attachment_path = row.get('添付ファイル')
                 if attachment_path and not pd.isna(attachment_path) and str(attachment_path).strip():
                     # nanファイルの場合は添付なしとして処理

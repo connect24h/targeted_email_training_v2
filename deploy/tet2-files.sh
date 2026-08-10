@@ -16,6 +16,21 @@ TET2_BIN_FILES=(
   training_config.py
 )
 
+tet2_deploy_mode() {
+  local category=$1
+  local relative=$2
+  case "$category" in
+    bin)
+      case "$relative" in
+        *.py) echo 0755 ;;
+        *) echo 0644 ;;
+      esac
+      ;;
+    web|systemd|cron) echo 0644 ;;
+    *) echo "deploy categoryが不正です: $category" >&2; return 1 ;;
+  esac
+}
+
 tet2_require_safe_path() {
   local label=$1
   local path=$2

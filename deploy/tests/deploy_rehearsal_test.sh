@@ -39,6 +39,9 @@ test ! -e "$backup_root"
 "$deploy_script" --apply "--backup-id=$backup_id" "${common_args[@]}" > /dev/null
 cmp "$repo_root/web/index.html" "$web_dest/index.html"
 cmp "$repo_root/bin/create_beacon_files.py" "$bin_dest/create_beacon_files.py"
+test "$(stat -c '%a' "$bin_dest/__BeaconMst.png")" = '644'
+test "$(stat -c '%a' "$bin_dest/create_beacon_files.py")" = '755'
+test "$(stat -c '%U:%G' "$bin_dest/__BeaconMst.png")" = 'root:root'
 grep -qx 'local-config' "$bin_dest/config.ini"
 test -f "$backup_root/$backup_id/files.tsv"
 test -f "$backup_root/$backup_id/db/tet2.sqlite"
