@@ -129,7 +129,6 @@ const VIEWS = {
   dashboard: renderDashboard,
   campaigns: renderCampaigns,
   reports: renderReports,
-  targets: renderTargets,
   groups: renderGroups,
   templates: renderTemplates,
   eduDeliveries: renderEduDeliveries,
@@ -2696,6 +2695,12 @@ async function renderEduTrend() {
 
 /* ========== ユーザ管理 ========== */
 async function renderUsers() {
+  await renderTargets();
+  if (!roleAtLeast(State.user.role, 'tenant_admin')) return;
+  await renderAdminUsers();
+}
+
+async function renderAdminUsers() {
   const { users } = await api('api/users.php', { query: { action: 'list' } });
   cacheRows('users', users);
   // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
@@ -2728,7 +2733,7 @@ function newUser() {
     const f = $('#userForm');
     await api('api/users.php', { method: 'POST', query: { action: 'create' },
       body: { email: f.email.value.trim(), name: f.name.value.trim(), role: f.role.value, password: f.password.value } });
-    toast('作成しました', 'ok'); renderUsers();
+    toast('作成しました', 'ok'); renderAdminUsers();
   });
 }
 function editUser(id) {
@@ -2739,13 +2744,13 @@ function editUser(id) {
     const body = { id: u.id, name: f.name.value.trim(), role: f.role.value, status: f.status.value };
     if (f.password.value) body.password = f.password.value;
     await api('api/users.php', { method: 'POST', query: { action: 'update' }, body });
-    toast('更新しました', 'ok'); renderUsers();
+    toast('更新しました', 'ok'); renderAdminUsers();
   });
 }
 async function deleteUser(id) {
   if (!confirm('このユーザを削除しますか？')) return;
   try { await api('api/users.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
-    toast('削除しました', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'err'); }
+    toast('削除しました', 'ok'); renderAdminUsers(); } catch (e) { toast(e.message, 'err'); }
 }
 
 /* ========== テナント管理 ========== */

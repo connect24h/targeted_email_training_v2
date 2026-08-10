@@ -1,7 +1,7 @@
 ---
 project: /root/tet2 + /root/SecurityAwareness
 created: 2026-08-09
-status: production_rollout_completed
+status: superseded_by_native_tet2_ui
 execution_requires_user_confirmation: false
 recommended_source_of_truth: TET2 targets
 phase_1_tenant_scope: single configured tenant
@@ -9,6 +9,17 @@ architecture_review: passed
 ---
 
 # Awareness受講者と標的型メール訓練対象者の機能統合計画
+
+## 2026-08-10 方針訂正
+
+SecurityAwarenessは独立した管理UIではなく、TET2内の「教育配信」「教材バンク」
+「教育レポート」「ユーザ管理」「テナント管理」で運用する。教育配信と標的型メール訓練は
+もともと同じ`targets`および`target_group`を参照していたため、別DBへの人物同期は不要だった。
+
+本計画で構築したSecurityAwareness standalone app、participant sync timer、Bearer APIの公開設定は停止・退役した。
+人物管理はTET2の「ユーザ管理」に統合し、「受講者・訓練対象者」と「管理画面ユーザ」の二つの役割を
+タブで明確に分ける。以下の2026-08-09記録は、誤った分離構成を再採用しないための経緯として残す。
+正しい現行仕様は`docs/security-awareness-user-management.md`を正本とする。
 
 ## 2026-08-09 実装・本番稼働記録
 

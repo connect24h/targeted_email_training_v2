@@ -94,7 +94,7 @@ deploy/rollbackの詳しい安全手順は[`deploy/README.md`](deploy/README.md)
 - OWASP Top 10 診断・修正済み（内部URL遮断/レート制限/内部パス403/IDOR多重防御）
 - CSP 対応のため外部CDN非依存（`assets/vendor` にライブラリをローカル配置）
 - CSRF トークン（`X-CSRF-Token`）、`esc()` 徹底、fetch 30秒 timeout
-- SecurityAwarenessとの人物マスター連携: [`docs/awareness-participant-integration.md`](docs/awareness-participant-integration.md)
+- SecurityAwarenessのユーザ管理統合: [`docs/security-awareness-user-management.md`](docs/security-awareness-user-management.md)
 
 ## 関連
 

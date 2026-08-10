@@ -57,7 +57,6 @@
         <li><a class="nav-link" data-view="campaigns"><i class="bi bi-envelope-paper"></i>キャンペーン</a></li>
         <li><a class="nav-link" data-view="campaignAutomations"><i class="bi bi-calendar2-repeat"></i>定期キャンペーン</a></li>
         <li><a class="nav-link" data-view="reports"><i class="bi bi-bar-chart"></i>レポート</a></li>
-        <li><a class="nav-link" data-view="targets"><i class="bi bi-people"></i>対象者</a></li>
         <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
         <li><a class="nav-link" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
         <li><a class="nav-link" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
@@ -68,7 +67,7 @@
         <li><a class="nav-link" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
         <li><a class="nav-link" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
         <li><a class="nav-link" data-view="eduReport"><i class="bi bi-mortarboard"></i>教育レポート</a></li>
-        <li data-role="tenant_admin"><a class="nav-link" data-view="users"><i class="bi bi-person-badge"></i>ユーザ管理</a></li>
+        <li><a class="nav-link" data-view="users"><i class="bi bi-person-badge"></i>ユーザ管理</a></li>
         <li data-role="superadmin"><a class="nav-link" data-view="tenants"><i class="bi bi-building"></i>テナント管理</a></li>
       </ul>
     </aside>
@@ -212,32 +211,6 @@
             </div>
           </div>
         </div>
-      </section>
-
-      <!-- 対象者 -->
-      <section data-panel="targets" class="view-panel d-none">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-people me-1"></i>対象者</h5>
-          <div class="d-flex gap-2 align-items-center">
-            <div class="form-check form-switch me-1">
-              <input class="form-check-input" type="checkbox" role="switch" id="showArchivedTargets">
-              <label class="form-check-label small text-muted" for="showArchivedTargets">削除済みを表示</label>
-            </div>
-            <div class="btn-group">
-              <button class="btn btn-outline-secondary btn-sm" id="exportCsvBtn"><i class="bi bi-download"></i> CSV出力</button>
-              <button class="btn btn-outline-secondary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"><span class="visually-hidden">CSV出力オプション</span></button>
-              <ul class="dropdown-menu dropdown-menu-end">
-                <li><button class="dropdown-item" id="exportCsvAllBtn"><i class="bi bi-archive me-1"></i>削除済み(退職者)も含めて出力</button></li>
-              </ul>
-            </div>
-            <button class="btn btn-outline-secondary btn-sm" data-perm="operator" id="importCsvBtn"><i class="bi bi-upload"></i> CSV取込</button>
-            <button class="btn btn-primary btn-sm" data-perm="operator" id="newTargetBtn"><i class="bi bi-plus-lg"></i> 新規</button>
-          </div>
-        </div>
-        <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th>操作</th></tr></thead>
-          <tbody id="targetsBody"></tbody>
-        </table></div>
       </section>
 
       <!-- グループ -->
@@ -471,14 +444,52 @@
 
       <!-- ユーザ管理 -->
       <section data-panel="users" class="view-panel d-none">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-person-badge me-1"></i>ユーザ管理</h5>
-          <button class="btn btn-primary btn-sm" id="newUserBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+        <h5 class="mb-1"><i class="bi bi-person-badge me-1"></i>ユーザ管理</h5>
+        <p class="small text-muted mb-3">教育受講者と標的型メール訓練対象者を、同じ人物マスターで管理します。</p>
+        <ul class="nav nav-tabs mb-3" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="participantsTab" data-bs-toggle="tab" data-bs-target="#participantsPane" type="button" role="tab" aria-controls="participantsPane" aria-selected="true">受講者・訓練対象者</button>
+          </li>
+          <li class="nav-item" role="presentation" data-role="tenant_admin">
+            <button class="nav-link" id="adminUsersTab" data-bs-toggle="tab" data-bs-target="#adminUsersPane" type="button" role="tab" aria-controls="adminUsersPane" aria-selected="false">管理画面ユーザ</button>
+          </li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="participantsPane" role="tabpanel" aria-labelledby="participantsTab" tabindex="0">
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+              <div class="small text-muted">教育配信と標的型メール訓練の共通対象者</div>
+              <div class="d-flex gap-2 align-items-center flex-wrap">
+                <div class="form-check form-switch me-1">
+                  <input class="form-check-input" type="checkbox" role="switch" id="showArchivedTargets">
+                  <label class="form-check-label small text-muted" for="showArchivedTargets">削除済みを表示</label>
+                </div>
+                <div class="btn-group">
+                  <button class="btn btn-outline-secondary btn-sm" id="exportCsvBtn"><i class="bi bi-download"></i> CSV出力</button>
+                  <button class="btn btn-outline-secondary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"><span class="visually-hidden">CSV出力オプション</span></button>
+                  <ul class="dropdown-menu dropdown-menu-end">
+                    <li><button class="dropdown-item" id="exportCsvAllBtn"><i class="bi bi-archive me-1"></i>削除済み(退職者)も含めて出力</button></li>
+                  </ul>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm" data-perm="operator" id="importCsvBtn"><i class="bi bi-upload"></i> CSV取込</button>
+                <button class="btn btn-primary btn-sm" data-perm="operator" id="newTargetBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+              </div>
+            </div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th>操作</th></tr></thead>
+              <tbody id="targetsBody"></tbody>
+            </table></div>
+          </div>
+          <div class="tab-pane fade" id="adminUsersPane" role="tabpanel" aria-labelledby="adminUsersTab" tabindex="0" data-role="tenant_admin">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <div class="small text-muted">この管理画面へログインできるアカウント</div>
+              <button class="btn btn-primary btn-sm" id="newUserBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+            </div>
+            <div class="table-responsive"><table class="table table-hover align-middle">
+              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>操作</th></tr></thead>
+              <tbody id="usersBody"></tbody>
+            </table></div>
+          </div>
         </div>
-        <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>操作</th></tr></thead>
-          <tbody id="usersBody"></tbody>
-        </table></div>
       </section>
 
       <!-- テナント管理 -->
