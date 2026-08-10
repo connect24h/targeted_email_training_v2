@@ -30,9 +30,12 @@ SecurityAwarenessの管理機能はTET2の管理UI内で提供する。独立し
 
 2026-08-10に次を停止・退役した。
 
-- `/root/SecurityAwareness`のstandalone appとPostgreSQL（container停止、データはrollback用に保持）
+- 旧standalone appとPostgreSQL（container停止、`/root/_archive/SecurityAwareness-retired-20260810`へ未commit変更を含めて保全）
 - `security-awareness-participant-sync.timer`とservice
 - TET2の外部participant Bearer APIおよびApache公開例外
+
+元の`/root/SecurityAwareness`は退役案内だけのtombstoneとし、旧projectを同じpathで誤って改修・再稼働しない。
+`/root/AGENTS.md`と`/root/_archive/AGENTS.md`の双方でarchive配下の変更を禁止している。
 
 外部連携用のexpand-only migrationは、適用済みDBとの整合性とrollback安全性のため残す。
 アプリケーションからは参照せず、将来のschema整理は別migrationで行う。

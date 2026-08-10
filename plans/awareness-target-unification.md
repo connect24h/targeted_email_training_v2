@@ -20,6 +20,8 @@ SecurityAwarenessは独立した管理UIではなく、TET2内の「教育配信
 人物管理はTET2の「ユーザ管理」に統合し、「受講者・訓練対象者」と「管理画面ユーザ」の二つの役割を
 タブで明確に分ける。以下の2026-08-09記録は、誤った分離構成を再採用しないための経緯として残す。
 正しい現行仕様は`docs/security-awareness-user-management.md`を正本とする。
+旧project本体は`/root/_archive/SecurityAwareness-retired-20260810`へread-only archiveとして移動し、
+`/root/SecurityAwareness`はTET2へ誘導する退役案内だけを残した。
 
 ## 2026-08-09 実装・本番稼働記録
 
