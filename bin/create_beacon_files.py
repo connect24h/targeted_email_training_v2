@@ -73,13 +73,14 @@ QR_DOCUMENT_FORMATS = {
 }
 
 WEB_ROOT = Path("/var/www/html")
+ATTACHMENT_ROOT = Path("/opt/training/bin/Attachment")
 
 
 def _has_csv_value(value):
     return not pd.isna(value) and str(value).strip() not in ("", "nan")
 
 
-def validate_generated_artifacts(list_df, web_root=WEB_ROOT):
+def validate_generated_artifacts(list_df, web_root=WEB_ROOT, attachment_root=ATTACHMENT_ROOT):
     """送信に必要な生成物が全行分揃っていることを検証する。"""
     errors = []
     root = Path(web_root)
@@ -99,8 +100,14 @@ def validate_generated_artifacts(list_df, web_root=WEB_ROOT):
             errors.append(f"行 {index + 1}: 必須添付のパスが空です")
             continue
         attachment_path = Path(str(attachment_value).strip())
-        if (not attachment_path.is_file() or attachment_path.stat().st_size == 0
-                or not os.access(attachment_path, os.R_OK)):
+        try:
+            resolved_attachment = attachment_path.resolve()
+            resolved_attachment.relative_to(Path(attachment_root).resolve())
+        except (OSError, ValueError):
+            errors.append(f"行 {index + 1}: 必須添付が管理外のpathです: {attachment_path}")
+            continue
+        if (not resolved_attachment.is_file() or resolved_attachment.stat().st_size == 0
+                or not os.access(resolved_attachment, os.R_OK)):
             errors.append(f"行 {index + 1}: 必須添付が未生成、空、または読取不可: {attachment_path}")
     return errors
 

@@ -25,6 +25,7 @@ import subprocess
 import re
 import json
 from datetime import datetime
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -38,27 +39,39 @@ from email.utils import formataddr, formatdate, make_msgid
 STOP_FILE = "/opt/training/bin/data/stop_sending.flag"
 ALERT_FILE = "/opt/training/bin/data/send_alerts.json"
 STATUS_FILE = "/opt/training/bin/data/send_status.json"
+ATTACHMENT_ROOT = Path("/opt/training/bin/Attachment")
 
 
 def _has_csv_value(value):
     return not pd.isna(value) and str(value).strip() not in ("", "nan")
 
 
-def required_attachment_error(row):
+def attachment_file_error(path_value, attachment_root=ATTACHMENT_ROOT):
+    path = Path(str(path_value).strip())
+    root = Path(attachment_root).resolve()
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return f"管理外の添付パスです: {path}"
+    if not resolved.is_file():
+        return f"添付ファイルが見つかりません: {path}"
+    if resolved.stat().st_size == 0:
+        return f"添付ファイルが空です: {path}"
+    if not os.access(resolved, os.R_OK):
+        return f"添付ファイルを読み取れません: {path}"
+    return None
+
+
+def required_attachment_error(row, attachment_root=ATTACHMENT_ROOT):
     """添付指定行のpath・実体・size・read権限をfail-closedで検証する。"""
     if not _has_csv_value(row.get('添付ファイル番号', '')):
         return None
     attachment_value = row.get('添付ファイル', '')
     if not _has_csv_value(attachment_value):
         return "必須添付のパスが空です"
-    path = str(attachment_value).strip()
-    if not os.path.isfile(path):
-        return f"必須添付が見つかりません: {path}"
-    if os.path.getsize(path) == 0:
-        return f"必須添付が空です: {path}"
-    if not os.access(path, os.R_OK):
-        return f"必須添付を読み取れません: {path}"
-    return None
+    error = attachment_file_error(attachment_value, attachment_root)
+    return f"必須{error}" if error is not None else None
 
 
 class FlushingStreamHandler(logging.StreamHandler):
@@ -408,6 +421,9 @@ class TargetedEmailSender:
                 # nanファイルは添付しない
                 if "nan" in str(attachment_path).lower() and str(attachment_path).endswith(".nan"):
                     self.logger.info(f"nanファイルのため添付をスキップ: {attachment_path}")
+                elif attachment_file_error(attachment_path, self.attachment_dir) is not None:
+                    self.logger.error(f"添付ファイルのpath検証失敗、送信を中止: {to_email}")
+                    return False
                 elif not self.attach_file(msg, attachment_path):
                     self.logger.error(f"添付ファイル処理失敗、送信を中止: {to_email}")
                     return False
@@ -503,7 +519,7 @@ class TargetedEmailSender:
                 continue
                 
             # 添付ファイルチェック。添付指定行は本文だけ送ることを禁止する。
-            required_error = required_attachment_error(row)
+            required_error = required_attachment_error(row, self.attachment_dir)
             if required_error is not None:
                 message = f"行 {index + 1}: {required_error}"
                 validation_errors.append(message)
@@ -857,7 +873,7 @@ class TargetedEmailSender:
                     body = "本文作成エラーが発生しました"
                 
                 # 添付ファイル検証
-                required_error = required_attachment_error(row)
+                required_error = required_attachment_error(row, self.attachment_dir)
                 if required_error is not None:
                     raise ValueError(f"行 {index + 1}: {required_error}")
                 attachment_path = row.get('添付ファイル')

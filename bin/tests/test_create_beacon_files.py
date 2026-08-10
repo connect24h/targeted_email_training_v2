@@ -54,7 +54,7 @@ class GeneratedArtifactValidationTest(unittest.TestCase):
                 }]
             )
 
-            errors = create_beacon_files.validate_generated_artifacts(rows, root)
+            errors = create_beacon_files.validate_generated_artifacts(rows, root, root)
 
         self.assertEqual(errors, [])
 

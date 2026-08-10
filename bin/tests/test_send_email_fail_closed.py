@@ -28,7 +28,8 @@ class RequiredAttachmentValidationTest(unittest.TestCase):
             empty.touch()
 
             error = send_email.required_attachment_error(
-                {"添付ファイル番号": "1", "添付ファイル": str(empty)}
+                {"添付ファイル番号": "1", "添付ファイル": str(empty)},
+                attachment_root=temp_dir,
             )
 
         self.assertIsNotNone(error)
@@ -40,6 +41,19 @@ class RequiredAttachmentValidationTest(unittest.TestCase):
         )
 
         self.assertIsNone(error)
+
+    def test_should_reject_attachment_outside_managed_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as managed_dir, tempfile.TemporaryDirectory() as other_dir:
+            outside = Path(other_dir) / "secret.txt"
+            outside.write_text("secret", encoding="utf-8")
+
+            error = send_email.required_attachment_error(
+                {"添付ファイル番号": "1", "添付ファイル": str(outside)},
+                attachment_root=managed_dir,
+            )
+
+        self.assertIsNotNone(error)
+        self.assertIn("管理外", error)
 
     def test_should_never_clear_operator_stop_flag(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
