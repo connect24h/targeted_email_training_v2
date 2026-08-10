@@ -2580,7 +2580,48 @@ async function renderEduMaterials() {
   $('#eduMaterialsBody').innerHTML = Cache.eduMaterialList.length ? Cache.eduMaterialList.map((material) => `
     <tr><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
       <td class="small text-muted">${esc(material.description || '')}</td><td>${material.slide_count}枚</td>
-      <td>${canEdit(material) ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(4);
+      <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduMaterial(${material.id})"><i class="bi bi-play-circle"></i> 教材を試行</button>
+        ${canEdit(material) ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(4);
+}
+
+let eduMaterialPreviewIndex = 0;
+function eduMaterialPreviewHtml() {
+  return `<div class="alert alert-info py-2 small"><i class="bi bi-eye me-1"></i>プレビューです。受講履歴や採点結果は保存されません。</div>
+    <div class="mx-auto" style="max-width:760px">
+      <div class="d-flex justify-content-between mb-2"><span id="eduMaterialPreviewProgress" class="small text-muted" aria-live="polite"></span><span class="badge bg-primary">教材試行</span></div>
+      <div class="progress mb-3" style="height:6px"><div id="eduMaterialPreviewBar" class="progress-bar" style="width:0%"></div></div>
+      <div class="card shadow-sm"><div class="card-body p-4" style="min-height:280px">
+        <h4 id="eduMaterialPreviewTitle"></h4><div id="eduMaterialPreviewBody" class="mt-3" style="white-space:pre-wrap;line-height:1.9"></div>
+      </div></div>
+      <div class="d-flex justify-content-between mt-3"><button id="eduMaterialPreviewPrev" class="btn btn-outline-secondary"><i class="bi bi-chevron-left"></i> 前へ</button>
+        <button id="eduMaterialPreviewNext" class="btn btn-primary">次へ <i class="bi bi-chevron-right"></i></button></div>
+    </div>`;
+}
+function renderEduMaterialPreview(material) {
+  const slides = material.slides || [];
+  const slide = slides[eduMaterialPreviewIndex];
+  $('#eduMaterialPreviewProgress').textContent = `${eduMaterialPreviewIndex + 1} / ${slides.length}`;
+  $('#eduMaterialPreviewBar').style.width = `${Math.round((eduMaterialPreviewIndex + 1) * 100 / slides.length)}%`;
+  $('#eduMaterialPreviewTitle').textContent = slide.title;
+  $('#eduMaterialPreviewBody').textContent = slide.body;
+  $('#eduMaterialPreviewPrev').disabled = eduMaterialPreviewIndex === 0;
+  $('#eduMaterialPreviewNext').innerHTML = eduMaterialPreviewIndex === slides.length - 1
+    ? '<i class="bi bi-arrow-counterclockwise"></i> 最初に戻る' : '次へ <i class="bi bi-chevron-right"></i>';
+}
+function previewEduMaterial(id) {
+  const material = (Cache.eduMaterialList || []).find((row) => Number(row.id) === Number(id));
+  if (!material?.slides?.length) return toast('試行できるスライドがありません', 'err');
+  eduMaterialPreviewIndex = 0;
+  showInfoModal(`教材試行: ${material.title}`, eduMaterialPreviewHtml(), { size: 'xl' });
+  $('#eduMaterialPreviewPrev').addEventListener('click', () => {
+    if (eduMaterialPreviewIndex > 0) eduMaterialPreviewIndex--;
+    renderEduMaterialPreview(material);
+  });
+  $('#eduMaterialPreviewNext').addEventListener('click', () => {
+    eduMaterialPreviewIndex = eduMaterialPreviewIndex === material.slides.length - 1 ? 0 : eduMaterialPreviewIndex + 1;
+    renderEduMaterialPreview(material);
+  });
+  renderEduMaterialPreview(material);
 }
 
 function eduMaterialSlideRow(slide = {}) {
@@ -2654,12 +2695,60 @@ async function renderEduQuestions() {
   const canEdit = (q) => Number(q.is_shared) !== 1 || State.user.role === 'superadmin';
   $('#eduQuestionsBody').innerHTML = questionsAsc.length ? questionsAsc.map((q, i) => `
     <tr><td>${i + 1}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
-      <td class="text-nowrap">${canEdit(q) ? `
+      <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduQuestion(${q.id})"><i class="bi bi-play-circle"></i> 試行</button>
+        ${canEdit(q) ? `
         <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-sm btn-outline-danger" onclick="deleteEduQuestion(${q.id})"><i class="bi bi-trash"></i></button>`
-        : '<span class="text-muted small">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
+        : '<span class="text-muted small ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
 }
 function setEduCat(id) { eduCatFilter = id; renderEduQuestions(); }
+
+function eduPreviewArray(value) {
+  if (Array.isArray(value)) return value;
+  try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; }
+  catch (_) { return []; }
+}
+function eduQuestionPreviewHtml() {
+  return `<div class="alert alert-info py-2 small"><i class="bi bi-eye me-1"></i>プレビューです。受講履歴や採点結果は保存されません。</div>
+    <div class="mx-auto" style="max-width:760px"><div class="card shadow-sm"><div class="card-body p-4">
+      <div id="eduQuestionPreviewTitle" class="fw-bold mb-3"></div><div id="eduQuestionPreviewOptions" class="d-grid gap-2"></div>
+      <button id="eduQuestionPreviewCheck" class="btn btn-primary w-100 mt-3">回答を確認</button>
+      <div id="eduQuestionPreviewFeedback" class="alert mt-3 mb-0 d-none" style="white-space:pre-wrap" aria-live="polite"></div>
+    </div></div></div>`;
+}
+function renderEduQuestionPreviewOptions(question, selected) {
+  const box = $('#eduQuestionPreviewOptions');
+  box.innerHTML = '';
+  eduPreviewArray(question.options).forEach((option, index) => {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'btn btn-outline-secondary text-start'; button.textContent = option;
+    button.addEventListener('click', () => {
+      if (question.question_type !== 'multiple_choice') selected.clear();
+      if (selected.has(index)) selected.delete(index); else selected.add(index);
+      box.querySelectorAll('button').forEach((item, itemIndex) => item.classList.toggle('active', selected.has(itemIndex)));
+      $('#eduQuestionPreviewFeedback').classList.add('d-none');
+    });
+    box.appendChild(button);
+  });
+}
+function previewEduQuestion(id) {
+  const question = Cache.eduQuestions?.[id];
+  if (!question) return toast('設問が見つかりません', 'err');
+  const selected = new Set();
+  showInfoModal('確認テストを試行', eduQuestionPreviewHtml(), { size: 'lg' });
+  $('#eduQuestionPreviewTitle').textContent = question.title;
+  renderEduQuestionPreviewOptions(question, selected);
+  $('#eduQuestionPreviewCheck').addEventListener('click', () => {
+    if (!selected.size) return toast('回答を選択してください', 'err');
+    const actual = [...selected].sort((a, b) => a - b);
+    const correct = eduPreviewArray(question.correct_answer).map(Number).sort((a, b) => a - b);
+    const passed = actual.length === correct.length && actual.every((value, index) => value === correct[index]);
+    const correctLabels = correct.map((index) => eduPreviewArray(question.options)[index]).filter(Boolean).join(' / ');
+    const feedback = $('#eduQuestionPreviewFeedback');
+    feedback.className = `alert mt-3 mb-0 ${passed ? 'alert-success' : 'alert-danger'}`;
+    feedback.textContent = `${passed ? '正解です' : '不正解です'}\n正解: ${correctLabels}${question.explanation ? `\n解説: ${question.explanation}` : ''}`;
+  });
+}
 
 /* ---- カテゴリ管理 ---- */
 /* 選択中カテゴリの操作ツールバー。共有カテゴリはコピー(fork)、テナント固有は編集/削除。 */
@@ -2971,8 +3060,8 @@ function showModal(title, bodyHtml, onSave, options = {}) {
   if (!modalInstance) modalInstance = new bootstrap.Modal($('#appModal'));
   modalInstance.show();
 }
-function showInfoModal(title, bodyHtml) {
-  setAppModalSize(null);
+function showInfoModal(title, bodyHtml, options = {}) {
+  setAppModalSize(options.size || null);
   $('#appModalTitle').textContent = title;
   $('#appModalBody').innerHTML = bodyHtml;
   const saveBtn = $('#appModalSave');

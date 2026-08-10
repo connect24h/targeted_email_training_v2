@@ -22,5 +22,14 @@ education_ui_check(str_contains($take, 'lessonView'), '受講画面に教材ス�
 education_ui_check(str_contains($take, 'lessonNextBtn'), '教材を順番に閲覧できる');
 education_ui_check(str_contains($take, 'もう一度受講'), '不合格時に再受講を案内する');
 education_ui_check(str_contains($index, 'eduMaterialsBody'), '教材バンクにスライド教材一覧がある');
+education_ui_check(str_contains($app, 'previewEduMaterial'), 'スライド教材を試行できる');
+education_ui_check(str_contains($app, '教材を試行'), '教材一覧に試行操作がある');
+education_ui_check(str_contains($app, 'eduMaterialPreviewTitle')
+    && str_contains($app, 'eduMaterialPreviewBody'), '試行画面にスライド本文を表示する');
+education_ui_check(str_contains($app, 'previewEduQuestion'), '確認テスト設問を試行できる');
+education_ui_check(str_contains($app, '回答を確認'), '試行中の回答をその場で確認できる');
+education_ui_check(str_contains($app, '受講履歴や採点結果は保存されません'), '試行が履歴を保存しないことを明示する');
+education_ui_check(str_contains($app, "eduMaterialPreviewTitle').textContent")
+    && str_contains($app, "eduMaterialPreviewBody').textContent"), '教材本文をtextContentで安全に表示する');
 
 echo "ALL TESTS PASSED\n";
