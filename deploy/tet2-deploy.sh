@@ -9,6 +9,7 @@ TET2_CRON_DEST=/etc/cron.d
 TET2_BACKUP_ROOT=/var/backups/tet2
 TET2_DB_PATH=/opt/training/tet2-db/tet2.sqlite
 TET2_APPLY=0
+TET2_DEPLOY_SCOPE=all
 TET2_BACKUP_ID=$(date '+%Y%m%dT%H%M%S')-$$
 readonly TET2_BACKUP_KEEP_COUNT=10
 readonly TET2_BACKUP_KEEP_DAYS=30
@@ -17,7 +18,7 @@ readonly TET2_BACKUP_KEEP_DAYS=30
 source "$TET2_REPO_ROOT/deploy/tet2-files.sh"
 
 usage() {
-  echo 'Usage: tet2-deploy.sh [--apply] [--backup-id=YYYYMMDDTHHMMSS-PID]'
+  echo 'Usage: tet2-deploy.sh [--apply] [--backup-id=YYYYMMDDTHHMMSS-PID] [--scope=all|campaign-safety]'
   echo '  [--web-dest=PATH] [--bin-dest=PATH] [--systemd-dest=PATH]'
   echo '  [--cron-dest=PATH] [--backup-root=PATH] [--db-path=PATH]'
   echo '既定はdry-runです。delete同期・migration・service reloadは行いません。'
@@ -28,6 +29,7 @@ parse_args() {
   for argument in "$@"; do
     case "$argument" in
       --apply) TET2_APPLY=1 ;;
+      --scope=*) TET2_DEPLOY_SCOPE=${argument#*=} ;;
       --backup-id=*) TET2_BACKUP_ID=${argument#*=} ;;
       --web-dest=*) TET2_WEB_DEST=${argument#*=} ;;
       --bin-dest=*) TET2_BIN_DEST=${argument#*=} ;;
@@ -49,6 +51,10 @@ validate_config() {
   tet2_require_safe_path cron-dest "$TET2_CRON_DEST"
   tet2_require_safe_path backup-root "$TET2_BACKUP_ROOT"
   tet2_require_safe_path db-path "$TET2_DB_PATH"
+  if [[ $TET2_DEPLOY_SCOPE != all && $TET2_DEPLOY_SCOPE != campaign-safety ]]; then
+    echo "deploy scopeが不正です: $TET2_DEPLOY_SCOPE" >&2
+    exit 1
+  fi
   if [[ ! -f $TET2_DB_PATH ]]; then
     echo "DBが見つかりません: $TET2_DB_PATH" >&2
     exit 1
@@ -57,7 +63,7 @@ validate_config() {
 
 print_plan() {
   local source category relative destination state source_hash destination_hash
-  echo "mode=$([[ $TET2_APPLY -eq 1 ]] && echo APPLY || echo DRY-RUN) backup_id=$TET2_BACKUP_ID"
+  echo "mode=$([[ $TET2_APPLY -eq 1 ]] && echo APPLY || echo DRY-RUN) backup_id=$TET2_BACKUP_ID scope=$TET2_DEPLOY_SCOPE"
   while IFS=$'\t' read -r source category relative destination; do
     source_hash=$(sha256sum "$source" | awk '{print $1}')
     state=MISSING
@@ -144,7 +150,7 @@ main() {
   validate_config
   TET2_MAPPING_FILE=$(mktemp)
   trap 'rm -f "$TET2_MAPPING_FILE"' EXIT
-  export TET2_REPO_ROOT TET2_WEB_DEST TET2_BIN_DEST TET2_SYSTEMD_DEST TET2_CRON_DEST
+  export TET2_REPO_ROOT TET2_WEB_DEST TET2_BIN_DEST TET2_SYSTEMD_DEST TET2_CRON_DEST TET2_DEPLOY_SCOPE
   tet2_write_mappings "$TET2_MAPPING_FILE"
   print_plan
   echo "retention_policy=count:$TET2_BACKUP_KEEP_COUNT days:$TET2_BACKUP_KEEP_DAYS auto_prune:false"

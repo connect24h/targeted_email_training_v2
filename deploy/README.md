@@ -28,6 +28,14 @@ applyはbackup IDを出力する。migrationとservice操作は別工程のま�
 sudo deploy/tet2-deploy.sh --apply
 ```
 
+キャンペーン生成・送信の安全修正だけを配備し、未配備の他機能を巻き込まない場合は
+明示allowlist scopeを使う。
+
+```bash
+sudo deploy/tet2-deploy.sh --scope=campaign-safety
+sudo deploy/tet2-deploy.sh --apply --scope=campaign-safety
+```
+
 ## Rollback
 
 まずsource rollbackの対象を確認し、同じbackup IDでapplyする。

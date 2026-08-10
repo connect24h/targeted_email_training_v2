@@ -31,6 +31,22 @@ tet2_deploy_mode() {
   esac
 }
 
+tet2_scope_includes() {
+  local category=$1
+  local relative=$2
+  case "${TET2_DEPLOY_SCOPE:-all}" in
+    all) return 0 ;;
+    campaign-safety)
+      case "$category/$relative" in
+        web/api/campaign_launch.php|web/lib/CampaignLauncher.php|web/lib/PipelineRunner.php|web/lib/Scheduler.php|\
+        bin/__BeaconMst.png|bin/create_beacon_files.py|bin/send_email.py|bin/tet2-worker.py) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) echo "deploy scopeが不正です: ${TET2_DEPLOY_SCOPE:-}" >&2; return 1 ;;
+  esac
+}
+
 tet2_require_safe_path() {
   local label=$1
   local path=$2
@@ -63,12 +79,14 @@ tet2_write_mappings() {
   : > "$output"
   while IFS= read -r -d '' tracked; do
     local relative=${tracked#web/}
+    tet2_scope_includes web "$relative" || continue
     printf '%s\tweb\t%s\t%s\n' \
       "$TET2_REPO_ROOT/$tracked" "$relative" "$TET2_WEB_DEST/$relative" >> "$output"
   done < <(git -C "$TET2_REPO_ROOT" ls-files -z -- web)
 
   local relative
   for relative in "${TET2_BIN_FILES[@]}"; do
+    tet2_scope_includes bin "$relative" || continue
     printf '%s\tbin\t%s\t%s\n' \
       "$TET2_REPO_ROOT/bin/$relative" "$relative" "$TET2_BIN_DEST/$relative" >> "$output"
   done
@@ -83,6 +101,7 @@ tet2_append_tracked_mappings() {
   local destination=$4
   while IFS= read -r -d '' tracked; do
     local relative=${tracked#${source_dir}/}
+    tet2_scope_includes "$category" "$relative" || continue
     printf '%s\t%s\t%s\t%s\n' \
       "$TET2_REPO_ROOT/$tracked" "$category" "$relative" "$destination/$relative" >> "$output"
   done < <(git -C "$TET2_REPO_ROOT" ls-files -z -- "$source_dir")

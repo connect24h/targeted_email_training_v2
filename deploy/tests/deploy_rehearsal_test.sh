@@ -38,6 +38,14 @@ grep -qx 'old-index' "$web_dest/index.html"
 test "$(stat -c '%a:%U:%G' "$web_dest/index.html")" = '600:root:root'
 test ! -e "$backup_root"
 
+"$deploy_script" --scope=campaign-safety "${common_args[@]}" > "$test_root/campaign-scope-plan"
+grep -q $'web\tapi/campaign_launch.php\t' "$test_root/campaign-scope-plan"
+grep -q $'bin\t__BeaconMst.png\t' "$test_root/campaign-scope-plan"
+if grep -q $'web\tindex.html\t' "$test_root/campaign-scope-plan"; then
+  echo 'campaign-safety scopeに範囲外fileが含まれています' >&2
+  exit 1
+fi
+
 "$deploy_script" --apply "--backup-id=$backup_id" "${common_args[@]}" > /dev/null
 cmp "$repo_root/web/index.html" "$web_dest/index.html"
 cmp "$repo_root/bin/create_beacon_files.py" "$bin_dest/create_beacon_files.py"
