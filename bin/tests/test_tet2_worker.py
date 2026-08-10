@@ -124,5 +124,71 @@ class WorkerClaimTest(unittest.TestCase):
         self.assertEqual(draft_status, "queued")
 
 
+class WorkerPipeDeadlockTest(unittest.TestCase):
+    """送信プロセスの stdout をパイプで受けるとバッファ満杯で止まる回帰の防止。
+
+    main ループは子の出力を読まないため、stdout=PIPE だと大量出力(1,876通)で
+    パイプバッファ(64KB)が満杯になり子が書き込みブロックして送信が停止する
+    (2026-08-10、106通目で停止)。stdout は捨て、stderr はファイルへ逃がす。
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        data_dir = Path(self.tmp.name)
+        (data_dir / "list.csv").write_text("項番,送信先情報\n1,a@example.test\n", encoding="utf-8")
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE campaigns (
+                id INTEGER PRIMARY KEY, status TEXT, data_dir TEXT,
+                weekdays_only INTEGER, business_start TEXT, business_end TEXT
+            );
+            """
+        )
+        # 営業時間の窓外で繰り延べられないよう、weekdays_only=0 で常に窓内にする
+        self.conn.execute(
+            "INSERT INTO campaigns VALUES (1, 'scheduled', ?, 0, NULL, NULL)",
+            (str(data_dir),),
+        )
+        self.batch = {
+            "id": 1,
+            "campaign_id": 1,
+            "batch_no": 1,
+            "koban_from": 1,
+            "koban_to": 1,
+            "interval_sec": 3,
+            "data_dir": str(data_dir),
+        }
+
+    def tearDown(self) -> None:
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_should_not_pipe_stdout_of_send_process(self) -> None:
+        captured = {}
+
+        class FakeProc:
+            returncode = None
+
+            def poll(self):
+                return None
+
+        def fake_popen(args, **kwargs):
+            captured["kwargs"] = kwargs
+            return FakeProc()
+
+        with mock.patch.object(tet2_worker, "validate_data_dir", return_value=None), \
+                mock.patch.object(tet2_worker.subprocess, "Popen", side_effect=fake_popen):
+            job = tet2_worker.start_batch(self.conn, self.batch)
+
+        self.assertIsNotNone(job)
+        # stdout をパイプで受けないこと(受けると読み手不在で子が詰まる)
+        self.assertIsNot(captured["kwargs"].get("stdout"), tet2_worker.subprocess.PIPE)
+        self.assertEqual(captured["kwargs"].get("stdout"), tet2_worker.subprocess.DEVNULL)
+        # stderr はパイプではなくファイルハンドルへ(バッファ上限が無く詰まらない)
+        self.assertIsNot(captured["kwargs"].get("stderr"), tet2_worker.subprocess.PIPE)
+
+
 if __name__ == "__main__":
     unittest.main()

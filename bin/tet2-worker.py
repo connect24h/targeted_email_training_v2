@@ -180,9 +180,21 @@ def start_batch(conn, batch):
     if not os.path.isfile(list_csv):
         _fail(conn, batch, f"送信データ未生成(list.csv なし)。launch をやり直してください: {list_csv}")
         return None
+    # stdout/stderr をパイプで受けると、main ループが読み出さないため
+    # OSのパイプバッファ(既定64KB)が満杯になった時点で子プロセスが
+    # 書き込みブロックし、送信が途中で止まる(2026-08-10、1,876通の均等分配で
+    # 106通目で停止)。stdout は send_email が個別ログに書くので捨て、
+    # stderr はファイルへ逃がす。ファイルはバッファ上限が無いので詰まらず、
+    # 失敗時の診断も残る。
+    stderr_path = os.path.join(data_dir, "logs", "worker_stderr.log")
+    try:
+        os.makedirs(os.path.dirname(stderr_path), exist_ok=True)
+    except OSError:
+        stderr_path = os.devnull
     try:
         # 実送信は非同期起動(並行送信の要)。完了は main ループが poll で回収する。
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stderr_fh = open(stderr_path, "wb")
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=stderr_fh)
     except Exception as e:  # noqa: BLE001
         _fail(conn, batch, f"起動例外: {e}")
         return None
@@ -202,6 +214,8 @@ def start_batch(conn, batch):
         "cid": cid,
         "data_dir": data_dir,
         "batch_no": batch["batch_no"],
+        "stderr_fh": stderr_fh,
+        "stderr_path": stderr_path,
     }
 
 
@@ -212,10 +226,18 @@ def finish_batch(conn, job):
     cid = job["cid"]
     data_dir = job["data_dir"]
     rc = proc.returncode
+    # stderr はファイルへ逃がしているので、プロセス終了後に閉じてから読む。
+    fh = job.get("stderr_fh")
+    if fh is not None:
+        try:
+            fh.close()
+        except Exception:  # noqa: BLE001
+            pass
     if rc != 0:
         stderr = b""
         try:
-            stderr = proc.stderr.read() if proc.stderr else b""
+            with open(job.get("stderr_path", os.devnull), "rb") as f:
+                stderr = f.read()
         except Exception:  # noqa: BLE001
             pass
         _fail(conn, batch, f"send_email 失敗(rc={rc}): {stderr.decode('utf-8', 'ignore')[:300]}")
