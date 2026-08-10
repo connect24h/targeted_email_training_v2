@@ -7,7 +7,7 @@ const Cache = { targets: {}, groups: {}, users: {}, tenants: {}, reports: {}, fa
 function cacheRows(kind, rows) { Cache[kind] = {}; for (const r of rows) Cache[kind][r.id] = r; }
 
 /* ========== API ラッパ ========== */
-async function api(path, { method = 'GET', body = null, query = {} } = {}) {
+async function api(path, { method = 'GET', body = null, query = {}, timeout = 30000 } = {}) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) {
     if (v !== null && v !== undefined && v !== '') qs.set(k, v);
@@ -25,7 +25,8 @@ async function api(path, { method = 'GET', body = null, query = {} } = {}) {
     payload = { ...body, tenant_id: State.activeTenantId };
   }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30000);
+  // 既定30秒。launch など重い生成処理は呼び出し側で timeout を延ばす
+  const timer = setTimeout(() => ctrl.abort(), timeout);
   let res;
   try {
     res = await fetch(url, { method, headers, body: payload ? JSON.stringify(payload) : null, credentials: 'same-origin', signal: ctrl.signal });
@@ -56,6 +57,28 @@ function toast(msg, kind = 'info') {
   setTimeout(() => el.remove(), 3500);
 }
 function fmtDate(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
+
+/**
+ * 完了まで消えない進行表示。toast は 3.5 秒で消えるため、
+ * 生成のように「押してから結果が返るまで」を覆いたい処理はこちらを使う。
+ * 返り値の close() を finally で必ず呼ぶ。
+ */
+function showProgress(msg) {
+  const overlay = document.createElement('div');
+  overlay.className = 'app-progress-overlay';
+  const box = document.createElement('div');
+  box.className = 'app-progress-box';
+  const spinner = document.createElement('div');
+  spinner.className = 'app-progress-spinner';
+  const text = document.createElement('div');
+  text.className = 'app-progress-text';
+  text.textContent = msg;
+  box.appendChild(spinner);
+  box.appendChild(text);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  return { close() { overlay.remove(); } };
+}
 
 /* ========== 認証 ========== */
 async function login(email, password) {
@@ -366,9 +389,19 @@ async function clearSendAlerts() {
 
 async function launchCampaign(id) {
   if (!confirm('このキャンペーンを開始します。よろしいですか？')) return;
-  try { const r = await api('api/campaign_launch.php', { method: 'POST', query: { action: 'launch' }, body: { id } });
-    toast(`開始しました（${r.batches} バッチ予約）`, 'ok'); renderCampaigns(); }
-  catch (e) { toast(e.message, 'err'); }
+  // 大人数のキャンペーンは送信データ生成に時間がかかる(1,876人で約40秒)。
+  // 生成中と分かる表示を出し、api の既定30秒では切れるので timeout を延ばす。
+  const overlay = showProgress('送信データを生成しています…（対象人数が多いと1分ほどかかります）');
+  try {
+    const r = await api('api/campaign_launch.php', {
+      method: 'POST', query: { action: 'launch' }, body: { id }, timeout: 180000,
+    });
+    toast(`開始しました（${r.batches} バッチ予約）`, 'ok'); renderCampaigns();
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    overlay.close();
+  }
 }
 async function stopCampaign(id) {
   if (!confirm('⚠️ メール送信を緊急停止します。\n未実行分の送信を止め、送信済みは保持されます。よろしいですか？')) return;
