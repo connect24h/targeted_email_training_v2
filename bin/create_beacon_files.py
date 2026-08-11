@@ -203,8 +203,12 @@ def read_list_csv(path):
     return pd.read_csv(path, dtype=str)
 
 
-def create_beacon_files(data_dir='/opt/training/bin/data'):
-    """ビーコンファイルの作成"""
+def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=None):
+    """ビーコンファイルの作成。
+
+    beacon_base_override が指定されればビーコンURLベースにそれを最優先で使う
+    (キャンペーンごとの beacon_base を DB から渡す用)。未指定なら config.ini。
+    """
     logger = setup_logging()
 
     print(f"\n{'='*60}", flush=True)
@@ -363,13 +367,19 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
             logger.info(f"HTMLマスターファイル読み込みエラー: {str(e)}")
             continue
 
-        # config.iniからビーコンURLベースを取得してテンプレート内のURLを置換
-        cfg = configparser.ConfigParser()
-        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.ini')
-        beacon_base = 'http://85.131.251.224'
-        if os.path.exists(cfg_path):
-            cfg.read(cfg_path)
-            beacon_base = cfg.get('server', 'beacon_url_base', fallback=beacon_base).rstrip('/')
+        # ビーコンURLベースの決定。優先順位: 引数(DBのbeacon_base) > config.ini > 既定。
+        # 従来は config.ini 固定で、UI/DBで filesend.cojp.online に切り替えても QR と
+        # link-*.html だけ古い http://85.131.251.224 のままになる不整合があった
+        # (メール本文リンクは PHP 側が DB beacon_base を使うため経路が分かれていた)。
+        if beacon_base_override:
+            beacon_base = beacon_base_override.rstrip('/')
+        else:
+            cfg = configparser.ConfigParser()
+            cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.ini')
+            beacon_base = 'http://85.131.251.224'
+            if os.path.exists(cfg_path):
+                cfg.read(cfg_path)
+                beacon_base = cfg.get('server', 'beacon_url_base', fallback=beacon_base).rstrip('/')
 
         # プレースホルダーの置換
         # #$5$#(random_value)は10桁ゼロ埋めの英数字なのでエスケープ不要。
@@ -599,9 +609,11 @@ def main():
     parser = argparse.ArgumentParser(description='ビーコンファイル作成プログラム')
     parser.add_argument('--data-dir', default='/opt/training/bin/data',
                         help='データディレクトリのパス')
+    parser.add_argument('--beacon-base', default=None,
+                        help='ビーコンURLベース(キャンペーンのbeacon_base)。指定時はconfig.iniより優先')
     args = parser.parse_args()
-    
-    return create_beacon_files(args.data_dir)
+
+    return create_beacon_files(args.data_dir, args.beacon_base)
 
 if __name__ == "__main__":
     sys.exit(main())

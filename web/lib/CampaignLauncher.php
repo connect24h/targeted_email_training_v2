@@ -145,6 +145,14 @@ final class CampaignLauncher
             return [false, 'data_dir 未設定'];
         }
 
+        // QR/link-*.html のURLベースは、キャンペーンの beacon_base(DB)を最優先で使う。
+        // create_beacon_files.py は放置すると config.ini 固定で読むため、UI/DBで
+        // filesend.cojp.online に切り替えても QR だけ古い http://85.131.251.224 のまま
+        // になる不整合があった。PHP と同じ PipelineRunner::beaconUrlBase() で解決して
+        // --beacon-base で渡し、メール本文リンクと QR のURLを一致させる。
+        $campaign = Db::one('SELECT beacon_base FROM campaigns WHERE id = ?', [$campaignId]);
+        $beaconBase = PipelineRunner::beaconUrlBase($campaign ?: null);
+
         // create_beacon_files.py は training ユーザーで実行する。
         // send_email.py(worker=training)と共有する operation.log の所有者を training に
         // 一本化し、www-data 実行時に training が書けなくなる権限競合を根絶するため。
@@ -153,7 +161,8 @@ final class CampaignLauncher
         $command = '/usr/bin/sudo -n -u training '
             . escapeshellcmd('/usr/bin/python3') . ' '
             . escapeshellarg('/opt/training/bin/create_beacon_files.py')
-            . ' --data-dir ' . escapeshellarg($dataDir) . ' 2>&1';
+            . ' --data-dir ' . escapeshellarg($dataDir)
+            . ' --beacon-base ' . escapeshellarg($beaconBase) . ' 2>&1';
         exec($command, $output, $returnCode);
         if ($returnCode !== 0) {
             $details = implode(' / ', array_slice($output, -3));

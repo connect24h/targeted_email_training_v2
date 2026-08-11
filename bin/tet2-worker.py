@@ -258,9 +258,14 @@ def finish_batch(conn, job):
         "UPDATE campaigns SET status='running' WHERE id=? AND status IN ('scheduled','draft')",
         (cid,),
     )
-    # 全バッチ done ならキャンペーンを done に
+    # 未完了バッチが無ければキャンペーンを done に。
+    # failed は再送されない恒久失敗(自動リトライのロジックは無い)。resume 時は
+    # 同一範囲の新バッチが作られて成功するため、失敗した古いバッチが failed のまま
+    # 残る。これを 'done以外' に数えるとキャンペーンが永久に running のままになる
+    # (2026-08 campaign 90 が operation.log 事故のfailedバッチで完了不能になった)。
+    # よって done/failed の両方を「これ以上進まないバッチ」とみなして完了判定する。
     remaining = conn.execute(
-        "SELECT COUNT(*) c FROM send_schedule WHERE campaign_id=? AND status!='done'",
+        "SELECT COUNT(*) c FROM send_schedule WHERE campaign_id=? AND status NOT IN ('done','failed')",
         (cid,),
     ).fetchone()["c"]
     if remaining == 0:
