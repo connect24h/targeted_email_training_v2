@@ -7,6 +7,7 @@ TET2_BIN_FILES=(
   master2.html
   master3.html
   master4.html
+  master5.html
   qr_doc_gen.py
   replace_url.py
   requirements.txt

@@ -72,7 +72,7 @@ function templates_validate_auth_flag(string $kind, ?int $authFlag): ?int
     if ($kind !== 'phish_login') {
         return null;
     }
-    if ($authFlag === null || $authFlag < 0 || $authFlag > 3) {
+    if ($authFlag === null || $authFlag < 0 || $authFlag > 4) {
         json_error('auth_flag が不正です', 400);
     }
     return $authFlag;
@@ -252,7 +252,7 @@ function templates_handle_update(array $actor): never
     if ($format !== null) {
         templates_validate_format($format);
     }
-    if ($authFlag !== null && ((string) $template['kind'] !== 'phish_login' || $authFlag > 3)) {
+    if ($authFlag !== null && ((string) $template['kind'] !== 'phish_login' || $authFlag > 4)) {
         json_error('auth_flag が不正です', 400);
     }
 
@@ -420,7 +420,7 @@ function templates_handle_import_csv(array $actor): never
             $format = $get('format') !== '' ? $get('format') : 'html';
             if (!in_array($format, ['html', 'text'], true)) { $format = 'html'; }
             $authRaw = $get('auth_flag');
-            $authFlag = ($kind === 'phish_login' && $authRaw !== '' && ctype_digit($authRaw) && (int) $authRaw <= 3) ? (int) $authRaw : null;
+            $authFlag = ($kind === 'phish_login' && $authRaw !== '' && ctype_digit($authRaw) && (int) $authRaw <= 4) ? (int) $authRaw : null;
             $scenario = $get('scenario_key') !== '' ? $get('scenario_key') : null;
 
             $existing = Db::one('SELECT id FROM templates WHERE kind = ? AND name = ? AND tenant_id IS NULL', [$kind, $name]);

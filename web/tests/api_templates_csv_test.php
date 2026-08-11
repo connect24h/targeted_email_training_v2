@@ -26,7 +26,7 @@ $multilineHtml = "<html>\n<body>\n<p>お世話になります、\"引用\"入り
 $csv = make_csv([
     ['CSV_TEST_件名A', 'subject', 'text', '件名A本文', '', 'csvtest'],
     ['CSV_TEST_本文A', 'body', 'html', $multilineHtml, '', 'csvtest'],
-    ['CSV_TEST_偽ログイン', 'phish_login', 'html', '<html>login</html>', '1', ''],
+    ['CSV_TEST_偽ログイン', 'phish_login', 'html', '<html>login</html>', '4', ''],
 ]);
 
 // operator は 403
@@ -39,7 +39,7 @@ check($r['code'] === 200 && $r['payload']['added'] === 3, 'add で3件追加');
 $bodyRow = Db::one("SELECT content, format FROM templates WHERE name='CSV_TEST_本文A' AND kind='body'");
 check($bodyRow !== null && str_contains($bodyRow['content'], "\n") && str_contains($bodyRow['content'], '"引用"'),
     'HTML本文が改行・引用符込みで正しくパース・保存される');
-check(Db::one("SELECT auth_flag FROM templates WHERE name='CSV_TEST_偽ログイン'")['auth_flag'] == 1, 'phish の auth_flag=1 が保存される');
+check(Db::one("SELECT auth_flag FROM templates WHERE name='CSV_TEST_偽ログイン'")['auth_flag'] == 4, 'phish の auth_flag=4 が保存される');
 check(Db::one("SELECT scenario_key FROM templates WHERE name='CSV_TEST_件名A'")['scenario_key'] === 'csvtest', 'scenario_key が保存される');
 
 // 同じCSVを add で再import → 全件スキップ(同名)

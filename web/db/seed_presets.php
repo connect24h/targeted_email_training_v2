@@ -12,6 +12,7 @@ $phishMasters = [
     ['name' => '偽ログイン（Box）',    'file' => '/opt/training/bin/master2.html', 'auth_flag' => 1],
     ['name' => '偽ログイン（Microsoft 365）', 'file' => '/opt/training/bin/master3.html', 'auth_flag' => 2],
     ['name' => '偽ログイン（Digital Arts）',   'file' => '/opt/training/bin/master4.html', 'auth_flag' => 3],
+    ['name' => '偽ログイン（Microsoft 365・メールのみ）', 'file' => '/opt/training/bin/master5.html', 'auth_flag' => 4],
 ];
 
 $subjects = [

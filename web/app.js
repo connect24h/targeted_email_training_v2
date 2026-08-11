@@ -485,6 +485,7 @@ const AUTH_MASTERS = [
   ['master2.html', '認証フラグ1: Box認証'],
   ['master3.html', '認証フラグ2: Microsoft365認証'],
   ['master4.html', '認証フラグ3: デジタルアーツ認証'],
+  ['master5.html', '認証フラグ4: Microsoft 365（メールのみ）'],
 ];
 async function renderMasters() {
   const canEditAuth = roleAtLeast(State.user.role, 'tenant_admin'); // 認証マスタは全テナント共通=tenant_admin以上
@@ -890,10 +891,23 @@ async function loadReplyMaildir() {
     sel.value = prevSender && [...sel.options].some((o) => o.value === prevSender) ? prevSender : '';
   }
   const rows = data.rows || [];
+  // 権限不足で読めないメールは黄色で目立たせる。以前は一覧から静かに消えており、
+  // 届いている返信を見落とす原因になっていた。
   $('#logsBody').innerHTML = rows.length
-    ? rows.map((r) => `<tr>${def.cells(r).map((c) => `<td>${c ?? ''}</td>`).join('')}</tr>`).join('')
+    ? rows.map((r) => {
+        const cls = r.unreadable ? ' class="table-warning"' : '';
+        return `<tr${cls}>${def.cells(r).map((c) => `<td>${c ?? ''}</td>`).join('')}</tr>`;
+      }).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">受信メールはありません</td></tr>`;
-  $('#logsInfo').textContent = `${data.total ?? rows.length} 件（送信元アカウントの受信トレイを直接参照）`;
+  const unreadable = rows.filter((r) => r.unreadable).length;
+  const info = $('#logsInfo');
+  info.textContent = `${data.total ?? rows.length} 件（送信元アカウントの受信トレイを直接参照）`;
+  if (unreadable) {
+    const span = document.createElement('span');
+    span.className = 'text-danger fw-bold ms-2';
+    span.textContent = `／読み取り不可 ${unreadable} 件（サーバ側のファイル権限を要確認）`;
+    info.appendChild(span);
+  }
 }
 // 受信メール本文をモーダル表示(Maildir)。
 async function viewMailBody(account, filename, meta) {
@@ -2081,7 +2095,7 @@ const TPL_KINDS = [['scenario','件名＋本文'],['phish_login','偽ログイ�
 // (2026-08-04) ここに TPL_KINDS を流用していたため 'scenario' が送られ「kind が不正です」で保存できなかった。
 const TPL_FORM_KINDS = [['subject','件名'],['body','本文'],['phish_login','偽ログイン'],['debrief','ネタバラシ'],['elearning','eラーニング']];
 const KIND_LABELS = { subject:'件名', body:'本文', phish_login:'偽ログイン', debrief:'ネタバラシ', elearning:'eラーニング' };
-const AUTH_FLAG_NAME = { '0':'通常（汎用）', '1':'Box', '2':'Microsoft365', '3':'Digital Arts' };
+const AUTH_FLAG_NAME = { '0':'通常（汎用）', '1':'Box', '2':'Microsoft365', '3':'Digital Arts', '4':'Microsoft 365（メールのみ）' };
 let tplKindFilter = 'scenario';
 async function renderTemplates() {
   $('#tplKindTabs').innerHTML = TPL_KINDS.map(([k, l]) =>

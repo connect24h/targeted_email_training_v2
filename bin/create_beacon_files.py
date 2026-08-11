@@ -238,6 +238,7 @@ def create_beacon_files(data_dir='/opt/training/bin/data'):
             1: "/opt/training/bin/master2.html",  # Box
             2: "/opt/training/bin/master3.html",  # MS365
             3: "/opt/training/bin/master4.html",  # デジタルアーツ
+            4: "/opt/training/bin/master5.html",  # MS365(メールのみ)
         }
 
         # デフォルトはmaster.html

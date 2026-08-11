@@ -15,7 +15,7 @@
 declare(strict_types=1);
 require __DIR__ . '/../lib/bootstrap.php';
 
-const AUTH_MASTER_FILES = ['master.html', 'master2.html', 'master3.html', 'master4.html'];
+const AUTH_MASTER_FILES = ['master.html', 'master2.html', 'master3.html', 'master4.html', 'master5.html'];
 const AUTH_MASTER_DIR   = '/opt/training/bin';
 const REVEAL_FILE       = 'reveal.html';
 
