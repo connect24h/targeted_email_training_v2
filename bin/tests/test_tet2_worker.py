@@ -190,5 +190,53 @@ class WorkerPipeDeadlockTest(unittest.TestCase):
         self.assertIsNot(captured["kwargs"].get("stderr"), tet2_worker.subprocess.PIPE)
 
 
+class BusinessWindowHolidayTest(unittest.TestCase):
+    """平日限定が土日に加えて祝日も除外することを固定する。
+
+    2026-08-11(火・山の日)に平日限定キャンペーンが送信されてしまった事故の再発防止。
+    """
+
+    @staticmethod
+    def _campaign(weekdays_only=1, business_start=None, business_end=None):
+        # Row 互換の dict-like でよい(実装は ["key"] アクセスのみ)。
+        return {
+            "weekdays_only": weekdays_only,
+            "business_start": business_start,
+            "business_end": business_end,
+        }
+
+    def test_holiday_is_non_business_day(self) -> None:
+        from datetime import datetime
+        # 2026-08-11 は火曜だが山の日(祝)。
+        self.assertTrue(tet2_worker.is_non_business_day(datetime(2026, 8, 11, 10, 0)))
+
+    def test_weekday_is_business_day(self) -> None:
+        from datetime import datetime
+        self.assertFalse(tet2_worker.is_non_business_day(datetime(2026, 8, 12, 10, 0)))
+
+    def test_saturday_is_non_business_day(self) -> None:
+        from datetime import datetime
+        self.assertTrue(tet2_worker.is_non_business_day(datetime(2026, 8, 15, 10, 0)))
+
+    def test_weekdays_only_blocks_holiday(self) -> None:
+        from datetime import datetime
+        # 平日限定ONなら祝日は窓外。
+        self.assertFalse(
+            tet2_worker.in_business_window(datetime(2026, 8, 11, 10, 0), self._campaign(weekdays_only=1))
+        )
+        # 平日限定OFFなら祝日でも窓内(曜日/時間制限なし)。
+        self.assertTrue(
+            tet2_worker.in_business_window(datetime(2026, 8, 11, 10, 0), self._campaign(weekdays_only=0))
+        )
+
+    def test_next_window_skips_holiday(self) -> None:
+        from datetime import datetime
+        # 2026-08-10(月)夜に繰り延べ → 翌8/11は山の日(祝)なので飛ばし、8/12(水)09:00へ。
+        nxt = tet2_worker.next_window(
+            datetime(2026, 8, 10, 20, 0), self._campaign(weekdays_only=1, business_start="09:00")
+        )
+        self.assertEqual(nxt.strftime("%Y-%m-%d %H:%M"), "2026-08-12 09:00")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,12 @@ import sys
 import time
 from datetime import datetime, timedelta
 
+try:
+    import jpholiday
+except ImportError:
+    # jpholiday 未導入でも worker は起動する。祝日判定だけ無効化(土日除外は継続)。
+    jpholiday = None
+
 DB_PATH = "/opt/training/tet2-db/tet2.sqlite"
 PY = "/usr/bin/python3"
 BIN = "/opt/training/bin"
@@ -35,9 +41,22 @@ def log(msg):
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
 
+def is_non_business_day(d):
+    """営業日でない日(土日 or 日本の祝日)なら True。
+
+    「平日限定」は土日だけでなく祝日(振替休日・国民の休日を含む)も除外する。
+    jpholiday 未導入時は土日判定のみにフォールバックする。
+    """
+    if d.weekday() >= 5:  # 5=土,6=日
+        return True
+    if jpholiday is not None and jpholiday.is_holiday(d.date() if hasattr(d, "date") else d):
+        return True
+    return False
+
+
 def in_business_window(now, campaign):
     """平日限定・営業時間を判定。窓内なら True。"""
-    if campaign["weekdays_only"] and now.weekday() >= 5:  # 5=土,6=日
+    if campaign["weekdays_only"] and is_non_business_day(now):
         return False
     bs = campaign["business_start"]
     be = campaign["business_end"]
@@ -55,9 +74,9 @@ def next_window(now, campaign):
     candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
     if candidate <= now:
         candidate += timedelta(days=1)
-    # 平日限定なら土日を飛ばす
+    # 平日限定なら土日・祝日を飛ばす
     if campaign["weekdays_only"]:
-        while candidate.weekday() >= 5:
+        while is_non_business_day(candidate):
             candidate += timedelta(days=1)
     return candidate
 
