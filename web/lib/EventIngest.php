@@ -64,12 +64,51 @@ final class EventIngest
                 if (!isset($map[$tid])) {
                     continue;
                 }
+                // Slack 等のリンク自動展開・メールセキュリティのURL事前スキャンが訓練リンクを
+                // 踏むと、人間のクリックでないのに防衛失敗として記録される。UAでボットを除外する。
+                // 2026-08 に Slackbot 156件がキャンペーン89の全クリックを誤計上した事故による。
+                // open(ビーコン)は今回のスコープ外なので click のときだけ弾く。
+                if ($eventType === 'click' && self::isBotUserAgent($line)) {
+                    continue;
+                }
                 $occurred = self::apacheTimestamp($line);
                 $n += self::insertEvent($map[$tid], $tid, $eventType, null, $occurred, 'apache_access', $line);
             }
             fclose($fp);
         }
         return $n;
+    }
+
+    /**
+     * Apache combined ログ1行の User-Agent がボット(SNSリンク展開・メールセキュリティ
+     * スキャナ・HTTPクライアント)かを判定する。行末の "..." で囲まれた最後のフィールドが
+     * User-Agent。UA が取れない行は false(=ボット扱いしない。既存挙動を維持する)。
+     */
+    private static function isBotUserAgent(string $logLine): bool
+    {
+        // Apache combined の末尾: ... "referer" "user-agent"
+        if (!preg_match('/"([^"]*)"\s*$/', rtrim($logLine), $m)) {
+            return false;
+        }
+        $ua = $m[1];
+        if ($ua === '' || $ua === '-') {
+            return false;
+        }
+        // SNSリンク展開ボット / HTTPクライアント / メールセキュリティのURLスキャナ。
+        $patterns = [
+            'Slackbot', 'Googlebot', 'bingbot', 'YandexBot', 'DuckDuckBot',
+            'Twitterbot', 'facebookexternalhit', 'LinkedInBot', 'Discordbot',
+            'TelegramBot', 'WhatsApp', 'Applebot',
+            'curl', 'Wget', 'python-requests', 'Go-http-client', 'Java/', 'okhttp',
+            'Barracuda', 'Proofpoint', 'Mimecast', 'Microsoft-', 'SafeLinks',
+            'URLDefense', 'ATP', 'Symantec', 'Forcepoint', 'Cisco', 'Ironport',
+        ];
+        foreach ($patterns as $needle) {
+            if (stripos($ua, $needle) !== false) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function ingestAuthLogs(array $map): int
