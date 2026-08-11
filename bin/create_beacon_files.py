@@ -159,20 +159,40 @@ def replace_placeholders(text, row):
     return text
 
 def setup_logging():
-    """ログ設定"""
+    """ログ設定。
+
+    operation.log は www-data(このスクリプト)と training(send_email.py)が共有する固定
+    ファイル。異なるユーザーが交互に append するため、group(www-data)書き込みを保てるよう
+    umask 0002 を設定してから開き、新規作成時のモードを 664 にする。開けない場合でも
+    ビーコン生成本体を止めないよう握りつぶす。
+    (2026-08 に operation.log の所有者/権限がずれ、他方のプロセスが書けず送信が全滅した
+     事故の恒久対策。ユーザー一本化(sudo -u training)と併せた多重防御。)
+    """
     log_file = "/opt/training/logs/operation.log"
-
-    # ファイルハンドラー（詳細ログ）
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - [create_beacon_files] - %(levelname)s - %(message)s'))
-
-    # ストリームハンドラー（標準出力には出力しない）
-    # print文で詳細表示するため、ログはファイルのみに記録
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
+
+    try:
+        # 新規作成時に group 書き込みを許可(www-data と training が共有するため)。
+        old_umask = os.umask(0o002)
+        try:
+            file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
+        finally:
+            os.umask(old_umask)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - [create_beacon_files] - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
+        # 既存ファイルが group 非書き込みでも、自分が所有者なら 664 に揃える(次回の他ユーザー用)。
+        try:
+            os.chmod(log_file, 0o664)
+        except OSError:
+            pass
+    except OSError as exc:
+        # 共有ログに書けないだけ。ビーコン生成本体は止めない。
+        logging.getLogger(__name__).warning(
+            "operation.log を開けませんでした(%s)。動作ログ無しで継続します。", exc
+        )
     # コンソールハンドラーは追加しない
 
     return logger

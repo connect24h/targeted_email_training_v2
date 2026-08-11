@@ -118,7 +118,15 @@ class TargetedEmailSender:
         self.logger = logging.getLogger(__name__)
         
     def setup_operation_logging(self):
-        """動作ログ設定"""
+        """動作ログ設定。
+
+        operation.log は www-data(create_beacon_files.py)と training(send_email.py)が
+        共有する固定ファイル。所有者/権限がずれるとこちらから書けないことがあるが、
+        共有ログに書けないことを理由に「送信そのもの」を止めてはならない。
+        書けない場合はファイルハンドラを諦め、個別ログ(setup_logging)側だけで継続する。
+        (2026-08 に operation.log が www-data:644 で作られ、training の send_email が
+         PermissionError で初期化失敗し campaign 90 が1通も送れなかった事故の恒久対策。)
+        """
         operation_log_file = "/opt/training/logs/operation.log"
 
         # 動作ログ用の独立したロガーを作成
@@ -129,11 +137,27 @@ class TargetedEmailSender:
         for handler in self.operation_logger.handlers[:]:
             self.operation_logger.removeHandler(handler)
 
-        # 動作ログファイルハンドラー追加
-        operation_handler = logging.FileHandler(operation_log_file, encoding='utf-8', mode='a')
-        operation_formatter = logging.Formatter('%(asctime)s - [send_email] - %(levelname)s - %(message)s')
-        operation_handler.setFormatter(operation_formatter)
-        self.operation_logger.addHandler(operation_handler)
+        # 動作ログファイルハンドラー追加。開けなければ握りつぶして送信は継続する。
+        try:
+            # 新規作成時に group 書き込みを許可(www-data と共有するため)。
+            old_umask = os.umask(0o002)
+            try:
+                operation_handler = logging.FileHandler(operation_log_file, encoding='utf-8', mode='a')
+            finally:
+                os.umask(old_umask)
+            operation_formatter = logging.Formatter('%(asctime)s - [send_email] - %(levelname)s - %(message)s')
+            operation_handler.setFormatter(operation_formatter)
+            self.operation_logger.addHandler(operation_handler)
+            # 自分が所有者なら 664 に揃える(次回の他ユーザー用)。
+            try:
+                os.chmod(operation_log_file, 0o664)
+            except OSError:
+                pass
+        except OSError as exc:
+            # 共有ログに書けないだけ。送信本体は止めない。
+            self.logger.warning(
+                "operation.log を開けませんでした(%s)。動作ログ無しで送信を継続します。", exc
+            )
 
     def check_stop_file(self):
         """停止ファイルをチェック(キャンペーン別の data_dir 配下)"""

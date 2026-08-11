@@ -145,7 +145,13 @@ final class CampaignLauncher
             return [false, 'data_dir 未設定'];
         }
 
-        $command = escapeshellcmd('/usr/bin/python3') . ' '
+        // create_beacon_files.py は training ユーザーで実行する。
+        // send_email.py(worker=training)と共有する operation.log の所有者を training に
+        // 一本化し、www-data 実行時に training が書けなくなる権限競合を根絶するため。
+        // (2026-08 に operation.log が www-data:644 で作られ、直後の send_email(training)が
+        //  PermissionError で全滅した事故の恒久対策。sudoers に (training) NOPASSWD 定義済み。)
+        $command = '/usr/bin/sudo -n -u training '
+            . escapeshellcmd('/usr/bin/python3') . ' '
             . escapeshellarg('/opt/training/bin/create_beacon_files.py')
             . ' --data-dir ' . escapeshellarg($dataDir) . ' 2>&1';
         exec($command, $output, $returnCode);
