@@ -234,8 +234,20 @@ function report_detail_period(): array
  * @param string $axisGroup  GROUP BY 式(通常は $axisSelect と同じ)
  * @return array 各行 [key, count, link_clicked, beacon_opened, auth_count]
  */
-function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, string $axisGroup, string $periodClause, array $periodParams): array
+function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, string $axisGroup, string $periodClause, array $periodParams, string $testFilter = 'prod'): array
 {
+    // テスト対象者(targets.is_test)の扱い。既定は本番のみ(prod)。
+    //  - prod: 本番対象者のみ(is_test=0)。従来動作。
+    //  - test: テスト対象者のみ(is_test=1)。all配信のテストパターン開封をビーコン別に確認する用途。
+    //  - all : 両方。
+    // ※開封数は元々 tracking_id 単位(=ビーコン単位)で数えるため、フィルタで対象者を
+    //   絞るだけでコンテンツ別の開封が正しく見える。集計の粒度自体は変更しない。
+    $testWhere = ' AND t.is_test = 0';
+    if ($testFilter === 'test') {
+        $testWhere = ' AND t.is_test = 1';
+    } elseif ($testFilter === 'all') {
+        $testWhere = '';
+    }
     // campaign_targets を左、events を tracking_id で結合。event_type ごとに DISTINCT 集計。
     $sql =
         "SELECT {$axisSelect} AS axis_key,
@@ -252,7 +264,7 @@ function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, 
                AND e.tenant_id = ?
                AND e.event_type IN ('open','click','auth')
                {$periodClause}
-         WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0
+         WHERE c.tenant_id = ? AND ct.campaign_id = ?" . $testWhere . "
          GROUP BY {$axisGroup}
          ORDER BY cnt DESC";
     $params = array_merge([$tenantId], $periodParams, [$tenantId, $campaignId]);
@@ -346,14 +358,14 @@ function report_detail_timeline(int $campaignId, int $tenantId, string $periodCl
  * detail の集計本体をリアルタイムに計算して配列で返す(副作用なし)。
  * detail 表示・commit スナップショット生成の双方から使う。
  */
-function report_compute_detail(int $campaignId, int $tenantId, string $periodClause, array $periodParams): array
+function report_compute_detail(int $campaignId, int $tenantId, string $periodClause, array $periodParams, string $testFilter = 'prod'): array
 {
     // 会社別: 空会社は '(未設定)' に寄せる。
     $companyRows = report_detail_axis(
         $campaignId, $tenantId,
         "CASE WHEN t.company IS NULL OR t.company = '' THEN '(未設定)' ELSE t.company END",
         "CASE WHEN t.company IS NULL OR t.company = '' THEN '(未設定)' ELSE t.company END",
-        $periodClause, $periodParams
+        $periodClause, $periodParams, $testFilter
     );
     // 役職別: 正規値以外は 'その他'。正規値は TET2_POSITION_CATEGORIES(役員/管理職/一般従業員)。
     // 旧称「社員」のデータが残っていても 'その他' に落ちるだけで集計自体は壊れない。
@@ -363,14 +375,14 @@ function report_compute_detail(int $campaignId, int $tenantId, string $periodCla
         $campaignId, $tenantId,
         $positionAxis,
         $positionAxis,
-        $periodClause, $periodParams
+        $periodClause, $periodParams, $testFilter
     );
-    // コンテンツ別: content_no(NULL は '(単一)')。
+    // コンテンツ別: content_no(NULL は '(単一)')。all配信のビーコン別開封はここで見える。
     $contentRows = report_detail_axis(
         $campaignId, $tenantId,
         "CASE WHEN ct.content_no IS NULL THEN '(単一)' ELSE CAST(ct.content_no AS TEXT) END",
         "CASE WHEN ct.content_no IS NULL THEN '(単一)' ELSE CAST(ct.content_no AS TEXT) END",
-        $periodClause, $periodParams
+        $periodClause, $periodParams, $testFilter
     );
 
     $company = report_detail_shape($companyRows, 'company');
@@ -407,11 +419,18 @@ function report_handle_detail(): never
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
     assert_campaign_owned($campaignId, $tenantId);
 
+    // test_filter: prod(既定,本番のみ) / test(テストのみ) / all(全部)。
+    // all配信をテストパターンで送った場合、テスト対象者の開封をビーコン(コンテンツ)別に
+    // 見るために test/all を指定する。prod は従来動作(本番のみ)。
+    $testFilter = $_GET['test_filter'] ?? 'prod';
+    if (!in_array($testFilter, ['prod', 'test', 'all'], true)) { $testFilter = 'prod'; }
+
     // 確定済みなら固定スナップショットを返す(以後 EventIngest/対象者削除/ユーザ削除でも数値不変)。
     // 期間フィルタ指定時はリアルタイム集計を許す(確定値は全期間のため、部分期間の探索表示は別扱い)。
+    // スナップショットは本番(prod)定義で確定するため、test/all の探索表示もリアルタイム集計を使う。
     $hasPeriod = (isset($_GET['start_date']) && $_GET['start_date'] !== '')
         || (isset($_GET['end_date']) && $_GET['end_date'] !== '');
-    if (!$hasPeriod) {
+    if (!$hasPeriod && $testFilter === 'prod') {
         $snap = report_snapshot_of($campaignId, $tenantId);
         if ($snap !== null) {
             $data = json_decode((string) $snap['payload'], true);
@@ -425,7 +444,7 @@ function report_handle_detail(): never
     }
 
     [$periodClause, $periodParams] = report_detail_period();
-    $data = report_compute_detail($campaignId, $tenantId, $periodClause, $periodParams);
+    $data = report_compute_detail($campaignId, $tenantId, $periodClause, $periodParams, $testFilter);
     $data['success'] = true;
     $data['is_committed'] = false;
     json_out($data);

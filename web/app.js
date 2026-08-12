@@ -1728,6 +1728,9 @@ async function renderReportDetail(campaignId) {
   const sd = $('#reportStartDate')?.value, ed = $('#reportEndDate')?.value;
   if (sd) query.start_date = sd;
   if (ed) query.end_date = ed;
+  // テスト送信(is_test)の内訳を見るフィルタ。prod 以外のときだけ送る(prod は確定
+  // スナップショットを使うため付けない)。all配信のテストパターン開封をコンテンツ別に見る用途。
+  if (reportTestFilter && reportTestFilter !== 'prod') query.test_filter = reportTestFilter;
   let d;
   try {
     d = await api('api/report.php', { query });
