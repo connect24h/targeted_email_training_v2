@@ -13,6 +13,7 @@ final class MigrationRunner
         '20260810-position-masters',
         '20260810-all-members-group',
         '20260810-elearning-materials',
+        '20260812-suppress-prefill-email',
     ];
 
     /**
@@ -152,6 +153,11 @@ final class MigrationRunner
             return;
         }
         if ($version === '20260809-targets-is-test') {
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
+        if ($version === '20260812-suppress-prefill-email') {
+            // campaign_contents.suppress_prefill_email を既存DBへ冪等追加。
             $this->ensureAdditiveColumns($pdo);
             return;
         }
