@@ -5,8 +5,9 @@ declare(strict_types=1);
  * QR型(link_mode=='qr')の添付ファイル拡張子拡張(2026-08-05)の回帰テスト。
  *
  * 対象: PipelineRunner::generateCsv() が Attachment.csv に書く「拡張子」列。
- * - attachment_ext が docx/pdf/html のいずれか → 'qr_docx'/'qr_pdf'/'qr_html'
+ * - attachment_ext が docx/pdf/html/xlsx/pptx → 'qr_docx'/'qr_pdf'/'qr_html'/'qr_xlsx'/'qr_pptx'
  *   (create_beacon_files.py 側がこの識別子で QR埋め込み文書を生成する)
+ * - attachment_ext が doc/xls/ppt          → 正規化して docx/xlsx/pptx 扱い(2026-08-12 追加)
  * - attachment_ext が未指定/空/不正値      → 'qr'（従来の生QR画像PNG・後方互換）
  * - contents[] を使わない旧経路(単一コンテンツ)でも同じ規則が適用されること
  */
@@ -28,7 +29,7 @@ $body = mk_tpl_qr($tenantId, 'body', 'QRX_BODY', '本文 #$2$# #$1$#');
 $phish = mk_tpl_qr($tenantId, 'phish_login', 'QRX_PHISH', '偽ログイン', 0);
 
 $tids = [];
-foreach (['qrx1@test', 'qrx2@test', 'qrx3@test', 'qrx4@test'] as $i => $em) {
+foreach (['qrx1@test', 'qrx2@test', 'qrx3@test', 'qrx4@test', 'qrx5@test', 'qrx6@test', 'qrx7@test', 'qrx8@test', 'qrx9@test'] as $i => $em) {
     Db::run('INSERT INTO targets (tenant_id, email, name, status) VALUES (?,?,?,?)', [$tenantId, $em, 'QRX' . $i, 'active']);
     $tids[] = (int) Db::one('SELECT id FROM targets WHERE tenant_id = ? AND email = ?', [$tenantId, $em])['id'];
 }
@@ -52,6 +53,16 @@ $body_req = [
          'link_mode' => 'qr'], // attachment_ext 未指定 → 従来 'qr'(PNG)にフォールバック
         ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
          'link_mode' => 'qr', 'attachment_ext' => 'exe'], // 不正値 → 従来 'qr'(PNG)にフォールバック
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'qr', 'attachment_ext' => 'xlsx'], // No.5
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'qr', 'attachment_ext' => 'pptx'], // No.6
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'qr', 'attachment_ext' => 'doc'], // No.7 正規化 doc→docx
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'qr', 'attachment_ext' => 'xls'], // No.8 正規化 xls→xlsx
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'qr', 'attachment_ext' => 'ppt'], // No.9 正規化 ppt→pptx
     ],
 ];
 $r = call_handler('campaigns_handle_create', $body_req, 'operator');
@@ -85,6 +96,11 @@ check($extByNo['1'] === 'qr_docx', 'QR型+docx → Attachment.csv拡張子は qr
 check($extByNo['2'] === 'qr_pdf', 'QR型+pdf → Attachment.csv拡張子は qr_pdf');
 check($extByNo['3'] === 'qr', 'QR型+未指定 → Attachment.csv拡張子は従来の qr(後方互換)');
 check($extByNo['4'] === 'qr', 'QR型+不正値(exe) → Attachment.csv拡張子は従来の qr(フォールバック)');
+check($extByNo['5'] === 'qr_xlsx', 'QR型+xlsx → Attachment.csv拡張子は qr_xlsx');
+check($extByNo['6'] === 'qr_pptx', 'QR型+pptx → Attachment.csv拡張子は qr_pptx');
+check($extByNo['7'] === 'qr_docx', 'QR型+doc → 正規化されて qr_docx');
+check($extByNo['8'] === 'qr_xlsx', 'QR型+xls → 正規化されて qr_xlsx');
+check($extByNo['9'] === 'qr_pptx', 'QR型+ppt → 正規化されて qr_pptx');
 
 // --- ケース2: 旧経路(contents[]を使わない単一コンテンツ) QR型 + attachment_ext=html ---
 $body_req2 = [

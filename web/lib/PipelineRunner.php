@@ -25,17 +25,31 @@ final class PipelineRunner
      * QR型で本文+QR埋め込み文書として生成できる拡張子。
      * create_beacon_files.py の QR_DOCUMENT_FORMATS と一致させること（片方だけ変更しない）。
      */
-    private const QR_DOCUMENT_EXTENSIONS = ['docx', 'pdf', 'html'];
+    private const QR_DOCUMENT_EXTENSIONS = ['docx', 'pdf', 'html', 'xlsx', 'pptx'];
+
+    /**
+     * 旧/短縮拡張子を正規の生成フォーマットへ正規化するエイリアス。
+     * 実生成は OOXML(.docx/.xlsx/.pptx)のみ可能なため、利用者が慣習的に打つ
+     * 'doc'/'xls'/'ppt' は意図どおり対応する OOXML へ寄せる（黙ってQR画像PNGに
+     * フォールバックする事故を防ぐ。2026-08 に添付拡張子 'doc' がPNG化した事例）。
+     */
+    private const QR_EXTENSION_ALIASES = [
+        'doc' => 'docx',
+        'xls' => 'xlsx',
+        'ppt' => 'pptx',
+    ];
 
     /**
      * QR型(link_mode=='qr')の Attachment.csv 拡張子列に書く値を決める。
-     *  - $attachmentExt が docx/pdf/html のいずれかなら 'qr_docx'/'qr_pdf'/'qr_html'
+     *  - $attachmentExt を正規化(doc→docx 等)した上で docx/pdf/html/xlsx/pptx のいずれかなら
+     *    'qr_docx'/'qr_pdf'/'qr_html'/'qr_xlsx'/'qr_pptx'
      *    （create_beacon_files.py 側がこの識別子で本文+QR埋め込み文書を生成する）。
      *  - それ以外（未指定/空/不正値）は従来の 'qr'（生QR画像PNG）にフォールバックし後方互換を保つ。
      */
     private static function qrAttachmentExtension(?string $attachmentExt): string
     {
         $ext = strtolower(trim((string) $attachmentExt));
+        $ext = self::QR_EXTENSION_ALIASES[$ext] ?? $ext;
         if (in_array($ext, self::QR_DOCUMENT_EXTENSIONS, true)) {
             return 'qr_' . $ext;
         }
@@ -224,7 +238,7 @@ final class PipelineRunner
         $attachRows = [['項番', '添付ファイル名', '拡張子', 'zipフラグ']];
         foreach ($contents as $content) {
             $contentNo = (int) $content['content_no'];
-            // QR型は attachment_ext(docx/pdf/html) に応じて 'qr_docx'/'qr_pdf'/'qr_html'
+            // QR型は attachment_ext(docx/pdf/html/xlsx/pptx) に応じて 'qr_docx' 等
             //（本文+QR埋め込み文書。create_beacon_files.py がトリガーとして判定）にするか、
             // 未指定/不正値なら従来の 'qr'（生QR画像PNG・後方互換）にフォールバックする。
             // それ以外の添付型は attachment_ext を使う。

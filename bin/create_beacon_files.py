@@ -66,10 +66,14 @@ sys.stdout.reconfigure(line_buffering=True)
 #   'qr_docx' : 本文+QRを埋め込んだ docx
 #   'qr_pdf'  : 本文+QRを埋め込んだ pdf
 #   'qr_html' : 本文+QRを埋め込んだ html
+#   'qr_xlsx' : 本文+QRを埋め込んだ xlsx
+#   'qr_pptx' : 本文+QRを埋め込んだ pptx
 QR_DOCUMENT_FORMATS = {
     'qr_docx': 'docx',
     'qr_pdf': 'pdf',
     'qr_html': 'html',
+    'qr_xlsx': 'xlsx',
+    'qr_pptx': 'pptx',
 }
 
 WEB_ROOT = Path("/var/www/html")
@@ -116,7 +120,7 @@ def resolve_qr_extension(extension):
     """Attachment.csv の拡張子文字列から QR添付の種別を判定する。
 
     戻り値: ('png', None) 従来の生QR画像PNG（既定・フォールバック）
-            ('doc', fmt)   本文+QRを埋め込んだ文書。fmt は 'docx'|'pdf'|'html'
+            ('doc', fmt)   本文+QRを埋め込んだ文書。fmt は 'docx'|'pdf'|'html'|'xlsx'|'pptx'
     """
     key = str(extension).strip().lower()
     if key in QR_DOCUMENT_FORMATS:

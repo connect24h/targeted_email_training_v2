@@ -28,7 +28,7 @@ def _qr_png_bytes(url: str) -> bytes:
 def generate_qr_document(fmt: str, body_text: str, tracking_url: str, out_path: str) -> str:
     """本文 body_text に QR を埋め込んだ fmt 形式の文書を out_path に書き出す。
 
-    fmt: 'docx' | 'pdf' | 'html'
+    fmt: 'docx' | 'pdf' | 'html' | 'xlsx' | 'pptx'
     2-a: body_text は honbun.csv の本文をそのまま流し込む(プレースホルダ置換は呼び出し側で済ませる)。
     """
     fmt = fmt.lower()
@@ -93,6 +93,55 @@ def generate_qr_document(fmt: str, body_text: str, tracking_url: str, out_path: 
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
 
+    elif fmt == "xlsx":
+        from openpyxl import Workbook
+        from openpyxl.drawing.image import Image as XLImage
+        wb = Workbook()
+        ws = wb.active
+        # 本文は行ごとにA列へ。空行も1セルとして維持し元の体裁を保つ。
+        for i, line in enumerate(body_text.split("\n"), start=1):
+            ws.cell(row=i, column=1, value=line)
+        # QRは本文の末尾から2行下に配置。openpyxl は PNG ファイルパスを要求するため一時保存する。
+        qr_tmp = out_path + ".qr.png"
+        with open(qr_tmp, "wb") as f:
+            f.write(qr_png)
+        try:
+            img = XLImage(qr_tmp)
+            img.width = 150
+            img.height = 150
+            anchor_row = body_text.count("\n") + 3
+            ws.add_image(img, f"A{anchor_row}")
+            wb.save(out_path)
+        finally:
+            os.remove(qr_tmp)
+
+    elif fmt == "pptx":
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+        prs = Presentation()
+        # 白紙レイアウト(index=6)にテキストボックスとQRを直接置く。
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.4), Inches(6.0), Inches(4.5))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        lines = body_text.split("\n")
+        tf.text = lines[0] if lines else ""
+        for line in lines[1:]:
+            p = tf.add_paragraph()
+            p.text = line
+        for p in tf.paragraphs:
+            for run in p.runs:
+                run.font.size = Pt(14)
+        qr_tmp = out_path + ".qr.png"
+        with open(qr_tmp, "wb") as f:
+            f.write(qr_png)
+        try:
+            slide.shapes.add_picture(qr_tmp, Inches(7.0), Inches(2.0),
+                                     width=Inches(2.0), height=Inches(2.0))
+            prs.save(out_path)
+        finally:
+            os.remove(qr_tmp)
+
     else:
         raise ValueError(f"unsupported fmt: {fmt}")
 
@@ -105,7 +154,7 @@ if __name__ == "__main__":
             "期限は本日中です。\n\n※本メールは標的型攻撃メール訓練です。")
     url = "http://85.131.251.224/link-1234567890.html"
     outdir = "/tmp/claude-0/-root/3306ab7d-effd-4e4d-9e11-7acd4c62bf69/scratchpad"
-    for fmt in ("docx", "pdf", "html"):
+    for fmt in ("docx", "pdf", "html", "xlsx", "pptx"):
         p = os.path.join(outdir, f"qrdoc-test.{fmt}")
         generate_qr_document(fmt, body, url, p)
         sz = os.path.getsize(p)

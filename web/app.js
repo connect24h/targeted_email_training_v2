@@ -1253,7 +1253,7 @@ async function openCampaignModal(campaignId = null) {
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">配信形式</label>
           <select class="form-select form-select-sm c-linkmode"><option value="link">リンク</option><option value="attachment">添付</option><option value="form">フォーム</option><option value="qr">QRコード</option></select></div>
-        <div class="col-md-4"><label class="form-label small c-ext-label text-muted">添付拡張子(添付/QR時)</label><input class="form-control form-control-sm c-ext" placeholder="html / doc / pdf"></div>
+        <div class="col-md-4"><label class="form-label small c-ext-label text-muted">添付拡張子(添付/QR時)</label><input class="form-control form-control-sm c-ext" placeholder="html / docx / pdf / xlsx / pptx"></div>
         <div class="col-md-4 d-flex align-items-end"><div class="form-check">
           <input class="form-check-input c-zip" type="checkbox"><label class="form-check-label small c-zip-label text-muted">zip化</label></div></div>
       </div>

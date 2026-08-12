@@ -59,5 +59,28 @@ class GeneratedArtifactValidationTest(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class ResolveQrExtensionTest(unittest.TestCase):
+    def test_should_map_document_identifiers_to_formats(self) -> None:
+        cases = {
+            "qr_docx": ("doc", "docx"),
+            "qr_pdf": ("doc", "pdf"),
+            "qr_html": ("doc", "html"),
+            "qr_xlsx": ("doc", "xlsx"),
+            "qr_pptx": ("doc", "pptx"),
+        }
+        for key, expected in cases.items():
+            with self.subTest(key=key):
+                self.assertEqual(
+                    create_beacon_files.resolve_qr_extension(key), expected
+                )
+
+    def test_should_fallback_to_png_for_plain_qr_and_unknown(self) -> None:
+        for key in ("qr", "exe", "", "doc"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    create_beacon_files.resolve_qr_extension(key), ("png", None)
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
