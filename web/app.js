@@ -1262,6 +1262,10 @@ async function openCampaignModal(campaignId = null) {
         <input class="form-check-input c-suppress-url" type="checkbox" id="sup-${idx}">
         <label class="form-check-label small c-suppress-label text-muted" for="sup-${idx}">本文にURLを差し込まない（添付/QR型向け：本文に半端なリンクを残さない）</label>
       </div>
+      <div class="form-check mt-1">
+        <input class="form-check-input c-suppress-email" type="checkbox" id="supmail-${idx}">
+        <label class="form-check-label small text-muted" for="supmail-${idx}">認証画面にメールアドレスを事前入力しない（利用者に自分で入力させる）</label>
+      </div>
       <div class="row g-2 mt-1">
         <div class="col-md-6"><label class="form-label small text-muted">送信元アドレス（任意・未指定ならキャンペーン既定）</label>
           <input class="form-control form-control-sm c-from" type="email" placeholder="このコンテンツ専用の送信元"></div>
@@ -1284,6 +1288,7 @@ async function openCampaignModal(campaignId = null) {
       if (ext) c.attachment_ext = ext;
       if (row.querySelector('.c-zip').checked) c.attachment_zip = 1;
       if (row.querySelector('.c-suppress-url').checked) c.suppress_body_url = 1;
+      if (row.querySelector('.c-suppress-email').checked) c.suppress_prefill_email = 1;
       // コンテンツ別の送信元/ビーコンURL(任意)。空ならキャンペーン既定を使う。
       const cFrom = row.querySelector('.c-from').value.trim();
       if (cFrom) c.from_address = cFrom;
@@ -1452,6 +1457,7 @@ async function openCampaignModal(campaignId = null) {
       if (prefill.attachment_ext) row.querySelector('.c-ext').value = prefill.attachment_ext;
       row.querySelector('.c-zip').checked = Number(prefill.attachment_zip) === 1;
       row.querySelector('.c-suppress-url').checked = Number(prefill.suppress_body_url) === 1;
+      row.querySelector('.c-suppress-email').checked = Number(prefill.suppress_prefill_email) === 1;
       if (prefill.from_address) row.querySelector('.c-from').value = prefill.from_address;
       if (prefill.beacon_base) row.querySelector('.c-beacon').value = prefill.beacon_base;
     } else {

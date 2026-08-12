@@ -314,6 +314,7 @@ final class MigrationRunner
             ],
             'templates' => ['scenario_key' => 'TEXT'],
             'campaign_targets' => ['content_no' => 'INTEGER'],
+            'campaign_contents' => ['suppress_prefill_email' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_categories' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_questions' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],

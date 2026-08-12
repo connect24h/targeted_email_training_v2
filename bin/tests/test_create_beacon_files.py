@@ -59,6 +59,49 @@ class GeneratedArtifactValidationTest(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class SuppressPrefillEmailTest(unittest.TestCase):
+    def test_should_treat_truthy_values_as_suppress(self) -> None:
+        for value in ("1", "1.0", "True", "true", " 1 "):
+            with self.subTest(value=value):
+                self.assertTrue(
+                    create_beacon_files.is_suppress_prefill_email(value)
+                )
+
+    def test_should_treat_empty_and_zero_as_not_suppress(self) -> None:
+        # 旧CSV(列なし)は '' として渡る → 従来通りメール事前入力。
+        for value in ("", "0", "nan", "false", None):
+            with self.subTest(value=value):
+                self.assertFalse(
+                    create_beacon_files.is_suppress_prefill_email(value)
+                )
+
+    def test_should_return_empty_string_when_suppressed(self) -> None:
+        self.assertEqual(
+            create_beacon_files.build_auth_email_value("user@example.com", True),
+            "",
+        )
+
+    def test_should_return_escaped_email_when_not_suppressed(self) -> None:
+        # quote=True で属性値として安全にエスケープされること(格納型XSS対策)。
+        out = create_beacon_files.build_auth_email_value('a"><b@example.com', False)
+        self.assertNotIn('"', out)
+        self.assertIn("&quot;", out)
+
+    def test_master_html_email_value_becomes_empty_when_suppressed(self) -> None:
+        # 実際の master3.html を模した value="#$6$#" が空になることを確認。
+        master = '<input type="email" name="email" value="#$6$#" placeholder="">'
+        suppressed = master.replace(
+            "#$6$#",
+            create_beacon_files.build_auth_email_value("user@example.com", True),
+        )
+        self.assertIn('value=""', suppressed)
+        not_suppressed = master.replace(
+            "#$6$#",
+            create_beacon_files.build_auth_email_value("user@example.com", False),
+        )
+        self.assertIn('value="user@example.com"', not_suppressed)
+
+
 class ResolveQrExtensionTest(unittest.TestCase):
     def test_should_map_document_identifiers_to_formats(self) -> None:
         cases = {

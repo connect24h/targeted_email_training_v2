@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS campaign_contents (
   from_address        TEXT,
   beacon_base         TEXT,
   suppress_body_url   INTEGER NOT NULL DEFAULT 0,
+  suppress_prefill_email INTEGER NOT NULL DEFAULT 0,
   UNIQUE (campaign_id, content_no),
   FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 );

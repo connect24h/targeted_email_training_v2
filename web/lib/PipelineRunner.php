@@ -12,13 +12,19 @@ require_once __DIR__ . '/Db.php';
 
 final class PipelineRunner
 {
-    /** list.csv の列順（既存 send_email.py / create_beacon_files.py が参照する20列）。 */
+    /**
+     * list.csv の列順（既存 send_email.py / create_beacon_files.py が参照する列）。
+     * 末尾『メール空欄』は認証画面(master*.html)の email 事前入力を抑制するフラグ。
+     * 列は必ず末尾に追加すること。途中挿入は位置依存の既存コードを壊す。
+     * pandas(send_email/create_beacon)は列名で読むため末尾追加は後方互換。
+     */
     private const LIST_HEADER = [
         '項番', '送信先情報', '件名定型文No', '本文定型文No',
         '本文差し込み1 #$1$#', '本文差し込み2 #$2$#', '本文差し込み3 #$3$#',
         '認証フラグ', '添付ファイル番号', '送信元メールアドレス',
         '苗字', '表示氏名（姓名）', 'メールアドレス（会社）', '会社名', '略称',
         '本務役職名称', '役職カテゴリ', '乱数列', '送信フラグ', '添付ファイル',
+        'メール空欄',
     ];
 
     /**
@@ -145,6 +151,7 @@ final class PipelineRunner
         );
         $rows = [self::LIST_HEADER];
         $fromAddr = (string) ($c['from_address'] ?? '');
+        $suppressPrefillEmail = (int) ($c['suppress_prefill_email'] ?? 0);
         // link_mode で「リンク型 or 添付型」を排他にする。
         //  - link / form : 本文URL = {base}/link-{tracking_id}.html(クリック追跡)、添付なし
         //  - attachment  : 添付あり、本文URLはトップ(#$1$# には誘い文だけで追跡は添付ビーコン)
@@ -187,6 +194,7 @@ final class PipelineRunner
                 (string) $t['tracking_id'],         // 乱数列
                 '',                                 // 送信フラグ
                 '',                                 // 添付ファイル（生成後に埋まる）
+                $suppressPrefillEmail,              // メール空欄（認証画面のemail事前入力抑制）
             ];
         }
         self::writeCsv($dir . '/list.csv', $rows);
@@ -344,6 +352,7 @@ final class PipelineRunner
                 (string) $t['tracking_id'],         // 乱数列
                 '',                                 // 送信フラグ
                 '',                                 // 添付ファイル（生成後に埋まる）
+                (int) ($targetContent['suppress_prefill_email'] ?? 0), // メール空欄（認証画面のemail事前入力抑制）
             ];
         }
         self::writeCsv($dir . '/list.csv', $rows);

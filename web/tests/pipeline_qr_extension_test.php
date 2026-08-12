@@ -162,4 +162,52 @@ $dir4 = PipelineRunner::generateCsv($campaignId4);
 $attachCsv4 = array_map('str_getcsv', array_filter(explode("\n", str_replace("\r", '', file_get_contents($dir4 . '/Attachment.csv'))), fn($l) => $l !== ''));
 check($attachCsv4[1][2] === 'doc', '非QR添付型は attachment_ext(doc) がそのまま書かれる(回帰なし)');
 
+// --- ケース5: suppress_prefill_email が list.csv『メール空欄』列に反映される ---
+// content_no=1 は suppress_prefill_email=1(空欄化)、content_no=2 は未指定(=0)。
+$body_req5 = [
+    'name' => 'QRX_SUPPRESS_EMAIL',
+    'from_address' => 'qrx-mail@example.com',
+    'send_mode' => 'normal',
+    'start_at' => $now,
+    'end_at' => '2026-08-10 18:00:00',
+    'target_ids' => [$tids[2], $tids[3]],
+    'content_delivery' => 'distribute',
+    'contents' => [
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'link', 'suppress_prefill_email' => 1],
+        ['subject_template_id' => $subj, 'body_template_id' => $body, 'phish_template_id' => $phish,
+         'link_mode' => 'link'], // 未指定 → 0
+    ],
+];
+$r5 = call_handler('campaigns_handle_create', $body_req5, 'operator');
+check($r5['code'] === 201 || $r5['code'] === 200, 'suppress_email create → 201/200');
+$campaignId5 = (int) ($r5['payload']['campaign']['id'] ?? 0);
+
+// DBに正しく保存されたか(get経路の復元用SELECTが列を返すか)
+$saved = Db::all('SELECT content_no, suppress_prefill_email FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no', [$campaignId5]);
+$savedByNo = [];
+foreach ($saved as $s) { $savedByNo[(int) $s['content_no']] = (int) $s['suppress_prefill_email']; }
+check($savedByNo[1] === 1, 'content1 の suppress_prefill_email=1 がDBに保存される');
+check($savedByNo[2] === 0, 'content2 の suppress_prefill_email 未指定→0 がDBに保存される');
+
+// list.csv 生成: 『メール空欄』列(末尾)が content 毎に正しく書かれる
+$tmpDir5 = sys_get_temp_dir() . '/qrx-mail-gen-' . getmypid();
+Db::run('UPDATE campaigns SET data_dir = ? WHERE id = ?', [$tmpDir5, $campaignId5]);
+$dir5 = PipelineRunner::generateCsv($campaignId5);
+$listCsv = array_map('str_getcsv', array_filter(explode("\n", str_replace("\r", '', file_get_contents($dir5 . '/list.csv'))), fn($l) => $l !== ''));
+$header5 = $listCsv[0];
+$mailBlankIdx = array_search('メール空欄', $header5, true);
+check($mailBlankIdx !== false, 'list.csv ヘッダに『メール空欄』列がある');
+check($mailBlankIdx === count($header5) - 1, '『メール空欄』は末尾列(既存20列の位置を崩さない)');
+// content_no は 件名定型文No 列(index 2)に入る。行ごとに content と突合。
+$subjectIdx = array_search('件名定型文No', $header5, true);
+$foundC1 = false; $foundC2 = false;
+foreach (array_slice($listCsv, 1) as $row) {
+    if ((int) $row[$subjectIdx] === 1) { $foundC1 = true; check((int) $row[$mailBlankIdx] === 1, 'content1 行の『メール空欄』=1'); }
+    if ((int) $row[$subjectIdx] === 2) { $foundC2 = true; check((int) $row[$mailBlankIdx] === 0, 'content2 行の『メール空欄』=0'); }
+}
+check($foundC1 && $foundC2, '両コンテンツの行が list.csv に生成された');
+foreach (glob($tmpDir5 . '/*') ?: [] as $p) { if (is_file($p)) { @unlink($p); } }
+@rmdir($tmpDir5 . '/logs'); @rmdir($tmpDir5 . '/Attachment'); @rmdir($tmpDir5);
+
 echo "ALL TESTS PASSED\n";

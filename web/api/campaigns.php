@@ -382,7 +382,8 @@ function campaigns_handle_get(array $actor): never
     // 編集フォーム復元用に、コンテンツ構成と対象者ID一覧も返す。
     $contents = Db::all(
         'SELECT content_no, subject_template_id, body_template_id, phish_template_id,
-                link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url
+                link_mode, attachment_ext, attachment_zip, from_address, beacon_base,
+                suppress_body_url, suppress_prefill_email
          FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no',
         [$id]
     );
@@ -481,6 +482,7 @@ function campaigns_parse_contents(array $body, int $tenantId): array
         $attachmentExt = campaigns_optional_string($content, 'attachment_ext');
         $attachmentZip = campaigns_optional_bool_int($content, 'attachment_zip') ?? 0;
         $suppressBodyUrl = campaigns_optional_bool_int($content, 'suppress_body_url') ?? 0;
+        $suppressPrefillEmail = campaigns_optional_bool_int($content, 'suppress_prefill_email') ?? 0;
         // コンテンツ別の送信元アドレス/ビーコンURL(任意。未指定ならキャンペーン単位にフォールバック)。
         $contentFromAddress = campaigns_optional_content_email($content, 'from_address', $idx);
         $contentBeaconBase = campaigns_optional_beacon_base($content, 'beacon_base');
@@ -501,6 +503,7 @@ function campaigns_parse_contents(array $body, int $tenantId): array
             'attachment_ext' => $attachmentExt,
             'attachment_zip' => $attachmentZip,
             'suppress_body_url' => $suppressBodyUrl,
+            'suppress_prefill_email' => $suppressPrefillEmail,
             'from_address' => $contentFromAddress,
             'beacon_base' => $contentBeaconBase,
         ];
@@ -616,8 +619,9 @@ function campaigns_handle_create(array $actor): never
             Db::run(
                 'INSERT INTO campaign_contents
                  (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                  link_mode, attachment_ext, attachment_zip, suppress_body_url, from_address, beacon_base)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                  link_mode, attachment_ext, attachment_zip, suppress_body_url, suppress_prefill_email,
+                  from_address, beacon_base)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $campaignId,
                     $contentNo,
@@ -628,6 +632,7 @@ function campaigns_handle_create(array $actor): never
                     $content['attachment_ext'],
                     $content['attachment_zip'],
                     $content['suppress_body_url'] ?? 0,
+                    $content['suppress_prefill_email'] ?? 0,
                     $content['from_address'] ?? null,
                     $content['beacon_base'] ?? null,
                 ]
@@ -747,8 +752,9 @@ function campaigns_handle_update(array $actor): never
                 Db::run(
                     'INSERT INTO campaign_contents
                      (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                      link_mode, attachment_ext, attachment_zip, suppress_body_url, from_address, beacon_base)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                      link_mode, attachment_ext, attachment_zip, suppress_body_url, suppress_prefill_email,
+                      from_address, beacon_base)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     [
                         $id,
                         $contentNo,
@@ -759,6 +765,7 @@ function campaigns_handle_update(array $actor): never
                         $content['attachment_ext'],
                         $content['attachment_zip'],
                         $content['suppress_body_url'] ?? 0,
+                        $content['suppress_prefill_email'] ?? 0,
                         $content['from_address'] ?? null,
                         $content['beacon_base'] ?? null,
                     ]

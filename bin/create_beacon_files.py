@@ -129,6 +129,26 @@ def resolve_qr_extension(extension):
     return ('png', None)
 
 
+def is_suppress_prefill_email(value):
+    """list.csv『メール空欄』列の値が「事前入力を抑制する(真)」かを判定する。
+
+    list.csv 末尾列。旧CSV(列なし)は '' → False。pandas dtype=str のため
+    '1'/'1.0'/'True'/'true' を真とみなす（数値/真偽どちらの表記でも受ける）。
+    """
+    return str(value).strip() in ('1', '1.0', 'True', 'true')
+
+
+def build_auth_email_value(to_email, suppress_prefill_email):
+    """認証画面(master*.html)の value="#$6$#" に差し込む email 値を返す。
+
+    suppress_prefill_email が真なら空文字（利用者に自分で入力させる）。
+    偽なら送信先メールを quote=True でHTMLエスケープ（格納型XSS対策）。
+    """
+    if suppress_prefill_email:
+        return ''
+    return html.escape(to_email, quote=True)
+
+
 def get_body_template(body_templates_df, template_no):
     """本文定型文の取得（send_email.py の get_body_template を踏襲）。"""
     try:
@@ -308,6 +328,9 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
         attachment_no = row.get('添付ファイル番号', '')
         auth_flag = row.get('認証フラグ', 0)  # 認証フラグ取得（デフォルト0）
         to_email = str(row.get('送信先情報', ''))  # 送信先メールアドレス取得
+        # 『メール空欄』=1 のとき認証画面(master*.html)の email 事前入力を抑制する。
+        # list.csv 末尾列(無い旧CSVは空→0扱い)。真なら #$6$# を空文字に置換する。
+        suppress_prefill_email = is_suppress_prefill_email(row.get('メール空欄', ''))
 
         if not random_value:
             print(f"[WARN] 行 {index+1}: 乱数列が空のためスキップ", flush=True)
@@ -390,7 +413,10 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
         # #$6$#(to_email)は master*.html 内で value="#$6$#" のHTML属性値に埋め込まれるため、
         #  格納型XSS対策として quote=True でエスケープする（差し込む値のみ／テンプレート本体は触らない）。
         html_content = master_html_content.replace('#$5$#', random_value)
-        html_content = html_content.replace('#$6$#', html.escape(to_email, quote=True))  # 送信先メールアドレスを置換
+        # 『メール空欄』指定時は認証画面の email 事前入力を消す(value="")。それ以外は従来通り
+        # 送信先メールを quote=True でエスケープして value 属性に差し込む(格納型XSS対策)。
+        prefill_email = build_auth_email_value(to_email, suppress_prefill_email)
+        html_content = html_content.replace('#$6$#', prefill_email)  # 送信先メールアドレスを置換
         # テンプレート内のハードコードされたURLをconfig値で置換
         html_content = html_content.replace('http://85.131.251.224', beacon_base)
 

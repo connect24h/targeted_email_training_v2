@@ -258,13 +258,15 @@ final class CampaignDraftFactory
             Db::run(
                 'INSERT INTO campaign_contents
                  (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url,
+                  suppress_prefill_email)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $draftId, $content['content_no'], $content['subject_template_id'], $content['body_template_id'],
                     $content['phish_template_id'], $content['link_mode'], $content['attachment_ext'],
                     $content['attachment_zip'], $content['from_address'], $content['beacon_base'],
                     $content['suppress_body_url'] ?? 0,
+                    $content['suppress_prefill_email'] ?? 0,
                 ]
             );
         }
