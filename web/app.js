@@ -1782,6 +1782,40 @@ async function renderReportDetail(campaignId) {
     },
     options: { responsive: true, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
   });
+  // ビーコン(tracking_id)単位の開封明細。all配信で1人×Nコンテンツを個別に確認する。
+  await renderReportBeacons(campaignId);
+}
+
+// ビーコン別 開封明細の取得・描画(tracking_id 単位。人物単位に潰さず全パターンを出す)。
+async function renderReportBeacons(campaignId) {
+  const body = $('#reportBeaconsBody');
+  const summaryEl = $('#reportBeaconSummary');
+  if (!body) return;
+  let d;
+  try {
+    d = await api('api/report.php', { query: { action: 'beacons', campaign_id: campaignId } });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="8" class="text-muted small">明細の取得に失敗しました: ${esc(e.message)}</td></tr>`;
+    return;
+  }
+  const mark = (on) => on ? '<span class="badge bg-danger">✓</span>' : '<span class="text-muted">–</span>';
+  const beacons = d.beacons || [];
+  body.innerHTML = beacons.length
+    ? beacons.map((b) => `<tr>
+        <td>${esc(b.name)}${b.is_test ? ' <span class="badge bg-secondary">TEST</span>' : ''}</td>
+        <td>${esc(b.company)}</td>
+        <td>${b.content_no === null ? '(単一)' : esc(b.content_no)}</td>
+        <td class="small text-muted">${esc(b.tracking_id)}</td>
+        <td>${mark(b.opened)}</td>
+        <td>${mark(b.clicked)}</td>
+        <td>${mark(b.authed)}</td>
+        <td class="small">${b.opened_at ? esc(b.opened_at) : ''}</td>
+      </tr>`).join('')
+    : emptyRow(8);
+  if (summaryEl && d.summary) {
+    const s = d.summary;
+    summaryEl.textContent = `全${s.total}ビーコン中 開封${s.opened}(${pct(s.open_rate)}) / クリック${s.clicked} / 認証${s.authed}`;
+  }
 }
 // レポート確定(コミット): 現時点の集計値を固定し、以後変更されないようにする
 async function commitReport() {

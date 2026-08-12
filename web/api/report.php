@@ -514,6 +514,92 @@ function report_handle_individuals(): never
     json_out(['success' => true, 'individuals' => $out, 'generated_at' => date('Y-m-d H:i:s')]);
 }
 
+/**
+ * ビーコン(tracking_id)単位の開封明細。
+ *
+ * 配信方式=all(全員に全コンテンツ)では 1人×N コンテンツが別々の tracking_id で
+ * 送られる。人物単位の集計では「1人が何パターン開いたか」が潰れるため、ここでは
+ * tracking_id ごとに1行(対象者・コンテンツ番号・開封/クリック/認証の有無と日時)を返す。
+ * テスト送信の全パターン確認が主用途なので is_test で絞らず全ビーコンを出す。
+ */
+function report_handle_beacons(): never
+{
+    $user = require_role('viewer');
+    $campaignId = report_query_int('campaign_id');
+    if ($campaignId === null) {
+        json_error('campaign_id は必須です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    assert_campaign_owned($campaignId, $tenantId);
+
+    // tracking_id 単位。events を event_type ごとに有無(MAX)と最初の発生時刻(MIN)で集約。
+    $rows = Db::all(
+        "SELECT ct.tracking_id, ct.content_no, ct.send_status,
+                t.name, t.email, t.company, t.department, t.position_category, t.is_test,
+                MAX(CASE WHEN e.event_type = 'open'  THEN 1 ELSE 0 END) AS opened,
+                MAX(CASE WHEN e.event_type = 'click' THEN 1 ELSE 0 END) AS clicked,
+                MAX(CASE WHEN e.event_type = 'auth'  THEN 1 ELSE 0 END) AS authed,
+                MIN(CASE WHEN e.event_type = 'open'  THEN e.occurred_at END) AS opened_at,
+                MIN(CASE WHEN e.event_type = 'click' THEN e.occurred_at END) AS clicked_at,
+                MIN(CASE WHEN e.event_type = 'auth'  THEN e.occurred_at END) AS authed_at
+         FROM campaign_targets ct
+         INNER JOIN campaigns c ON c.id = ct.campaign_id
+         INNER JOIN targets t   ON t.id = ct.target_id
+         LEFT JOIN events e
+                ON e.tracking_id = ct.tracking_id
+               AND e.campaign_id = ct.campaign_id
+               AND e.tenant_id = ?
+               AND e.event_type IN ('open','click','auth')
+         WHERE c.tenant_id = ? AND ct.campaign_id = ?
+         GROUP BY ct.tracking_id
+         ORDER BY t.name, ct.content_no",
+        [$tenantId, $tenantId, $campaignId]
+    );
+
+    $beacons = [];
+    foreach ($rows as $r) {
+        $beacons[] = [
+            'tracking_id' => (string) $r['tracking_id'],
+            'content_no' => $r['content_no'] === null ? null : (int) $r['content_no'],
+            'send_status' => (string) $r['send_status'],
+            'name' => (string) ($r['name'] ?? ''),
+            'email' => (string) ($r['email'] ?? ''),
+            'company' => (string) ($r['company'] ?? ''),
+            'department' => (string) ($r['department'] ?? ''),
+            'position_category' => $r['position_category'],
+            'is_test' => (int) $r['is_test'],
+            'opened' => (int) $r['opened'] === 1,
+            'clicked' => (int) $r['clicked'] === 1,
+            'authed' => (int) $r['authed'] === 1,
+            'opened_at' => $r['opened_at'],
+            'clicked_at' => $r['clicked_at'],
+            'authed_at' => $r['authed_at'],
+        ];
+    }
+    // 集計サマリ(ビーコン単位): 全ビーコン数と、開封/クリック/認証されたビーコン数。
+    $total = count($beacons);
+    $openedCount = 0; $clickedCount = 0; $authedCount = 0;
+    foreach ($beacons as $b) {
+        if ($b['opened']) { $openedCount++; }
+        if ($b['clicked']) { $clickedCount++; }
+        if ($b['authed']) { $authedCount++; }
+    }
+    json_out([
+        'success' => true,
+        'beacons' => $beacons,
+        'summary' => [
+            'total' => $total,
+            'opened' => $openedCount,
+            'clicked' => $clickedCount,
+            'authed' => $authedCount,
+            'open_rate' => report_detail_rate($openedCount, $total),
+            'click_rate' => report_detail_rate($clickedCount, $total),
+            'auth_rate' => report_detail_rate($authedCount, $total),
+        ],
+        'generated_at' => date('Y-m-d H:i:s'),
+    ]);
+}
+
 /** レポートを確定(コミット)する。現時点の全期間集計をスナップショット保存し、以後値を固定する。 */
 function report_handle_commit(): never
 {
@@ -594,6 +680,9 @@ try {
     }
     if ($action === 'individuals' && $method === 'GET') {
         report_handle_individuals();
+    }
+    if ($action === 'beacons' && $method === 'GET') {
+        report_handle_beacons();
     }
     if ($action === 'commit' && $method === 'POST') {
         report_handle_commit();
