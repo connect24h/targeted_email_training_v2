@@ -1305,7 +1305,7 @@ async function openCampaignModal(campaignId = null) {
       weekdays_only: f.weekdays_only.checked,
       is_test: f.is_test.checked,
       content_delivery: f.content_delivery ? f.content_delivery.value : 'distribute',
-      test_redirect_emails: f.test_redirect_emails ? f.test_redirect_emails.value.trim() : '',
+      test_redirect_emails: (f.test_redirect_emails && f.test_redirect_emails.value.trim()) || null,
       start_at: f.start_at.value.replace('T', ' '),
       end_at: f.end_at.value.replace('T', ' '),
       target_ids: multiVals(f.target_ids),

@@ -37,6 +37,23 @@ function campaigns_int(array $body, string $key): int
 }
 
 /**
+ * 空文字を許容する任意文字列。未指定/null/空文字は NULL 扱い。
+ * campaigns_optional_string は空文字を「不正」とするため、任意項目
+ * (test_redirect_emails 等。is_test OFF 時は空で送られる)には本関数を使う。
+ */
+function campaigns_optional_string_or_null(array $body, string $key): ?string
+{
+    if (!array_key_exists($key, $body) || $body[$key] === null) {
+        return null;
+    }
+    if (!is_string($body[$key])) {
+        json_error($key . ' が不正です', 400);
+    }
+    $v = trim($body[$key]);
+    return $v === '' ? null : $v;
+}
+
+/**
  * ビーコンベース URL（P6）。未指定/空は NULL。指定時は http(s):// スキーム必須。
  * 訓練用途で IP 直指定もありうるためホスト名の形は緩く許すが、スキームは限定する。
  */
@@ -435,7 +452,8 @@ function campaigns_create_data(array $body): array
         // 配信方式: 'all'=全員に全コンテンツ(テスト用) / 'distribute'=従来の均等割り(既定)。
         'content_delivery' => (campaigns_optional_string($body, 'content_delivery') === 'all') ? 'all' : 'distribute',
         // テスト宛先(カンマ区切り)。is_test時、実Toをここに均等分配する(PipelineRunnerがemail検証)。
-        'test_redirect_emails' => campaigns_optional_string($body, 'test_redirect_emails'),
+        // is_test OFF 時は空欄で送られるため、空文字は NULL 扱い(不正としない)。
+        'test_redirect_emails' => campaigns_optional_string_or_null($body, 'test_redirect_emails'),
     ];
     campaigns_validate_schedule($data);
     return $data;
@@ -552,7 +570,8 @@ function campaigns_handle_create(array $actor): never
             // 配信方式: 'all'=全員に全コンテンツ / 'distribute'=均等割り(既定)。
             'content_delivery' => (campaigns_optional_string($body, 'content_delivery') === 'all') ? 'all' : 'distribute',
             // テスト宛先(カンマ区切り)。is_test時、実Toをここに均等分配する(PipelineRunnerがemail検証)。
-            'test_redirect_emails' => campaigns_optional_string($body, 'test_redirect_emails'),
+            // is_test OFF 時は空欄で送られるため、空文字は NULL 扱い(不正としない)。
+            'test_redirect_emails' => campaigns_optional_string_or_null($body, 'test_redirect_emails'),
         ];
         campaigns_validate_schedule($data);
         $phishTemplate = campaigns_assert_template_visible((int) $data['phish_template_id'], $tenantId, 'phish_login');
@@ -652,13 +671,17 @@ function campaigns_handle_create(array $actor): never
 function campaigns_update_fields(array $body): array
 {
     $fields = [];
-    foreach (['name', 'from_address', 'from_domain', 'link_mode', 'attachment_ext', 'send_mode', 'business_start', 'business_end', 'start_at', 'end_at', 'test_redirect_emails', 'content_delivery'] as $key) {
+    foreach (['name', 'from_address', 'from_domain', 'link_mode', 'attachment_ext', 'send_mode', 'business_start', 'business_end', 'start_at', 'end_at', 'content_delivery'] as $key) {
         if (array_key_exists($key, $body)) {
             $fields[$key] = campaigns_optional_string($body, $key);
             if (in_array($key, ['name', 'from_address', 'link_mode', 'send_mode', 'start_at', 'end_at'], true) && $fields[$key] === null) {
                 json_error($key . ' が不正です', 400);
             }
         }
+    }
+    // test_redirect_emails は任意項目。is_test OFF 時は空欄で送られるため空文字を NULL 扱いにする。
+    if (array_key_exists('test_redirect_emails', $body)) {
+        $fields['test_redirect_emails'] = campaigns_optional_string_or_null($body, 'test_redirect_emails');
     }
     foreach (['subject_template_id', 'body_template_id', 'phish_template_id', 'split_count', 'split_interval_min'] as $key) {
         if (array_key_exists($key, $body)) {
