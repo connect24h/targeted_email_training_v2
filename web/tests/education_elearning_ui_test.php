@@ -32,4 +32,21 @@ education_ui_check(str_contains($app, '受講履歴や採点結果は保存さ�
 education_ui_check(str_contains($app, "eduMaterialPreviewTitle').textContent")
     && str_contains($app, "eduMaterialPreviewBody').textContent"), '教材本文をtextContentで安全に表示する');
 
+// 訓練→教育の自動連携(EduAutoEnroll)を画面から有効化できること。
+// triggered_by を送れないと、tet2-edu-enroll.timer は永久に対象0件のままになる。
+education_ui_check(str_contains($app, 'eduAutoEnrollField'), '訓練失敗者の自動追加を設定する項目がある');
+education_ui_check(str_contains($app, "triggered_by = 'phishing_failure'")
+    || str_contains($app, "body.triggered_by = 'phishing_failure'"), '自動追加を選ぶとtriggered_byを送る');
+education_ui_check(str_contains($app, "f.auto_enroll.checked = true"), '訓練失敗者向けプリセットで自動追加を既定にする');
+education_ui_check(str_contains($app, "if (!risk) f.auto_enroll.checked = false"), '訓練失敗者以外では自動追加を外す');
+
+// 報告率(report rate)の可視化。失敗率だけでなく正しい行動を見るための指標。
+// 報告データの取得経路自体は未実装(本文リンク方式は却下)だが、report イベントが
+// 入れば動くところまでは用意してある。
+education_ui_check(str_contains($app, 'goodRateClass'), '報告率は高いほど良い指標として色分けする');
+education_ui_check(str_contains($app, 'report_rate'), 'レポート画面が報告率を描画する');
+education_ui_check(str_contains($index, '報告率') && str_contains($index, '報告'), 'レポート表に報告の列がある');
+education_ui_check(!str_contains($app, "label: '報告URL'"),
+    '訓練メール本文に報告URLを差し込ませない(本文にあると訓練だと判明するため)');
+
 echo "ALL TESTS PASSED\n";

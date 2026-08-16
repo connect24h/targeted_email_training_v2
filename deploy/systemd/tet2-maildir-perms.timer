@@ -1,0 +1,12 @@
+[Unit]
+Description=TET v2 Maildir permission repair timer (every 5 minutes)
+
+[Timer]
+# 5分毎。返信者一覧が参照する前に権限を揃え、反映遅れを最大5分に抑える。
+# OnBootSec/OnUnitActiveSec ではなく OnCalendar を使う。前者は稼働中のサーバで
+# enable した際に NEXT が算出されず、再起動まで発火しないことがあるため。
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

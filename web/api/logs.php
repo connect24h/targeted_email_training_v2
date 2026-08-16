@@ -717,6 +717,7 @@ function maildir_parse_headers(string $filepath): ?array
     $res = [
         'date' => '', 'from' => '', 'from_email' => '', 'to' => '',
         'subject' => '', 'has_attachment' => false, 'filename' => basename($filepath),
+        'unreadable' => false,
     ];
     if (isset($headers['date'])) {
         $ts = strtotime($headers['date']);
@@ -742,7 +743,14 @@ function maildir_parse_headers(string $filepath): ?array
     return $res;
 }
 
-/** Maildir の new/cur からメール一覧を取得する。 */
+/** Maildir の new/cur からメール一覧を取得する。
+ *
+ * 読めないファイルを黙って捨てない。Postfix virtual(8) は配送時に 0600 で
+ * ファイルを作るため、www-data から読めないメールが混ざりうる。以前これを
+ * スキップしていたせいで「サーバには届いているのに一覧に出ない」状態になり、
+ * 返信の見落としに直結した。読めない場合はプレースホルダ行として残し、
+ * 画面側で権限エラーと分かるようにする。
+ */
 function maildir_list(string $maildirPath): array
 {
     $mails = [];
@@ -756,13 +764,36 @@ function maildir_list(string $maildirPath): array
             $filepath = $path . '/' . $file;
             if (!is_file($filepath)) { continue; }
             $mail = maildir_parse_headers($filepath);
-            if ($mail !== null) {
-                $mail['status'] = $dir;
-                $mails[] = $mail;
+            if ($mail === null) {
+                $mail = maildir_unreadable_entry($filepath);
             }
+            $mail['status'] = $dir;
+            $mails[] = $mail;
         }
     }
     return $mails;
+}
+
+/** 読み取れなかったメールを一覧に残すためのプレースホルダを作る。
+ *
+ * 日時はファイルの更新時刻で代用する (ヘッダーが読めないため)。
+ */
+function maildir_unreadable_entry(string $filepath): array
+{
+    $mtime = @filemtime($filepath);
+    $perm = @fileperms($filepath);
+    $mode = $perm !== false ? substr(sprintf('%o', $perm), -4) : '????';
+    return [
+        // 一覧のソートは date の文字列比較なので、正常系と同じ書式に揃える。
+        'date' => $mtime !== false ? date('Y-m-d H:i:s', $mtime) : '',
+        'from' => '(読み取り不可)',
+        'from_email' => '',
+        'to' => '',
+        'subject' => '(権限不足でヘッダーを読めません: mode ' . $mode . ')',
+        'has_attachment' => false,
+        'filename' => basename($filepath),
+        'unreadable' => true,
+    ];
 }
 
 /**

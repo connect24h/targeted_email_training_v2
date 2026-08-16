@@ -192,4 +192,38 @@ $r = call_handler('edu_d_handle_update', [
 ], 'operator');
 check($r['code'] === 409, 'ER-4: update running delivery → 409');
 
+// --- 受講トークンの有効期限は配信の deadline から決める ---
+// 検証コードは edu_take.php にあったのに、セットする側が無く実測では全件 NULL
+// (受講リンクが事実上無期限)だった。締切が機能していなかったのを閉じる。
+check(edu_d_token_expiry(['deadline' => '2026-08-31']) === '2026-08-31 23:59:59',
+    'ER-5: 日付のみの締切はその日いっぱいを有効期限にする');
+check(edu_d_token_expiry(['deadline' => '2026-08-31 18:00:00']) === '2026-08-31 18:00:00',
+    'ER-5: 時刻付きの締切はそのまま使う');
+check(edu_d_token_expiry(['deadline' => null]) === null, 'ER-5: 締切がなければ無期限');
+check(edu_d_token_expiry(['deadline' => '  ']) === null, 'ER-5: 空白だけの締切は無期限として扱う');
+check(edu_d_token_expiry([]) === null, 'ER-5: deadline 列が無い配信でも落ちない');
+
+// --- triggered_by と target_type の整合性 ---
+// phishing_failure は EduAutoEnroll が対象を自動決定するので risk 限定。
+// 他と組み合わせると手動確定した対象と自動投入が二重に走る。
+$r = call_handler('edu_d_handle_create', [
+    'title' => '自動連携と全員配信の併用', 'delivery_type' => 'awareness_quiz',
+    'target_type' => 'all', 'triggered_by' => 'phishing_failure',
+], 'operator');
+check($r['code'] === 400, 'ER-5: phishing_failure と target_type=all の併用を拒否する');
+
+$r = call_handler('edu_d_handle_create', [
+    'title' => '自動連携', 'delivery_type' => 'awareness_quiz',
+    'target_type' => 'risk', 'triggered_by' => 'phishing_failure',
+], 'operator');
+check($r['code'] === 201, 'ER-5: phishing_failure と target_type=risk は作成できる');
+check(($r['payload']['delivery']['triggered_by'] ?? '') === 'phishing_failure',
+    'ER-5: triggered_by が保存される(ハードコードされていない)');
+
+$r = call_handler('edu_d_handle_create', [
+    'title' => '不正なトリガー', 'delivery_type' => 'awareness_quiz',
+    'target_type' => 'risk', 'triggered_by' => 'unknown_trigger',
+], 'operator');
+check($r['code'] === 400, 'ER-5: 未知の triggered_by を拒否する');
+
 echo "ALL TESTS PASSED\n";

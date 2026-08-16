@@ -1,5 +1,5 @@
 [Unit]
-Description=TET v2 Education Score Snapshot (daily trend data)
+Description=TET v2 Education Score Snapshot + Human Risk Score (daily)
 After=network.target
 
 [Service]
@@ -7,5 +7,9 @@ Type=oneshot
 User=training
 Group=www-data
 ExecStart=/usr/bin/php /var/www/html/tet2/db/edu_snapshot.php
+# 個人リスクスコアを同じ枠で回す(常駐プロセス・timerを増やさないため)。
+# 先頭の "-" は失敗を無視する指定。スコア算出がコケてもスナップショットの
+# 成功を巻き込まないようにしている。
+ExecStart=-/usr/bin/php /var/www/html/tet2/db/human_risk_score.php
 StandardOutput=append:/opt/training/tet2-data/edu-snapshot.log
 StandardError=append:/opt/training/tet2-data/edu-snapshot.log

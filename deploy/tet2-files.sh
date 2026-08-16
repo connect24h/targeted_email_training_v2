@@ -12,6 +12,7 @@ TET2_BIN_FILES=(
   replace_url.py
   requirements.txt
   send_email.py
+  fix-maildir-perms.sh
   tet2-purge-campaigns.py
   tet2-worker.py
   training_config.py
@@ -23,7 +24,7 @@ tet2_deploy_mode() {
   case "$category" in
     bin)
       case "$relative" in
-        *.py) echo 0755 ;;
+        *.py|*.sh) echo 0755 ;;
         *) echo 0644 ;;
       esac
       ;;

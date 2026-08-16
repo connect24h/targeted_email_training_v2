@@ -46,6 +46,12 @@ final class EduMailer
             return false;
         }
 
+        // テストから localhost:25 へ実送信しないための逃がし口。
+        // 宛先の検証までは通したうえで、投函だけを省いて成功扱いにする。
+        if (getenv('TET2_EDU_MAIL_DISABLE') === '1') {
+            return true;
+        }
+
         $encodedSubject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
         $headers = [
             'From: ' . $from,

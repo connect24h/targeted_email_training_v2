@@ -374,6 +374,7 @@ final class PipelineRunner
         return $parts !== false && $parts[0] !== '' ? $parts[0] : $fullname;
     }
 
+
     /**
      * ビーコン/リンクページのベース URL を返す（末尾スラッシュ付き）。
      * キャンペーンに beacon_base 指定があればそれを優先し、無ければ config.ini

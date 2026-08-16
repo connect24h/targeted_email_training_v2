@@ -75,13 +75,28 @@ function take_resolve(string $token): array
     if ($a === null) {
         take_error('無効なトークンです', 404);
     }
-    if ($a['token_expiry'] !== null && $a['token_expiry'] !== '') {
-        // 期限は 'YYYY-MM-DD HH:MM:SS'(localtime)。現在時刻と比較。
-        if (strtotime((string) $a['token_expiry']) !== false && strtotime((string) $a['token_expiry']) < time()) {
-            take_error('この受講リンクは有効期限が切れています', 410);
-        }
+    if (take_is_expired($a['token_expiry'] ?? null)) {
+        take_error('この受講リンクは有効期限が切れています', 410);
     }
     return $a;
+}
+
+/**
+ * 受講リンクが期限切れかを判定する。
+ *
+ * 期限は 'YYYY-MM-DD HH:MM:SS'(localtime)。空・NULL・解釈不能な値は「期限なし」と扱い、
+ * 受講を止めない(判定できないことを理由に受講者を締め出さない)。
+ */
+function take_is_expired(?string $tokenExpiry, ?int $now = null): bool
+{
+    if ($tokenExpiry === null || trim($tokenExpiry) === '') {
+        return false;
+    }
+    $expiry = strtotime($tokenExpiry);
+    if ($expiry === false) {
+        return false;
+    }
+    return $expiry < ($now ?? time());
 }
 
 /**

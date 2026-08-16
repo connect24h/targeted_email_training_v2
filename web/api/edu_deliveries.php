@@ -12,6 +12,11 @@
 const EDU_DELIVERY_TYPES = ['elearning', 'awareness_quiz'];
 const EDU_TARGET_TYPES   = ['all', 'group', 'risk', 'individual'];
 const EDU_DELIVERY_STATUSES = ['draft', 'scheduled', 'running', 'done', 'cancelled'];
+/**
+ * 配信の起動契機。phishing_failure は EduAutoEnroll(tet2-edu-enroll.timer)が
+ * 訓練失敗者を継続的に自動投入する。manual は launch 操作でのみ対象を確定する。
+ */
+const EDU_TRIGGERED_BY = ['manual', 'phishing_failure'];
 
 function edu_d_query_int(string $key): ?int
 {
@@ -87,6 +92,50 @@ function edu_d_target_type(array $body): string
         json_error('target_type が不正です', 400);
     }
     return $t;
+}
+
+/**
+ * 受講トークンの有効期限。配信に deadline があればそれを使う。
+ *
+ * edu_take.php は token_expiry を検証していたのに、セットするコードがどこにも無く
+ * 実測では全件 NULL だった(受講リンクが事実上無期限)。deadline を入れることで
+ * 「締切後も受講・採点が通る」問題も同時に閉じる。
+ */
+function edu_d_token_expiry(array $delivery): ?string
+{
+    $deadline = $delivery['deadline'] ?? null;
+    if (!is_string($deadline) || trim($deadline) === '') {
+        return null;
+    }
+    $deadline = trim($deadline);
+    // 日付のみ(YYYY-MM-DD)なら、その日いっぱいを有効にする。
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $deadline) === 1) {
+        return $deadline . ' 23:59:59';
+    }
+    return $deadline;
+}
+
+/** triggered_by。未指定は manual。 */
+function edu_d_triggered_by(array $body): string
+{
+    if (!array_key_exists('triggered_by', $body) || $body['triggered_by'] === null) {
+        return 'manual';
+    }
+    if (!is_string($body['triggered_by']) || !in_array($body['triggered_by'], EDU_TRIGGERED_BY, true)) {
+        json_error('triggered_by が不正です', 400);
+    }
+    return $body['triggered_by'];
+}
+
+/**
+ * phishing_failure は EduAutoEnroll が対象者を自動決定するため target_type=risk 限定。
+ * all/group/individual と組み合わせると、手動で確定した対象と自動投入が二重に走る。
+ */
+function edu_d_assert_trigger_consistency(string $triggeredBy, string $targetType): void
+{
+    if ($triggeredBy === 'phishing_failure' && $targetType !== 'risk') {
+        json_error('phishing_failure トリガーは target_type=risk と組み合わせてください', 400);
+    }
 }
 
 function edu_d_assert_owned(int $id, int $tenantId): array
@@ -226,38 +275,9 @@ function edu_d_resolve_questions(array $delivery, int $tenantId): array
         return $ids;
     }
 
-    // 条件抽出: category_ids / difficulty_range / question_count / randomize
-    $categoryIds = $delivery['category_ids'] !== null ? (json_decode((string) $delivery['category_ids'], true) ?: []) : [];
-    $diffRange   = $delivery['difficulty_range'] !== null ? (json_decode((string) $delivery['difficulty_range'], true) ?: []) : [];
-    $count       = $delivery['question_count'] !== null ? (int) $delivery['question_count'] : 0;
-    $randomize   = (int) $delivery['randomize'] === 1;
-
-    // 共有教材(tenant_id NULL) + 自テナントの設問を出題対象にする
-    $where  = ['(tenant_id = ? OR tenant_id IS NULL)', "is_active = 1"];
-    $params = [$tenantId];
-    if (is_array($categoryIds) && $categoryIds !== []) {
-        $ph = implode(',', array_fill(0, count($categoryIds), '?'));
-        $where[] = "category_id IN ($ph)";
-        foreach ($categoryIds as $cid) {
-            $params[] = (int) $cid;
-        }
-    }
-    if (is_array($diffRange) && count($diffRange) === 2) {
-        $where[] = 'difficulty BETWEEN ? AND ?';
-        $params[] = (int) $diffRange[0];
-        $params[] = (int) $diffRange[1];
-    }
-    $order = $randomize ? 'RANDOM()' : 'id';
-    $sql = 'SELECT id FROM edu_questions WHERE ' . implode(' AND ', $where) . " ORDER BY $order";
-    if ($count > 0) {
-        $sql .= ' LIMIT ' . $count;
-    }
-    $rows = Db::all($sql, $params);
-    $ids = [];
-    foreach ($rows as $r) {
-        $ids[] = (int) $r['id'];
-    }
-    return $ids;
+    // 条件抽出。規則は EduQuestionPicker に一本化してある(EduAutoEnroll と共通)。
+    require_once __DIR__ . '/../lib/EduQuestionPicker.php';
+    return EduQuestionPicker::pick($delivery, $tenantId);
 }
 
 function edu_d_handle_list(array $actor): never
@@ -315,7 +335,8 @@ function edu_d_handle_create(array $actor): never
     if ($targetType !== 'individual') {
         $targetIds = [];
     }
-    $triggeredBy = 'manual';
+    $triggeredBy = edu_d_triggered_by($body);
+    edu_d_assert_trigger_consistency($triggeredBy, $targetType);
 
     // difficulty_range: [min,max] 各1-3
     $diffRange = null;
@@ -424,8 +445,15 @@ function edu_d_handle_update(array $actor): never
     if (array_key_exists('deadline', $body) && is_string($body['deadline']) && trim($body['deadline']) !== '') {
         $deadline = trim($body['deadline']);
     }
+    // draft のうちに手動配信⇄自動連携を切り替えられるようにする。
+    $triggeredBy = null;
+    if (array_key_exists('triggered_by', $body) && $body['triggered_by'] !== null) {
+        $triggeredBy = edu_d_triggered_by($body);
+        edu_d_assert_trigger_consistency($triggeredBy, (string) $delivery['target_type']);
+    }
 
-    if ($title === null && $passScore === null && $scheduledAt === null && $deadline === null) {
+    if ($title === null && $passScore === null && $scheduledAt === null && $deadline === null
+        && $triggeredBy === null) {
         json_error('更新項目がありません', 400);
     }
 
@@ -434,9 +462,10 @@ function edu_d_handle_update(array $actor): never
          SET title = COALESCE(?, title),
              pass_score = COALESCE(?, pass_score),
              scheduled_at = COALESCE(?, scheduled_at),
-             deadline = COALESCE(?, deadline)
+             deadline = COALESCE(?, deadline),
+             triggered_by = COALESCE(?, triggered_by)
          WHERE id = ? AND tenant_id = ?',
-        [$title, $passScore, $scheduledAt, $deadline, $id, $tenantId]
+        [$title, $passScore, $scheduledAt, $deadline, $triggeredBy, $id, $tenantId]
     );
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
@@ -489,9 +518,9 @@ function edu_d_handle_launch(array $actor): never
             }
             $token = edu_d_generate_token();
             Db::run(
-                'INSERT INTO edu_assignments (tenant_id, delivery_id, target_id, access_token, status)
-                 VALUES (?, ?, ?, ?, \'assigned\')',
-                [$tenantId, $id, $targetId, $token]
+                'INSERT INTO edu_assignments (tenant_id, delivery_id, target_id, access_token, status, token_expiry)
+                 VALUES (?, ?, ?, ?, \'assigned\', ?)',
+                [$tenantId, $id, $targetId, $token, edu_d_token_expiry($delivery)]
             );
             $newTokens[] = $token;
             $assigned++;

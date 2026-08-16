@@ -70,4 +70,14 @@ check($afterPass['status'] === 'completed' && (int) $afterPass['score'] === 100,
 check((int) Db::one('SELECT COUNT(*) AS n FROM edu_responses WHERE assignment_id = ?', [(int) $assignment['id']])['n'] === 1,
     'ET-3: 再受講結果は1件に更新する');
 
+// --- 期限切れの受講リンクを弾く ---
+// token_expiry の検証コードは元からあったが、セットする側が無く実測では全件 NULL
+// だった(受講リンクが事実上無期限)。launch/自動投入の両方で deadline を入れるようにした。
+$now = strtotime('2026-08-16 12:00:00');
+check(take_is_expired('2026-08-15 23:59:59', $now) === true, 'ET-4: 期限を過ぎたリンクは無効');
+check(take_is_expired('2026-08-16 23:59:59', $now) === false, 'ET-4: 期限内のリンクは有効');
+check(take_is_expired(null, $now) === false, 'ET-4: 期限なし(NULL)は従来どおり受講できる');
+check(take_is_expired('', $now) === false, 'ET-4: 空文字も期限なしとして扱う');
+check(take_is_expired('不正な日付', $now) === false, 'ET-4: 解釈できない値で受講者を締め出さない');
+
 echo "ALL TESTS PASSED\n";

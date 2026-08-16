@@ -89,8 +89,15 @@ function report_summary_row(int $campaignId, int $tenantId): array
              WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'auth'
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
-                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS auth_count",
-        [$tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId]
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS auth_count,
+            (SELECT COUNT(DISTINCT e.tracking_id)
+             FROM events e
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'report'
+               AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
+                               INNER JOIN targets t2 ON t2.id = ct2.target_id
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS report_count",
+        [$tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId,
+         $tenantId, $campaignId, $tenantId, $campaignId]
     ) ?? [];
 }
 
@@ -254,7 +261,8 @@ function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, 
                 COUNT(DISTINCT ct.id) AS cnt,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.tracking_id END) AS link_clicked,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'open'  THEN e.tracking_id END) AS beacon_opened,
-                COUNT(DISTINCT CASE WHEN e.event_type = 'auth'  THEN e.tracking_id END) AS auth_count
+                COUNT(DISTINCT CASE WHEN e.event_type = 'auth'  THEN e.tracking_id END) AS auth_count,
+                COUNT(DISTINCT CASE WHEN e.event_type = 'report' THEN e.tracking_id END) AS report_count
          FROM campaign_targets ct
          INNER JOIN campaigns c ON c.id = ct.campaign_id
          INNER JOIN targets t   ON t.id = ct.target_id
@@ -262,7 +270,7 @@ function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, 
                 ON e.tracking_id = ct.tracking_id
                AND e.campaign_id = ct.campaign_id
                AND e.tenant_id = ?
-               AND e.event_type IN ('open','click','auth')
+               AND e.event_type IN ('open','click','auth','report')
                {$periodClause}
          WHERE c.tenant_id = ? AND ct.campaign_id = ?" . $testWhere . "
          GROUP BY {$axisGroup}
@@ -280,17 +288,20 @@ function report_detail_shape(array $rows, string $keyName): array
         $link = (int) $r['link_clicked'];
         $beacon = (int) $r['beacon_opened'];
         $auth = (int) $r['auth_count'];
+        $report = (int) ($r['report_count'] ?? 0);
         $out[] = [
             $keyName => (string) $r['axis_key'],
             'count' => $count,
             'link_clicked' => $link,
             'beacon_opened' => $beacon,
             'auth_count' => $auth,
+            'report_count' => $report,
             'opened' => $link,
             'link_rate' => report_detail_rate($link, $count),
             'beacon_rate' => report_detail_rate($beacon, $count),
             'auth_rate' => report_detail_rate($auth, $beacon),
             'open_rate' => report_detail_rate($link, $count),
+            'report_rate' => report_detail_rate($report, $count),
         ];
     }
     return $out;
@@ -303,21 +314,41 @@ function report_detail_totals(array $rows): array
     $link = 0;
     $beacon = 0;
     $auth = 0;
+    $report = 0;
     foreach ($rows as $r) {
         $count += (int) $r['count'];
         $link += (int) $r['link_clicked'];
         $beacon += (int) $r['beacon_opened'];
         $auth += (int) $r['auth_count'];
+        $report += (int) ($r['report_count'] ?? 0);
     }
     return [
         'count' => $count,
         'link_clicked' => $link,
         'beacon_opened' => $beacon,
         'auth_count' => $auth,
+        'report_count' => $report,
         'link_rate' => report_detail_rate($link, $count),
         'beacon_rate' => report_detail_rate($beacon, $count),
         'auth_rate' => report_detail_rate($auth, $beacon),
+        'report_rate' => report_detail_rate($report, $count),
+        // 報告数 ÷ クリック数。1.0 を超えるほど「踏むより先に報告する」組織に近い。
+        // 失敗率だけを見る従来の指標に対し、正しい行動の伸びを見るための比率。
+        'resilience_ratio' => report_resilience_ratio($report, $link),
     ];
+}
+
+/**
+ * 報告とクリックの比。クリックが0のときは null を返す。
+ * 0.0 を返すと「クリック0で報告0(未計測)」と「クリック10で報告0(危険)」が
+ * 同じ値になり、改善の判断を誤らせるため。
+ */
+function report_resilience_ratio(int $reportCount, int $clickCount): ?float
+{
+    if ($clickCount === 0) {
+        return null;
+    }
+    return round($reportCount / $clickCount, 2);
 }
 
 /** 日別タイムライン(open/auth の日次件数 + 累積)。 */
@@ -661,6 +692,106 @@ function report_handle_uncommit(): never
     json_out(['success' => true, 'is_committed' => false]);
 }
 
+/**
+ * リスク帯別の対象者一覧。「次に誰へ何をすべきか」を出すための入口。
+ * 直近のスコアだけを見る(computed_date の最大値)。
+ */
+function report_handle_risk_individuals(): never
+{
+    $user = require_role('viewer');
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    $limit = isset($_GET['limit']) ? max(1, min(500, (int) $_GET['limit'])) : 100;
+
+    $band = $_GET['band'] ?? '';
+    $bandWhere = '';
+    $params = [$tenantId, $tenantId];
+    if (in_array($band, ['low', 'medium', 'high'], true)) {
+        $bandWhere = ' AND h.band = ?';
+        $params[] = $band;
+    }
+
+    $latest = Db::one(
+        'SELECT MAX(computed_date) AS d FROM human_risk_scores WHERE tenant_id = ?',
+        [$tenantId]
+    );
+    $computedDate = $latest !== null ? $latest['d'] : null;
+    if ($computedDate === null) {
+        json_out(['success' => true, 'computed_date' => null, 'individuals' => [], 'bands' => []]);
+    }
+
+    $rows = Db::all(
+        "SELECT t.id, t.email, t.name, t.company, t.position_category,
+                h.score, h.band, h.phish_component, h.edu_component, h.report_credit, h.detail
+         FROM human_risk_scores h
+         INNER JOIN targets t ON t.id = h.target_id
+         WHERE h.tenant_id = ? AND h.computed_date = (
+                 SELECT MAX(computed_date) FROM human_risk_scores WHERE tenant_id = ?
+               )" . $bandWhere . "
+         ORDER BY h.score DESC, t.id
+         LIMIT " . $limit,
+        $params
+    );
+    foreach ($rows as &$r) {
+        $r['detail'] = $r['detail'] !== null ? json_decode((string) $r['detail'], true) : null;
+    }
+    unset($r);
+
+    $bandRows = Db::all(
+        "SELECT band, COUNT(*) AS cnt FROM human_risk_scores
+         WHERE tenant_id = ? AND computed_date = ? GROUP BY band",
+        [$tenantId, $computedDate]
+    );
+    $bands = ['high' => 0, 'medium' => 0, 'low' => 0];
+    foreach ($bandRows as $b) {
+        $bands[(string) $b['band']] = (int) $b['cnt'];
+    }
+
+    json_out([
+        'success' => true,
+        'computed_date' => $computedDate,
+        'bands' => $bands,
+        'individuals' => $rows,
+    ]);
+}
+
+/**
+ * 会社別のリスク帯分布。
+ * 経産省ガイドライン Ver3.0 のチェック項目 5-10 の実践例
+ * 「部門や個人がどのような傾向で間違えるか他部門との違いを示す」に対応する。
+ * department は本番でほぼ未設定のため、集計軸は company を使う。
+ */
+function report_handle_risk_by_company(): never
+{
+    $user = require_role('viewer');
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+
+    $latest = Db::one(
+        'SELECT MAX(computed_date) AS d FROM human_risk_scores WHERE tenant_id = ?',
+        [$tenantId]
+    );
+    $computedDate = $latest !== null ? $latest['d'] : null;
+    if ($computedDate === null) {
+        json_out(['success' => true, 'computed_date' => null, 'companies' => []]);
+    }
+
+    $rows = Db::all(
+        "SELECT COALESCE(NULLIF(t.company, ''), '(未設定)') AS company,
+                COUNT(*) AS count,
+                ROUND(AVG(h.score), 1) AS avg_score,
+                SUM(CASE WHEN h.band = 'high'   THEN 1 ELSE 0 END) AS high_count,
+                SUM(CASE WHEN h.band = 'medium' THEN 1 ELSE 0 END) AS medium_count,
+                SUM(CASE WHEN h.band = 'low'    THEN 1 ELSE 0 END) AS low_count
+         FROM human_risk_scores h
+         INNER JOIN targets t ON t.id = h.target_id
+         WHERE h.tenant_id = ? AND h.computed_date = ?
+         GROUP BY company
+         ORDER BY avg_score DESC",
+        [$tenantId, $computedDate]
+    );
+
+    json_out(['success' => true, 'computed_date' => $computedDate, 'companies' => $rows]);
+}
+
 try {
     $body = report_json_body();
     $action = $_GET['action'] ?? ($body['action'] ?? '');
@@ -683,6 +814,12 @@ try {
     }
     if ($action === 'beacons' && $method === 'GET') {
         report_handle_beacons();
+    }
+    if ($action === 'risk_individuals' && $method === 'GET') {
+        report_handle_risk_individuals();
+    }
+    if ($action === 'risk_by_company' && $method === 'GET') {
+        report_handle_risk_by_company();
     }
     if ($action === 'commit' && $method === 'POST') {
         report_handle_commit();

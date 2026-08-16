@@ -49,8 +49,12 @@ fi
 "$deploy_script" --apply "--backup-id=$backup_id" "${common_args[@]}" > /dev/null
 cmp "$repo_root/web/index.html" "$web_dest/index.html"
 cmp "$repo_root/bin/create_beacon_files.py" "$bin_dest/create_beacon_files.py"
+cmp "$repo_root/bin/fix-maildir-perms.sh" "$bin_dest/fix-maildir-perms.sh"
+cmp "$repo_root/deploy/systemd/tet2-maildir-perms.service" "$systemd_dest/tet2-maildir-perms.service"
+cmp "$repo_root/deploy/systemd/tet2-maildir-perms.timer" "$systemd_dest/tet2-maildir-perms.timer"
 test "$(stat -c '%a' "$bin_dest/__BeaconMst.png")" = '644'
 test "$(stat -c '%a' "$bin_dest/create_beacon_files.py")" = '755'
+test "$(stat -c '%a' "$bin_dest/fix-maildir-perms.sh")" = '755'
 test "$(stat -c '%U:%G' "$bin_dest/__BeaconMst.png")" = 'root:root'
 grep -qx 'local-config' "$bin_dest/config.ini"
 test -f "$backup_root/$backup_id/files.tsv"

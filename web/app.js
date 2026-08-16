@@ -1671,6 +1671,9 @@ let reportSelectedId = null;
 let reportCommitCampaignId = null;
 function pct(v) { return `${(Number(v) || 0).toFixed(1)}%`; }
 function rateClass(v, warn, danger) { const n = Number(v) || 0; return n >= danger ? 'val-danger' : n >= warn ? 'val-warning' : 'val-success'; }
+// 報告率は「高いほど良い」ので rateClass とは色の向きが逆になる。
+// 失敗率と同じ関数を使い回すと、よく報告している部署が赤く出て判断を誤る。
+function goodRateClass(v, ok, great) { const n = Number(v) || 0; return n >= great ? 'val-success' : n >= ok ? 'val-warning' : 'val-danger'; }
 let reportTestFilter = 'prod';  // prod=本番のみ / test=テストのみ / all=全部
 function setReportFilter(v) { reportTestFilter = v; renderReports(); }
 async function renderReports() {
@@ -1754,14 +1757,16 @@ async function renderReportDetail(campaignId) {
     ? d.by_company.map((r) => `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
         <td class="${rateClass(r.beacon_rate,25,50)}">${r.beacon_opened}</td>
         <td>${r.link_clicked}</td>
-        <td class="${rateClass(r.auth_rate,5,20)}">${r.auth_count}</td></tr>`).join('')
-    : emptyRow(5);
+        <td class="${rateClass(r.auth_rate,5,20)}">${r.auth_count}</td>
+        <td class="${goodRateClass(r.report_rate,5,15)}">${Number(r.report_count) || 0}</td></tr>`).join('')
+    : emptyRow(6);
   // 役職別(率表示)
   $('#reportByPosition').innerHTML = (d.by_position || []).length
     ? d.by_position.map((r) => `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
         <td class="${rateClass(r.beacon_rate,25,50)}">${pct(r.beacon_rate)}</td>
-        <td class="${rateClass(r.auth_rate,5,20)}">${pct(r.auth_rate)}</td></tr>`).join('')
-    : emptyRow(4);
+        <td class="${rateClass(r.auth_rate,5,20)}">${pct(r.auth_rate)}</td>
+        <td class="${goodRateClass(r.report_rate,5,15)}">${pct(r.report_rate)}</td></tr>`).join('')
+    : emptyRow(5);
   // コンテンツ別(率表示)
   $('#reportByContent').innerHTML = (d.by_content || []).length
     ? d.by_content.map((r) => `<tr><td>${esc(r.content_no)}</td><td>${r.count}</td>
@@ -2561,6 +2566,10 @@ function eduDeliveryForm() {
         <option value="all">全対象者（テスト宛先を除く）</option>
         <option value="individual">個別選択（テスト宛先も選択可）</option>
       </select></div>
+    <div class="mb-2 d-none" id="eduAutoEnrollField">
+      <div class="form-check"><input class="form-check-input" type="checkbox" name="auto_enroll" id="eduAutoEnroll">
+        <label class="form-check-label" for="eduAutoEnroll">訓練失敗者を自動で追加し続ける</label></div>
+      <div class="form-text">開始後も毎時、新たに訓練で失敗した人を自動で受講対象に加え、受講案内を送ります。配信を作成した時点より後の失敗が対象です。</div></div>
     <div class="mb-2 d-none" id="eduIndividualTargets"><label class="form-label">個別対象者</label>
       <input class="form-control form-control-sm mb-2" id="eduTargetSearch" placeholder="氏名またはメールアドレスで絞り込み">
       <select class="form-select" name="target_ids" multiple size="7">${targetOpts}</select>
@@ -2580,6 +2589,10 @@ function syncEduDeliveryForm() {
   $('#eduMaterialField').classList.toggle('d-none', !elearning);
   $('#eduPassScoreField').classList.toggle('d-none', !elearning);
   $('#eduIndividualTargets').classList.toggle('d-none', f.target_type.value !== 'individual');
+  // 自動連携は「訓練失敗者」を対象にしたときだけ意味を持つ(他の対象種別では二重投入になる)
+  const risk = f.target_type.value === 'risk';
+  $('#eduAutoEnrollField').classList.toggle('d-none', !risk);
+  if (!risk) f.auto_enroll.checked = false;
   $('#eduTypeHelp').textContent = elearning
     ? '教材を読んで確認テストに合格すると完了します。不合格の場合は再受講できます。'
     : '理解度を測る継続教育です。回答提出で完了し、合格・不合格は付けません。';
@@ -2606,6 +2619,7 @@ function eduDeliveryPayload(form) {
     body.material_id = Number(form.material_id.value) || undefined;
   }
   if (form.target_type.value === 'individual') body.target_ids = targets;
+  if (form.target_type.value === 'risk' && form.auto_enroll.checked) body.triggered_by = 'phishing_failure';
   return body;
 }
 
@@ -2627,7 +2641,10 @@ async function newEduDelivery() {
   $('#eduRiskPreset').addEventListener('click', () => {
     const f = $('#eduDeliveryForm'); f.delivery_type.value = 'elearning'; f.target_type.value = 'risk';
     const preset = Array.from(f.material_id.options).find((option) => option.textContent.includes('フォローアップ基礎'));
-    if (preset) f.material_id.value = preset.value; syncEduDeliveryForm();
+    if (preset) f.material_id.value = preset.value;
+    // 訓練直後のジャストインタイム教育が本来の用途なので、自動追加を既定で入れる
+    f.auto_enroll.checked = true;
+    syncEduDeliveryForm();
   });
   $('#eduRiskPreset').click();
 }

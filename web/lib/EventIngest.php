@@ -29,6 +29,14 @@ final class EventIngest
             return ['open' => 0, 'click' => 0, 'auth' => 0];
         }
 
+        // report(報告)の取込経路は未実装。event_type としては受け入れる用意があり、
+        // レポートの報告率・resilience_ratio とリスクスコアの減点は report が入れば動く。
+        //
+        // 訓練メール本文に報告URLを載せる案は却下した(2026-08-16)。本文に「報告はこちら」と
+        // 書けば、それ自体が訓練であることの証拠になり、見破る能力を測る訓練として成立しない。
+        // 商用製品は Outlook/Gmail のアドインで報告ボタンを提供している。この環境で採るなら
+        // 報告専用アドレスへの転送を Postfix で受ける方式が現実的だが、転送メールから
+        // 元の tracking_id を復元できるかの検証が先に必要。
         $counts = ['open' => 0, 'click' => 0, 'auth' => 0];
         $counts['open']  += self::ingestApache($map, 'open',  '/kunren-beacon-(\d{10})\.png/');
         $counts['click'] += self::ingestApache($map, 'click', '/link-(\d{10})\.html/');
@@ -36,11 +44,19 @@ final class EventIngest
         return $counts;
     }
 
+    /** ログ探索先。テストからは TET2_APACHE_LOG_DIR で差し替える。 */
+    private static function apacheLogDir(): string
+    {
+        $env = getenv('TET2_APACHE_LOG_DIR');
+        return ($env !== false && $env !== '') ? rtrim($env, '/') : self::APACHE_LOG_DIR;
+    }
+
     private static function apacheLogFiles(): array
     {
         $files = [];
+        $dir = self::apacheLogDir();
         foreach (['access.log', 'access.log.1'] as $f) {
-            $p = self::APACHE_LOG_DIR . '/' . $f;
+            $p = $dir . '/' . $f;
             if (is_readable($p)) {
                 $files[] = $p;
             }
@@ -67,8 +83,14 @@ final class EventIngest
                 // Slack 等のリンク自動展開・メールセキュリティのURL事前スキャンが訓練リンクを
                 // 踏むと、人間のクリックでないのに防衛失敗として記録される。UAでボットを除外する。
                 // 2026-08 に Slackbot 156件がキャンペーン89の全クリックを誤計上した事故による。
-                // open(ビーコン)は今回のスコープ外なので click のときだけ弾く。
-                if ($eventType === 'click' && self::isBotUserAgent($line)) {
+                //
+                // report も同じ理由で弾く(取込経路は未実装だが、将来どの方式を採っても
+                // 報告は加点要素なので、スキャナに踏まれて「報告した」ことになる害が大きい)。
+                //
+                // open(ビーコン)は意図的に除外しない。メールクライアントのプリフェッチで
+                // 踏まれる性質のものであり、運用上の動作確認(PowerShell 等)も開封として
+                // 数える現行の判断を維持する。
+                if (in_array($eventType, ['click', 'report'], true) && self::isBotUserAgent($line)) {
                     continue;
                 }
                 $occurred = self::apacheTimestamp($line);

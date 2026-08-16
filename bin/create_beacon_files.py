@@ -277,6 +277,7 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
         logger.error(error_msg)
         return 1
 
+
     # HTMLマスターファイルの読み込み関数
     def load_html_master(auth_flag):
         """認証フラグに応じたHTMLマスターファイルを読み込む"""

@@ -13,6 +13,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/EduQuestionPicker.php';
+require_once __DIR__ . '/EduMailer.php';
 
 final class EduAutoEnroll
 {
@@ -49,19 +51,27 @@ final class EduAutoEnroll
 
     /**
      * 指定トリガー配信について、訓練失敗者を自動投入する。新規割当数を返す。
+     *
+     * 割当の作成はトランザクション内、受講案内メールの送信はトランザクション外で行う。
+     * SMTP はブロッキングなので、tx 内で送ると WAL のロックを長時間保持し、
+     * 送信worker(tet2-worker)と競合する。
      */
     public static function enrollForDelivery(int $deliveryId, int $tenantId, ?int $phishCampaignId): int
     {
-        $failerIds = self::failerTargetIds($tenantId, $phishCampaignId);
+        $failerIds = self::failerTargetIds($tenantId, $phishCampaignId, $deliveryId);
         if ($failerIds === []) {
             return 0;
         }
 
-        // 配信の設問が未確定なら確定する(条件抽出)。E2 と同じ規則。
+        // 配信の設問が未確定なら確定する(EduQuestionPicker と同じ規則)。
         self::ensureDeliveryQuestions($deliveryId, $tenantId);
 
-        return Db::tx(function () use ($deliveryId, $tenantId, $failerIds): int {
-            $assigned = 0;
+        // 受講リンクの有効期限。配信の deadline を使う(無ければ無期限)。
+        $expiry = self::tokenExpiry($deliveryId, $tenantId);
+
+        /** @var list<int> $newAssignmentIds */
+        $newAssignmentIds = Db::tx(function () use ($deliveryId, $tenantId, $failerIds, $expiry): array {
+            $created = [];
             foreach ($failerIds as $targetId) {
                 // 冪等: 既に割当済みならスキップ(UNIQUE(delivery_id,target_id) の事前チェック)
                 $dup = Db::one(
@@ -71,45 +81,114 @@ final class EduAutoEnroll
                 if ($dup !== null) {
                     continue;
                 }
-                Db::run(
-                    'INSERT INTO edu_assignments (tenant_id, delivery_id, target_id, access_token, status)
-                     VALUES (?, ?, ?, ?, \'assigned\')',
-                    [$tenantId, $deliveryId, $targetId, self::generateToken()]
+                $created[] = Db::insert(
+                    'INSERT INTO edu_assignments (tenant_id, delivery_id, target_id, access_token, status, token_expiry)
+                     VALUES (?, ?, ?, ?, \'assigned\', ?)',
+                    [$tenantId, $deliveryId, $targetId, self::generateToken(), $expiry]
                 );
-                $assigned++;
             }
-            return $assigned;
+            return $created;
         });
+
+        // --- ここから tx 外 ---
+        self::sendInvites($newAssignmentIds, $deliveryId, $tenantId);
+
+        return count($newAssignmentIds);
     }
 
-    /** 訓練失敗者(auth|click)の target_id 一覧(テナント内)。 */
-    private static function failerTargetIds(int $tenantId, ?int $phishCampaignId): array
+    /**
+     * 新規割当者へ受講案内メールを送る。
+     *
+     * 送信できた分だけ last_reminded_at を立てる。この列は EduReminder の再送間隔にも
+     * 使われるため、案内直後に催促メールが飛ぶ二重送信も同時に防げる(専用列を足さない理由)。
+     */
+    private static function sendInvites(array $assignmentIds, int $deliveryId, int $tenantId): void
     {
-        if ($phishCampaignId !== null) {
-            $rows = Db::all(
-                "SELECT DISTINCT ct.target_id AS id
-                 FROM events e
-                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
-                 WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('auth','click')",
-                [$tenantId, $phishCampaignId]
-            );
-        } else {
-            $rows = Db::all(
-                "SELECT DISTINCT ct.target_id AS id
-                 FROM events e
-                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
-                 WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')",
-                [$tenantId]
-            );
+        if ($assignmentIds === []) {
+            return;
         }
+        $delivery = Db::one('SELECT title FROM edu_deliveries WHERE id = ?', [$deliveryId]);
+        $title = $delivery !== null ? (string) $delivery['title'] : 'セキュリティ教育';
+
+        foreach ($assignmentIds as $assignmentId) {
+            $row = Db::one(
+                'SELECT a.access_token, t.email, t.name
+                 FROM edu_assignments a
+                 INNER JOIN targets t ON t.id = a.target_id
+                 WHERE a.id = ? AND a.tenant_id = ?',
+                [$assignmentId, $tenantId]
+            );
+            if ($row === null) {
+                continue;
+            }
+            $sent = EduMailer::send(
+                (string) $row['email'],
+                self::inviteSubject($title),
+                self::inviteBody((string) ($row['name'] ?? ''), $title, (string) $row['access_token'])
+            );
+            if ($sent) {
+                Db::run(
+                    "UPDATE edu_assignments SET last_reminded_at = datetime('now','localtime') WHERE id = ?",
+                    [$assignmentId]
+                );
+            }
+        }
+    }
+
+    /** 訓練失敗直後の案内なので、責める文面にしない(受講率を下げるため)。 */
+    private static function inviteSubject(string $title): string
+    {
+        return '【受講のご案内】' . $title;
+    }
+
+    private static function inviteBody(string $name, string $title, string $token): string
+    {
+        $greeting = trim($name) !== '' ? (trim($name) . ' 様') : 'ご担当者 様';
+        return $greeting . "\n\n"
+            . "先日の標的型メール訓練の結果にもとづき、フォローアップ教育「" . $title . "」をご案内します。\n"
+            . "訓練で気づけなかった点を短時間で確認できます。下記URLよりご受講ください"
+            . "（所要5〜10分・ログイン不要）。\n\n"
+            . EduMailer::takeUrl($token) . "\n\n"
+            . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
+    }
+
+    /**
+     * 訓練失敗者(auth|click)の target_id 一覧(テナント内)。
+     *
+     * 除外規則は api/edu_deliveries.php の risk 配信(edu_d_resolve_targets)と揃える。
+     * 検証用ユーザ(is_test)と退職者(archived)へ受講案内が飛ぶ事故を防ぐ。
+     *
+     * さらに「配信を作成した日時以降のイベント」だけを対象にする。これがないと、
+     * トリガー配信を running にした瞬間に過去全期間の失敗者へ一斉送信され、
+     * 1年前の失敗に対して今さら教育案内が届くことになる。
+     */
+    private static function failerTargetIds(int $tenantId, ?int $phishCampaignId, int $deliveryId): array
+    {
+        $sql = "SELECT DISTINCT ct.target_id AS id
+                FROM events e
+                INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
+                INNER JOIN targets t ON t.id = ct.target_id
+                WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')
+                  AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
+                  AND e.occurred_at >= (SELECT created_at FROM edu_deliveries WHERE id = ?)";
+        $params = [$tenantId, $tenantId, $deliveryId];
+        if ($phishCampaignId !== null) {
+            $sql .= ' AND e.campaign_id = ?';
+            $params[] = $phishCampaignId;
+        }
+        $sql .= ' ORDER BY ct.target_id';
+
         $ids = [];
-        foreach ($rows as $r) {
+        foreach (Db::all($sql, $params) as $r) {
             $ids[] = (int) $r['id'];
         }
         return $ids;
     }
 
-    /** 配信の設問が未確定なら条件抽出で確定する。 */
+    /**
+     * 配信の設問が未確定なら確定する。
+     * 出題規則は EduQuestionPicker に一本化してある(共有設問を拾い漏らす事故の再発防止)。
+     */
     private static function ensureDeliveryQuestions(int $deliveryId, int $tenantId): void
     {
         $existing = Db::one('SELECT 1 FROM edu_delivery_questions WHERE delivery_id = ?', [$deliveryId]);
@@ -121,39 +200,35 @@ final class EduAutoEnroll
             return;
         }
 
-        $categoryIds = $d['category_ids'] !== null ? (json_decode((string) $d['category_ids'], true) ?: []) : [];
-        $diffRange   = $d['difficulty_range'] !== null ? (json_decode((string) $d['difficulty_range'], true) ?: []) : [];
-        $count       = $d['question_count'] !== null ? (int) $d['question_count'] : 0;
-        $randomize   = (int) $d['randomize'] === 1;
-
-        $where  = ['tenant_id = ?', 'is_active = 1'];
-        $params = [$tenantId];
-        if (is_array($categoryIds) && $categoryIds !== []) {
-            $ph = implode(',', array_fill(0, count($categoryIds), '?'));
-            $where[] = "category_id IN ($ph)";
-            foreach ($categoryIds as $cid) {
-                $params[] = (int) $cid;
-            }
-        }
-        if (is_array($diffRange) && count($diffRange) === 2) {
-            $where[] = 'difficulty BETWEEN ? AND ?';
-            $params[] = (int) $diffRange[0];
-            $params[] = (int) $diffRange[1];
-        }
-        $order = $randomize ? 'RANDOM()' : 'id';
-        $sql = 'SELECT id FROM edu_questions WHERE ' . implode(' AND ', $where) . " ORDER BY $order";
-        if ($count > 0) {
-            $sql .= ' LIMIT ' . $count;
-        }
-        $rows = Db::all($sql, $params);
         $sort = 0;
-        foreach ($rows as $r) {
+        foreach (EduQuestionPicker::pick($d, $tenantId) as $questionId) {
             Db::run(
                 'INSERT OR IGNORE INTO edu_delivery_questions (delivery_id, question_id, sort_order) VALUES (?, ?, ?)',
-                [$deliveryId, (int) $r['id'], $sort]
+                [$deliveryId, $questionId, $sort]
             );
             $sort++;
         }
+    }
+
+    /**
+     * 受講トークンの有効期限。配信の deadline をそのまま使う(規則は edu_deliveries.php と同じ)。
+     * deadline が日付のみなら、その日いっぱいを有効にする。
+     */
+    private static function tokenExpiry(int $deliveryId, int $tenantId): ?string
+    {
+        $row = Db::one(
+            'SELECT deadline FROM edu_deliveries WHERE id = ? AND tenant_id = ?',
+            [$deliveryId, $tenantId]
+        );
+        $deadline = $row['deadline'] ?? null;
+        if (!is_string($deadline) || trim($deadline) === '') {
+            return null;
+        }
+        $deadline = trim($deadline);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $deadline) === 1) {
+            return $deadline . ' 23:59:59';
+        }
+        return $deadline;
     }
 
     /** access_token: 32桁hex。edu_deliveries.php と同じ規則。 */

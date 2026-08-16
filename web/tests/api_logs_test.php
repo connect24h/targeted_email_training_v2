@@ -236,7 +236,26 @@ $body = substr($raw, $he + 4);
 $decoded = base64_decode(trim($body));
 check(strpos($decoded, '不在にしております') !== false, 'reply_maildir 本文: base64 デコードで日本語本文が取れる');
 
+// パースできないメールを一覧から落とさない (返信見落とし防止)。
+// 本番では Postfix virtual(8) が 0600 で作ったファイルを www-data が読めず
+// null になり、一覧から静かに消えていた。ここではヘッダー境界のない壊れた
+// ファイルで同じ経路 (maildir_parse_headers が null) を通す。
+file_put_contents($tmpMaildir . '/new/1752541201.BROKEN.mail', 'no-header-boundary');
+$mails2 = maildir_list($tmpMaildir);
+check(count($mails2) === 2, 'maildir_list: 読めないメールも一覧に残す');
+$broken = null;
+foreach ($mails2 as $m) {
+    if ($m['filename'] === '1752541201.BROKEN.mail') { $broken = $m; }
+}
+check($broken !== null, 'maildir_list: 読めないメールが filename で特定できる');
+check($broken['unreadable'] === true, 'maildir_list: 読めないメールに unreadable フラグが立つ');
+check(strpos($broken['subject'], '権限不足') !== false, 'maildir_list: 読めない理由が件名に出る');
+check(preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $broken['date']) === 1, 'maildir_list: 読めないメールも日時書式が正常系と揃う');
+// 正常系には unreadable=false が入り、キー構造が揃う。
+check($mails2[0]['unreadable'] === false || $mails2[1]['unreadable'] === false, 'maildir_list: 正常系は unreadable=false');
+
 // 後片付け。
+@unlink($tmpMaildir . '/new/1752541201.BROKEN.mail');
 @unlink($tmpMaildir . '/new/' . $fname);
 @rmdir($tmpMaildir . '/new');
 @rmdir($tmpMaildir . '/cur');

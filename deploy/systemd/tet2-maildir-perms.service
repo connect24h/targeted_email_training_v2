@@ -1,0 +1,12 @@
+[Unit]
+Description=TET v2 Maildir permission repair (0600 -> 0640 so www-data can read replies)
+After=postfix.service
+
+[Service]
+Type=oneshot
+# Maildir のファイル所有者は各メールアカウント。所有者以外が chmod するには
+# root が必要なため User 指定は行わない。処理内容は 600 のファイルを 640 に
+# 変更するのみで、本文の読み取り・改変・削除は一切行わない。
+ExecStart=/opt/training/bin/fix-maildir-perms.sh
+StandardOutput=append:/opt/training/tet2-data/maildir-perms.log
+StandardError=append:/opt/training/tet2-data/maildir-perms.log

@@ -14,6 +14,7 @@ final class MigrationRunner
         '20260810-all-members-group',
         '20260810-elearning-materials',
         '20260812-suppress-prefill-email',
+        '20260816-human-risk-score',
     ];
 
     /**
@@ -159,6 +160,11 @@ final class MigrationRunner
         if ($version === '20260812-suppress-prefill-email') {
             // campaign_contents.suppress_prefill_email を既存DBへ冪等追加。
             $this->ensureAdditiveColumns($pdo);
+            return;
+        }
+        if ($version === '20260816-human-risk-score') {
+            // 個人リスクスコアの保存先。既存テーブルには一切触れない。
+            $pdo->exec($this->readSchema('schema-risk.sql'));
             return;
         }
         if ($version === '20260810-position-masters') {
