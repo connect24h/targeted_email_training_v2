@@ -14,6 +14,20 @@
 - DB rollbackは`--restore-db --db-offline-confirmed`の二重flagが必須
 - `tet2-campaign-automation.timer`は配備だけではenableせず、pilot承認後に別工程でenableする
 
+## アセット変更時のキャッシュバスティング（デプロイ前に必須）
+
+`app.js` / `assets/app.css` / `assets/campaign-automations.js` / `assets/positions.js`
+のいずれかを変更したら、**デプロイ前に**次を実行して `index.html` の参照へ
+内容ハッシュ（`?v=<hash>`）を埋め込む。
+
+```bash
+deploy/tet2-cache-bust.sh
+```
+
+これをしないと、ブラウザが古い `app.js` をキャッシュから使い続け、初期化が壊れる
+（2026-08-16 の `bootstrap is not defined` 事故）。冪等なので何度実行してもよい。
+実行し忘れると `web/tests/cache_bust_test.php` が落ちて気づける。
+
 ## Dry-runとapply
 
 最初に差分とchecksumを確認する。
