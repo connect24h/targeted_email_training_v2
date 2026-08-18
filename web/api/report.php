@@ -54,6 +54,14 @@ function report_summary_from_counts(array $row): array
 /**
  * キャンペーン1件のサマリー(母数と open/click/auth)。
  *
+ * 【open の実態: メール開封ではない】
+ * ビーコン kunren-beacon-{tracking_id}.png は偽サイトのHTML(bin/master*.html)に埋め込まれており、
+ * 訓練メール本文には入っていない(bin/send_email.py は MIMEText(body,'plain') でプレーンテキスト固定。
+ * 画像を埋め込めない)。したがって open が立つのは「リンクを踏んで偽サイトを表示した」時であり、
+ * click とほぼ同じ事象を指す。実測でも open <= click になる(本来の開封計測なら open > click)。
+ * UI では「開封」ではなく「サイト表示」と表示する(2026-08-19 に表記を実態へ修正)。
+ * 本当のメール開封率が必要なら HTML メール化が前提になる(現時点では見送り)。
+ *
  * テストユーザ(targets.is_test=1)は母数からもイベント数からも除外する。
  * イベント側は tracking_id が campaign_targets 経由でテストユーザに紐づく行を弾く
  * (events 自体は is_test を持たないため、campaign_targets→targets を辿って判定する)。

@@ -1716,7 +1716,11 @@ async function showReportDetail(id) {
   reportChart = new Chart($('#reportChart'), {
     type: 'bar',
     data: {
-      labels: ['送信', '開封', 'クリック', '認証'],
+      // 「開封」ではなく「サイト表示」。ビーコン(kunren-beacon-*.png)は偽サイトのHTMLに
+      // 埋め込まれており、訓練メール本文はプレーンテキスト(send_email.py の MIMEText(...,'plain'))で
+      // 画像を含まないため、メールを開いただけでは計測されない。実体はクリック先ページの表示。
+      // メール開封を本当に測るには HTML メール化が必要(2026-08-19 時点では見送り)。
+      labels: ['送信', 'サイト表示', 'クリック', '認証'],
       datasets: [{ label: '件数', data: [s.sent_count, s.open_count, s.click_count, s.auth_count],
         backgroundColor: ['#4a90d9', '#3a9d5d', '#e0a136', '#d64545'] }],
     },

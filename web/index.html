@@ -124,14 +124,16 @@
             <button class="btn btn-outline-primary btn-sm" data-perm="operator" id="ingestBtn"><i class="bi bi-arrow-repeat"></i> ログ取込</button>
           </div>
         </div>
-        <!-- 個人別統計(全キャンペーン横断。よく開封する人ランキング。アーカイブ済み=退職者も含む) -->
+        <!-- 個人別統計(全キャンペーン横断。よく偽サイトを開く人のランキング。アーカイブ済み=退職者も含む)
+     注: 「開封」ではなく「サイト表示」。ビーコンは偽サイトのHTMLに埋め込まれており、
+     訓練メール本文はプレーンテキストで画像を含まないため、メール開封は計測していない。 -->
         <div class="card mb-3 d-none" id="individualsCard">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <span><i class="bi bi-person-lines-fill me-1"></i>個人別統計（全キャンペーン横断・開封率ワースト順）</span>
+            <span><i class="bi bi-person-lines-fill me-1"></i>個人別統計（全キャンペーン横断・サイト表示率ワースト順）</span>
             <button class="btn btn-sm btn-outline-secondary" id="individualsRefreshBtn"><i class="bi bi-arrow-clockwise"></i> 更新</button>
           </div>
           <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
-            <thead><tr><th>氏名</th><th>会社</th><th>役職</th><th>参加</th><th>開封率</th><th>クリック率</th><th>認証率</th><th>状態</th></tr></thead>
+            <thead><tr><th>氏名</th><th>会社</th><th>役職</th><th>参加</th><th title="訓練メールのリンクを開き偽サイトを表示した割合。メール開封ではない">サイト表示率</th><th>クリック率</th><th>認証率</th><th>状態</th></tr></thead>
             <tbody id="individualsBody"></tbody>
           </table></div>
           <div class="card-footer small text-muted">「参加」＝対象になったキャンペーン数。率は参加キャンペーンに対する割合。<span class="badge bg-secondary">退職</span>＝アーカイブ済み（履歴として保持）。</div>
@@ -142,7 +144,7 @@
             <span id="reportFilterBar"></span>
           </div>
           <div class="table-responsive"><table class="table table-hover align-middle mb-0">
-            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th>開封率</th><th>クリック率</th><th>認証率</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th title="訓練メールのリンクを開き偽サイトを表示した割合。メール開封ではない">サイト表示率</th><th>クリック率</th><th>認証率</th><th></th></tr></thead>
             <tbody id="reportsBody"></tbody>
           </table></div>
         </div>
@@ -187,21 +189,21 @@
                     <div class="col-lg-4">
                       <h6 class="text-muted"><i class="bi bi-building me-1"></i>会社別</h6>
                       <div class="table-responsive" style="max-height:300px;overflow:auto">
-                        <table class="table table-sm mb-0"><thead><tr><th>会社</th><th>数</th><th>開封</th><th>ｸﾘｯｸ</th><th>認証</th><th title="訓練メールを不審と報告した人数。多いほど良い">報告</th></tr></thead>
+                        <table class="table table-sm mb-0"><thead><tr><th>会社</th><th>数</th><th title="偽サイトを表示した数。メール開封ではない">表示</th><th>ｸﾘｯｸ</th><th>認証</th><th title="訓練メールを不審と報告した人数。多いほど良い">報告</th></tr></thead>
                           <tbody id="reportByCompany"></tbody></table>
                       </div>
                     </div>
                     <div class="col-lg-4">
                       <h6 class="text-muted"><i class="bi bi-person-badge me-1"></i>役職別</h6>
                       <div class="table-responsive" style="max-height:300px;overflow:auto">
-                        <table class="table table-sm mb-0"><thead><tr><th>役職</th><th>数</th><th>開封率</th><th>認証率</th><th title="訓練メールを不審と報告した割合。高いほど良い">報告率</th></tr></thead>
+                        <table class="table table-sm mb-0"><thead><tr><th>役職</th><th>数</th><th title="偽サイトを表示した割合。メール開封ではない">表示率</th><th>認証率</th><th title="訓練メールを不審と報告した割合。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByPosition"></tbody></table>
                       </div>
                     </div>
                     <div class="col-lg-4">
                       <h6 class="text-muted"><i class="bi bi-files me-1"></i>コンテンツ別</h6>
                       <div class="table-responsive" style="max-height:300px;overflow:auto">
-                        <table class="table table-sm mb-0"><thead><tr><th>No</th><th>数</th><th>開封率</th><th>認証率</th></tr></thead>
+                        <table class="table table-sm mb-0"><thead><tr><th>No</th><th>数</th><th title="偽サイトを表示した割合。メール開封ではない">表示率</th><th>認証率</th></tr></thead>
                           <tbody id="reportByContent"></tbody></table>
                       </div>
                     </div>
@@ -209,14 +211,14 @@
                   <!-- ビーコン(tracking_id)単位の明細。all配信で1人×Nコンテンツを個別に確認する。 -->
                   <div class="mt-3">
                     <h6 class="text-muted d-flex justify-content-between align-items-center">
-                      <span><i class="bi bi-upc-scan me-1"></i>ビーコン別 開封明細（tracking_id 単位・全パターン）</span>
+                      <span><i class="bi bi-upc-scan me-1"></i>ビーコン別 サイト表示明細（tracking_id 単位・全パターン）</span>
                       <span class="small" id="reportBeaconSummary"></span>
                     </h6>
                     <div class="table-responsive" style="max-height:420px;overflow:auto">
                       <table class="table table-sm table-hover mb-0">
                         <thead><tr>
                           <th>対象者</th><th>会社</th><th>ｺﾝﾃﾝﾂ</th><th>tracking_id</th>
-                          <th>開封</th><th>ｸﾘｯｸ</th><th>認証</th><th>開封日時</th>
+                          <th title="偽サイトを表示した。メール開封ではない">表示</th><th>ｸﾘｯｸ</th><th>認証</th><th>表示日時</th>
                         </tr></thead>
                         <tbody id="reportBeaconsBody"></tbody>
                       </table>
@@ -362,7 +364,7 @@
         <!-- 訓練結果/生ログ/WebアクセスLog用の追加フィルタ -->
         <div class="d-flex gap-2 mb-2 flex-wrap align-items-center" id="logsExtraFilter" style="display:none">
           <select class="form-select form-select-sm" id="logsStatusFilter" style="width:auto;display:none">
-            <option value="">全状況</option><option value="opened">開封のみ</option>
+            <option value="">全状況</option><option value="opened">サイト表示のみ</option>
             <option value="clicked">クリックのみ</option><option value="authed">認証のみ</option>
             <option value="none">未反応のみ</option>
           </select>
@@ -565,7 +567,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=70685e30"></script>
+<script src="app.js?v=0e8c52b2"></script>
 <script src="assets/campaign-automations.js?v=b847062f"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 </body>
