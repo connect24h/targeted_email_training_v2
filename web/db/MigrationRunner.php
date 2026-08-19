@@ -15,6 +15,7 @@ final class MigrationRunner
         '20260810-elearning-materials',
         '20260812-suppress-prefill-email',
         '20260816-human-risk-score',
+        '20260819-attachment-filename-prefix',
     ];
 
     /**
@@ -167,6 +168,11 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-risk.sql'));
             return;
         }
+        if ($version === '20260819-attachment-filename-prefix') {
+            // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
         if ($version === '20260810-position-masters') {
             $this->applyPositionMasters($pdo);
             return;
@@ -317,6 +323,7 @@ final class MigrationRunner
                 'content_delivery' => "TEXT NOT NULL DEFAULT 'distribute'",
                 'deleted_at' => 'TEXT DEFAULT NULL',
                 'test_redirect_emails' => 'TEXT DEFAULT NULL',
+                'attachment_filename' => 'TEXT',
             ],
             'targets' => [
                 'position_category' => 'TEXT',
@@ -326,7 +333,10 @@ final class MigrationRunner
             ],
             'templates' => ['scenario_key' => 'TEXT'],
             'campaign_targets' => ['content_no' => 'INTEGER'],
-            'campaign_contents' => ['suppress_prefill_email' => 'INTEGER NOT NULL DEFAULT 0'],
+            'campaign_contents' => [
+                'suppress_prefill_email' => 'INTEGER NOT NULL DEFAULT 0',
+                'attachment_filename' => 'TEXT',
+            ],
             'edu_categories' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_questions' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],

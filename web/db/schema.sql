@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   from_domain         TEXT,
   link_mode           TEXT,                      -- link / attachment / form
   attachment_ext      TEXT,
+  attachment_filename TEXT,                      -- 添付ファイル名の接頭辞。NULL は 'kunren' 相当(後方互換)
   attachment_zip      INTEGER NOT NULL DEFAULT 0,
   send_mode           TEXT,                      -- normal / split / slow
   split_count         INTEGER,
@@ -152,6 +153,7 @@ CREATE TABLE IF NOT EXISTS campaign_contents (
   phish_template_id   INTEGER,
   link_mode           TEXT NOT NULL DEFAULT 'link',
   attachment_ext      TEXT,
+  attachment_filename TEXT,                      -- 添付ファイル名の接頭辞。NULL は 'kunren' 相当(後方互換)
   attachment_zip      INTEGER NOT NULL DEFAULT 0,
   from_address        TEXT,
   beacon_base         TEXT,

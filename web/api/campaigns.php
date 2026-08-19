@@ -54,6 +54,46 @@ function campaigns_optional_string_or_null(array $body, string $key): ?string
 }
 
 /**
+ * 添付ファイル名の接頭辞（任意）。未指定/null/空は NULL（PipelineRunner 側で 'kunren' に
+ * フォールバックする）。指定時は明示バリデーションで危険な値を拒否する（第一関門）。
+ *
+ * この値は最終的に create_beacon_files.py が `{prefix}{tracking_id}.{ext}` のファイル名にし、
+ * send_email.py がその basename を Content-Disposition ヘッダに載せる。そのため:
+ *  - パス区切り・親ディレクトリ・制御文字(CR/LF/NUL含む)・FS予約記号を含む値は 400 で拒否
+ *  - list.csv が cp932 経路を通るため、cp932 で往復できない文字（絵文字・機種依存文字）も拒否
+ *    （通すと本番送信ワーカーで文字化け・例外になる。本機能の最弱点なのでここで確実に止める）
+ */
+function campaigns_optional_attachment_filename(array $body, string $key = 'attachment_filename'): ?string
+{
+    if (!array_key_exists($key, $body) || $body[$key] === null) {
+        return null;
+    }
+    if (!is_string($body[$key])) {
+        json_error($key . ' が不正です', 400);
+    }
+    $v = trim($body[$key]);
+    if ($v === '') {
+        return null;
+    }
+    if (mb_strlen($v, 'UTF-8') > 40) {
+        json_error('添付ファイル名の接頭辞は40文字以内にしてください', 400);
+    }
+    if (preg_match('#[/\\\\]#', $v)
+        || strpos($v, '..') !== false
+        || preg_match('/[\x00-\x1f\x7f]/', $v)
+        || preg_match('/[:*?"<>|]/', $v)
+        || $v[0] === '.') {
+        json_error('添付ファイル名の接頭辞に使用できない文字が含まれています', 400);
+    }
+    // cp932 往復一致チェック（list.csv が cp932 を通るため）。
+    $roundtrip = mb_convert_encoding(mb_convert_encoding($v, 'CP932', 'UTF-8'), 'UTF-8', 'CP932');
+    if ($roundtrip !== $v) {
+        json_error('添付ファイル名の接頭辞に使用できない文字（絵文字・機種依存文字など）が含まれています', 400);
+    }
+    return $v;
+}
+
+/**
  * ビーコンベース URL（P6）。未指定/空は NULL。指定時は http(s):// スキーム必須。
  * 訓練用途で IP 直指定もありうるためホスト名の形は緩く許すが、スキームは限定する。
  */
@@ -399,7 +439,7 @@ function campaigns_handle_get(array $actor): never
     // 編集フォーム復元用に、コンテンツ構成と対象者ID一覧も返す。
     $contents = Db::all(
         'SELECT content_no, subject_template_id, body_template_id, phish_template_id,
-                link_mode, attachment_ext, attachment_zip, from_address, beacon_base,
+                link_mode, attachment_ext, attachment_filename, attachment_zip, from_address, beacon_base,
                 suppress_body_url, suppress_prefill_email
          FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no',
         [$id]
@@ -439,6 +479,7 @@ function campaigns_create_data(array $body): array
         'beacon_base' => campaigns_optional_beacon_base($body),
         'link_mode' => campaigns_string($body, 'link_mode'),
         'attachment_ext' => campaigns_optional_string($body, 'attachment_ext'),
+        'attachment_filename' => campaigns_optional_attachment_filename($body),
         'attachment_zip' => campaigns_optional_bool_int($body, 'attachment_zip') ?? 0,
         'send_mode' => campaigns_string($body, 'send_mode'),
         'split_count' => campaigns_optional_int($body, 'split_count'),
@@ -498,6 +539,7 @@ function campaigns_parse_contents(array $body, int $tenantId): array
         $phishId = campaigns_int($content, 'phish_template_id');
         $linkMode = campaigns_string($content, 'link_mode');
         $attachmentExt = campaigns_optional_string($content, 'attachment_ext');
+        $attachmentFilename = campaigns_optional_attachment_filename($content);
         $attachmentZip = campaigns_optional_bool_int($content, 'attachment_zip') ?? 0;
         $suppressBodyUrl = campaigns_optional_bool_int($content, 'suppress_body_url') ?? 0;
         $suppressPrefillEmail = campaigns_optional_bool_int($content, 'suppress_prefill_email') ?? 0;
@@ -519,6 +561,7 @@ function campaigns_parse_contents(array $body, int $tenantId): array
             'phish_template_id' => $phishId,
             'link_mode' => $linkMode,
             'attachment_ext' => $attachmentExt,
+            'attachment_filename' => $attachmentFilename,
             'attachment_zip' => $attachmentZip,
             'suppress_body_url' => $suppressBodyUrl,
             'suppress_prefill_email' => $suppressPrefillEmail,
@@ -557,6 +600,7 @@ function campaigns_handle_create(array $actor): never
             'beacon_base' => campaigns_optional_beacon_base($body),
             'link_mode' => $firstContent['link_mode'],
             'attachment_ext' => $firstContent['attachment_ext'],
+            'attachment_filename' => $firstContent['attachment_filename'] ?? null,
             'attachment_zip' => $firstContent['attachment_zip'],
             'send_mode' => campaigns_string($body, 'send_mode'),
             'split_count' => campaigns_optional_int($body, 'split_count'),
@@ -589,6 +633,7 @@ function campaigns_handle_create(array $actor): never
                 'phish_template_id' => $data['phish_template_id'],
                 'link_mode' => $data['link_mode'],
                 'attachment_ext' => $data['attachment_ext'],
+                'attachment_filename' => $data['attachment_filename'] ?? null,
                 'attachment_zip' => $data['attachment_zip'],
             ]
         ];
@@ -600,10 +645,10 @@ function campaigns_handle_create(array $actor): never
         $campaignId = Db::insert(
             'INSERT INTO campaigns
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
-              from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_zip, send_mode,
+              from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_filename, attachment_zip, send_mode,
               split_count, split_interval_min, weekdays_only, business_start, business_end,
               start_at, end_at, is_test, content_delivery, test_redirect_emails, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $tenantId,
                 $data['name'],
@@ -616,6 +661,7 @@ function campaigns_handle_create(array $actor): never
                 $data['beacon_base'],
                 $data['link_mode'],
                 $data['attachment_ext'],
+                $data['attachment_filename'] ?? null,
                 $data['attachment_zip'],
                 $data['send_mode'],
                 $data['split_count'],
@@ -638,9 +684,9 @@ function campaigns_handle_create(array $actor): never
             Db::run(
                 'INSERT INTO campaign_contents
                  (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                  link_mode, attachment_ext, attachment_zip, suppress_body_url, suppress_prefill_email,
+                  link_mode, attachment_ext, attachment_filename, attachment_zip, suppress_body_url, suppress_prefill_email,
                   from_address, beacon_base)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $campaignId,
                     $contentNo,
@@ -649,6 +695,7 @@ function campaigns_handle_create(array $actor): never
                     $content['phish_template_id'],
                     $content['link_mode'],
                     $content['attachment_ext'],
+                    $content['attachment_filename'] ?? null,
                     $content['attachment_zip'],
                     $content['suppress_body_url'] ?? 0,
                     $content['suppress_prefill_email'] ?? 0,
@@ -697,6 +744,10 @@ function campaigns_update_fields(array $body): array
     if (array_key_exists('beacon_base', $body)) {
         $fields['beacon_base'] = campaigns_optional_beacon_base($body);
     }
+    // attachment_filename はファイル名サニタイズ・cp932検証を伴うため個別に処理する。
+    if (array_key_exists('attachment_filename', $body)) {
+        $fields['attachment_filename'] = campaigns_optional_attachment_filename($body);
+    }
     return $fields;
 }
 
@@ -704,7 +755,7 @@ function campaigns_apply_update(int $campaignId, int $tenantId, array $fields): 
 {
     $allowed = [
         'name', 'subject_template_id', 'body_template_id', 'phish_template_id', 'from_address',
-        'from_domain', 'beacon_base', 'link_mode', 'attachment_ext', 'attachment_zip', 'send_mode', 'split_count',
+        'from_domain', 'beacon_base', 'link_mode', 'attachment_ext', 'attachment_filename', 'attachment_zip', 'send_mode', 'split_count',
         'split_interval_min', 'weekdays_only', 'business_start', 'business_end', 'start_at',
         'end_at', 'is_test', 'content_delivery', 'test_redirect_emails',
     ];
@@ -775,9 +826,9 @@ function campaigns_handle_update(array $actor): never
                 Db::run(
                     'INSERT INTO campaign_contents
                      (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                      link_mode, attachment_ext, attachment_zip, suppress_body_url, suppress_prefill_email,
+                      link_mode, attachment_ext, attachment_filename, attachment_zip, suppress_body_url, suppress_prefill_email,
                       from_address, beacon_base)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     [
                         $id,
                         $contentNo,
@@ -786,6 +837,7 @@ function campaigns_handle_update(array $actor): never
                         $content['phish_template_id'],
                         $content['link_mode'],
                         $content['attachment_ext'],
+                        $content['attachment_filename'] ?? null,
                         $content['attachment_zip'],
                         $content['suppress_body_url'] ?? 0,
                         $content['suppress_prefill_email'] ?? 0,

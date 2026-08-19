@@ -1257,6 +1257,10 @@ async function openCampaignModal(campaignId = null) {
         <div class="col-md-4 d-flex align-items-end"><div class="form-check">
           <input class="form-check-input c-zip" type="checkbox"><label class="form-check-label small c-zip-label text-muted">zip化</label></div></div>
       </div>
+      <div class="row g-2 mt-1">
+        <div class="col-md-8"><label class="form-label small c-prefix-label text-muted">添付ファイル名の接頭辞(添付/QR時・任意)</label>
+          <input class="form-control form-control-sm c-prefix" maxlength="40" placeholder="例: 添付資料-  （末尾に管理番号と拡張子が自動で付きます）"></div>
+      </div>
       <div class="form-text c-linkmode-hint"></div>
       <div class="form-check mt-1">
         <input class="form-check-input c-suppress-url" type="checkbox" id="sup-${idx}">
@@ -1286,6 +1290,8 @@ async function openCampaignModal(campaignId = null) {
       };
       const ext = row.querySelector('.c-ext').value.trim();
       if (ext) c.attachment_ext = ext;
+      const prefix = row.querySelector('.c-prefix').value.trim();
+      if (prefix) c.attachment_filename = prefix;
       if (row.querySelector('.c-zip').checked) c.attachment_zip = 1;
       if (row.querySelector('.c-suppress-url').checked) c.suppress_body_url = 1;
       if (row.querySelector('.c-suppress-email').checked) c.suppress_prefill_email = 1;
@@ -1362,19 +1368,24 @@ async function openCampaignModal(campaignId = null) {
     const needsAttachment = (mode === 'attachment' || mode === 'qr');
     const ext = row.querySelector('.c-ext');
     const zip = row.querySelector('.c-zip');
+    const prefix = row.querySelector('.c-prefix');
     const extLabel = row.querySelector('.c-ext-label');
     const zipLabel = row.querySelector('.c-zip-label');
+    const prefixLabel = row.querySelector('.c-prefix-label');
     const hint = row.querySelector('.c-linkmode-hint');
     const suppress = row.querySelector('.c-suppress-url');
     const suppressLabel = row.querySelector('.c-suppress-label');
     ext.disabled = !needsAttachment;
     zip.disabled = !needsAttachment;
+    // 添付ファイル名の接頭辞も添付/QR型のみ有効(link/form型ではファイルを作らない)。
+    prefix.disabled = !needsAttachment;
     // 本文URL抑制は添付/QR型のみ有効(リンク/フォーム型でURLを消すと追跡不能になるため)。
     suppress.disabled = !needsAttachment;
     extLabel.classList.toggle('text-muted', !needsAttachment);
     zipLabel.classList.toggle('text-muted', !needsAttachment);
+    prefixLabel.classList.toggle('text-muted', !needsAttachment);
     suppressLabel.classList.toggle('text-muted', !needsAttachment);
-    if (!needsAttachment) { ext.value = ''; zip.checked = false; suppress.checked = false; }
+    if (!needsAttachment) { ext.value = ''; zip.checked = false; suppress.checked = false; prefix.value = ''; }
     else { suppress.checked = true; } // 添付/QR型は既定で本文URLを抑制(半端なリンクを残さない)
     const hints = {
       link: 'リンク型：本文中のリンクをクリックすると追跡します（添付は使いません）。',
@@ -1455,6 +1466,7 @@ async function openCampaignModal(campaignId = null) {
       row.querySelector('.c-scenario').value = '';  // 個別指定として復元
       syncAttachment(row);  // link_mode に応じて添付欄の有効/無効を先に整える
       if (prefill.attachment_ext) row.querySelector('.c-ext').value = prefill.attachment_ext;
+      if (prefill.attachment_filename) row.querySelector('.c-prefix').value = prefill.attachment_filename;
       row.querySelector('.c-zip').checked = Number(prefill.attachment_zip) === 1;
       row.querySelector('.c-suppress-url').checked = Number(prefill.suppress_body_url) === 1;
       row.querySelector('.c-suppress-email').checked = Number(prefill.suppress_prefill_email) === 1;

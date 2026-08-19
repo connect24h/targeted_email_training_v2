@@ -63,6 +63,31 @@ final class PipelineRunner
     }
 
     /**
+     * 添付ファイル名の接頭辞を、生成される実ファイル名の一部として安全な値に正規化する。
+     * 接頭辞は最終的に create_beacon_files.py が `{prefix}{tracking_id}.{ext}` のファイル名を作り、
+     * send_email.py がその basename を Content-Disposition ヘッダに載せるため、
+     * パストラバーサル・ヘッダインジェクション・制御文字を除去する。
+     * 空/未指定/除去後に空になった場合は従来動作の 'kunren' にフォールバックする（後方互換）。
+     * API 入力時にも campaigns_reject_bad_prefix() で明示拒否しているが、CSV という信頼境界の
+     * 最終段でも除去して二重に守る（create_beacon_files.py 側にも同等の除去がある）。
+     */
+    private static function sanitizePrefix(?string $prefix): string
+    {
+        $p = trim((string) $prefix);
+        // パス区切り・親ディレクトリ・制御文字(CR/LF/NUL含む)・FS予約記号を除去。
+        $p = preg_replace('#[/\\\\]#', '', $p);
+        $p = str_replace('..', '', $p);
+        $p = preg_replace('/[\x00-\x1f\x7f]/', '', $p);
+        $p = preg_replace('/[:*?"<>|]/', '', $p);
+        $p = ltrim($p, '.');
+        // 長さ上限。tracking_id(10) + '.' + 拡張子 を足して余裕を持たせる。
+        if (mb_strlen($p, 'UTF-8') > 40) {
+            $p = mb_substr($p, 0, 40, 'UTF-8');
+        }
+        return $p === '' ? 'kunren' : $p;
+    }
+
+    /**
      * キャンペーンの CSV 群を data_dir に生成する。生成した data_dir を返す。
      * @throws RuntimeException
      */
@@ -135,9 +160,10 @@ final class PipelineRunner
             ? self::qrAttachmentExtension($c['attachment_ext'] ?? null)
             : (string) ($c['attachment_ext'] ?? 'html');
         $zip = (int) ($c['attachment_zip'] ?? 0);
+        $prefix = self::sanitizePrefix($c['attachment_filename'] ?? null);
         self::writeCsv($dir . '/Attachment.csv', [
             ['項番', '添付ファイル名', '拡張子', 'zipフラグ'],
-            [1, 'kunren', $ext, $zip],
+            [1, $prefix, $ext, $zip],
         ]);
 
         // list.csv（対象者ごとに1行）
@@ -255,7 +281,8 @@ final class PipelineRunner
                 ? self::qrAttachmentExtension($content['attachment_ext'] ?? null)
                 : (string) ($content['attachment_ext'] ?? 'html');
             $zip = (int) ($content['attachment_zip'] ?? 0);
-            $attachRows[] = [$contentNo, 'kunren', $ext, $zip];
+            $prefix = self::sanitizePrefix($content['attachment_filename'] ?? null);
+            $attachRows[] = [$contentNo, $prefix, $ext, $zip];
         }
         self::writeCsv($dir . '/Attachment.csv', $attachRows);
 

@@ -125,5 +125,55 @@ class ResolveQrExtensionTest(unittest.TestCase):
                 )
 
 
+class SanitizeAttachmentPrefixTest(unittest.TestCase):
+    """添付ファイル名接頭辞のサニタイズ(最終防波堤)。
+
+    この接頭辞は `{prefix}{tracking_id}.{ext}` のファイル名になり、send_email.py が
+    その basename を Content-Disposition ヘッダに載せる。PHP をすり抜けた危険な値を
+    ここで確実に無害化する。
+    """
+
+    def test_should_keep_normal_prefix(self) -> None:
+        self.assertEqual(
+            create_beacon_files.sanitize_attachment_prefix("添付資料-"), "添付資料-"
+        )
+
+    def test_should_fallback_to_kunren_when_empty(self) -> None:
+        for value in ("", "   ", None, "nan"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    create_beacon_files.sanitize_attachment_prefix(value), "kunren"
+                )
+
+    def test_should_strip_path_separators(self) -> None:
+        # パス区切りを除去して Attachment ディレクトリ外に出させない
+        self.assertNotIn("/", create_beacon_files.sanitize_attachment_prefix("a/b/c"))
+        self.assertNotIn("\\", create_beacon_files.sanitize_attachment_prefix("a\\b"))
+
+    def test_should_remove_parent_directory(self) -> None:
+        self.assertNotIn("..", create_beacon_files.sanitize_attachment_prefix("../etc"))
+
+    def test_should_strip_control_and_newline(self) -> None:
+        # CR/LF はヘッダインジェクションになるため必ず除去
+        result = create_beacon_files.sanitize_attachment_prefix("a\r\nb\x00c")
+        self.assertNotIn("\r", result)
+        self.assertNotIn("\n", result)
+        self.assertNotIn("\x00", result)
+
+    def test_should_remove_reserved_symbols(self) -> None:
+        result = create_beacon_files.sanitize_attachment_prefix('a:b*c?"<>|d')
+        for ch in ':*?"<>|':
+            self.assertNotIn(ch, result)
+
+    def test_should_cap_length(self) -> None:
+        self.assertEqual(len(create_beacon_files.sanitize_attachment_prefix("あ" * 50)), 40)
+
+    def test_pure_traversal_falls_back_to_kunren(self) -> None:
+        # 除去後に空になったら kunren にフォールバック
+        self.assertEqual(
+            create_beacon_files.sanitize_attachment_prefix("../"), "kunren"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

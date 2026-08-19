@@ -5,6 +5,7 @@
 
 import pandas as pd
 import os
+import re
 import sys
 import shutil
 import zipfile
@@ -78,6 +79,30 @@ QR_DOCUMENT_FORMATS = {
 
 WEB_ROOT = Path("/var/www/html")
 ATTACHMENT_ROOT = Path("/opt/training/bin/Attachment")
+
+
+def sanitize_attachment_prefix(prefix):
+    """添付ファイル名の接頭辞を、実ファイル名の一部として安全な値に正規化する。
+
+    接頭辞はこの後 `{prefix}{tracking_id}.{ext}` のファイル名になり、send_email.py が
+    その basename を Content-Disposition ヘッダに載せる。PipelineRunner.sanitizePrefix と
+    同等の除去を PHP をすり抜けた場合の最終防波堤として行う（多層防御）。
+    パス区切り・親ディレクトリ・制御文字(CR/LF/NUL含む)・FS予約記号を除去し、
+    空になったら従来動作の 'kunren' にフォールバックする（後方互換）。
+    """
+    p = str(prefix or '').strip()
+    if p.lower() == 'nan':
+        p = ''
+    p = re.sub(r'[/\\]', '', p)
+    p = p.replace('..', '')
+    p = re.sub(r'[\x00-\x1f\x7f]', '', p)
+    p = re.sub(r'[:*?"<>|]', '', p)
+    p = p.lstrip('.')
+    # basename 化で万一残った区切りも封じ、Attachment ディレクトリ外に出させない。
+    p = os.path.basename(p)
+    if len(p) > 40:
+        p = p[:40]
+    return p if p else 'kunren'
 
 
 def _has_csv_value(value):
@@ -448,10 +473,15 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
                     zip_flag = matching_attachment.iloc[0].get('zipフラグ', 0)
 
                     # ファイル名が空または'nan'の場合は添付ファイルを作成しない
+                    # （添付ファイル名列が空 = そもそも添付なし、の判定。この時点で判定する）
                     if not filename or filename.lower() == 'nan' or pd.isna(filename):
                         print(f"  [WARN] 添付ファイル名が無効のため、スキップ", flush=True)
                         logger.info(f"行 {index+1}: 添付ファイル名が無効のため、添付ファイル作成をスキップ")
                         continue
+
+                    # 添付を作ると確定したので、ファイル名接頭辞をサニタイズする（QR/非QR共通の最終防波堤）。
+                    # パストラバーサル・ヘッダインジェクション・制御文字を除去する。
+                    filename = sanitize_attachment_prefix(filename)
 
                     if filename and extension:
                         # 拡張子のクリーンアップ（先頭のピリオドを除去）
@@ -475,7 +505,7 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
                                     raw_body = get_body_template(honbun_df, body_template_no)
                                     body_text = replace_placeholders(raw_body, row)
 
-                                    doc_filename = f"kunren-qr-{random_value}.{qr_doc_fmt}"
+                                    doc_filename = f"{filename}{random_value}.{qr_doc_fmt}"
                                     qr_dest_path = f"/opt/training/bin/Attachment/{doc_filename}"
 
                                     if os.path.exists(qr_dest_path):
@@ -499,7 +529,7 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
                                     qr_img = qr.make_image(fill_color="black", back_color="white")
 
                                     # QRコードPNG保存
-                                    qr_filename = f"kunren-qr-{random_value}.png"
+                                    qr_filename = f"{filename}{random_value}.png"
                                     qr_dest_path = f"/opt/training/bin/Attachment/{qr_filename}"
 
                                     # 既存ファイルがあれば削除
@@ -514,7 +544,7 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
 
                                 # ZIPフラグが1の場合、ZIPファイル化（QR画像/QR文書とも共通ロジック）
                                 if float(zip_flag) == 1.0:
-                                    qr_zip_filename = f"kunren-qr-{random_value}.zip"
+                                    qr_zip_filename = f"{filename}{random_value}.zip"
                                     qr_zip_dest_path = f"/opt/training/bin/Attachment/{qr_zip_filename}"
 
                                     with zipfile.ZipFile(qr_zip_dest_path, 'w', zipfile.ZIP_DEFLATED) as zipf:

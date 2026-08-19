@@ -46,13 +46,23 @@ def target_files(tracking_id: str):
     ]
 
 
+# 添付ファイルの生成拡張子。接頭辞は管理者が自由に指定できるため prefix 一致では拾えず、
+# 「tracking_id を含み、かつ生成拡張子のいずれか」で判定する（新旧命名を1ロジックで回収）。
+_ATTACHMENT_EXTENSIONS = ('.docx', '.pdf', '.html', '.png', '.zip', '.xlsx', '.pptx')
+
+
 def qr_attachment_files(tracking_id: str):
-    """QR添付(kunren-qr-{tid}.*)を prefix 一致で列挙する。"""
-    prefix = f"kunren-qr-{tracking_id}."
+    """添付ファイル({prefix}{tid}.{ext})を tracking_id 一致で列挙する。
+
+    接頭辞が管理者指定で可変になったため、旧 `kunren-qr-{tid}.pdf` も
+    新 `添付QR-{tid}.pdf` も `kunren{tid}.pdf` も、tracking_id を名前に含む点を鍵に回収する。
+    生成拡張子で絞ることで tracking_id が偶発的に一致する無関係ファイルの誤削除を避ける。
+    ATTACHMENT_DIR のみを走査するので、DOCROOT 側のビーコン/リンクとは混ざらない。
+    """
     found = []
     if os.path.isdir(ATTACHMENT_DIR):
         for fn in os.listdir(ATTACHMENT_DIR):
-            if fn.startswith(prefix):
+            if tracking_id in fn and fn.lower().endswith(_ATTACHMENT_EXTENSIONS):
                 found.append(os.path.join(ATTACHMENT_DIR, fn))
     return found
 
