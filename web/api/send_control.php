@@ -44,6 +44,30 @@ function send_control_read_json(string $path): mixed
     return is_array($data) ? $data : null;
 }
 
+/**
+ * キャンペーンの送信件数を DB の campaign_targets から集計して返す。
+ *
+ * send_status.json は最後に走ったワーカープロセス1回分のカウンタしか持たず、
+ * 分割送信・再送があるとキャンペーン全体の累計とズレる(2026-08-20: 再送
+ * バッチだけの945が表示され、実際の累計1546と食い違った)。DB は
+ * send_status='sent' を1件ずつ記録するため、累計が常に正しい。
+ *
+ * @return array{total:int, sent:int}
+ */
+function send_control_counts(int $campaignId): array
+{
+    $counts = Db::one(
+        "SELECT COUNT(*) AS total,
+                SUM(CASE WHEN send_status='sent' THEN 1 ELSE 0 END) AS sent
+         FROM campaign_targets WHERE campaign_id=?",
+        [$campaignId]
+    ) ?? ['total' => 0, 'sent' => 0];
+    return [
+        'total' => (int) ($counts['total'] ?? 0),
+        'sent'  => (int) ($counts['sent'] ?? 0),
+    ];
+}
+
 try {
     $actor  = require_role($_SERVER['REQUEST_METHOD'] === 'GET' ? 'viewer' : 'operator');
     $action = $_GET['action'] ?? '';
@@ -60,15 +84,22 @@ try {
                 continue; // まだ送信していない(status.jsonが無い)
             }
             $flag = is_file($dir . '/stop_sending.flag');
+            // 件数(total/送信済み)は DB を正とする(理由は send_control_counts 参照)。
+            $counts = send_control_counts((int) $c['id']);
+            $total = $counts['total'];
+            $sent  = $counts['sent'];
             $statuses[] = [
                 'campaign_id'   => (int) $c['id'],
                 'campaign_name' => (string) $c['name'],
                 'campaign_status' => (string) $c['status'],
+                // status/current_email/timestamp はリアルタイム情報のため json 由来を残す。
                 'status'        => (string) ($st['status'] ?? 'idle'),
                 'timestamp'     => (string) ($st['timestamp'] ?? ''),
-                'processed'     => (int) ($st['processed'] ?? 0),
-                'total'         => (int) ($st['total'] ?? 0),
-                'success'       => (int) ($st['success'] ?? 0),
+                'processed'     => $sent,
+                'total'         => $total,
+                'success'       => $sent,
+                // error は DB に記録がない(send_status は sent/pending のみ)ため
+                // ワーカーが書く json のカウンタを残す。
                 'error'         => (int) ($st['error'] ?? 0),
                 'current_email' => (string) ($st['current_email'] ?? ''),
                 'is_stopped'    => $flag,
