@@ -886,6 +886,30 @@ function campaigns_handle_update(array $actor): never
     json_out(['success' => true, 'campaign' => $updated, 'target_count' => (int) $updated['target_count']]);
 }
 
+/**
+ * キャンペーン名だけを変更する。
+ *
+ * 通常の update は draft 限定(送信データの整合を守るため)だが、name は宛先・
+ * テンプレ・添付などの送信データに一切影響しない表示ラベルなので、status に
+ * 関わらず変更できる専用経路にする。name 以外のカラムは触らない。
+ */
+function campaigns_handle_rename(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
+    $id = campaigns_int($body, 'id');
+    // 削除済み/他テナントはここで404
+    assert_campaign_owned($id, $tenantId);
+    // 必須・空文字拒否・trim
+    $name = campaigns_string($body, 'name');
+
+    Db::run('UPDATE campaigns SET name = ? WHERE id = ? AND tenant_id = ?', [$name, $id, $tenantId]);
+    audit('campaign.rename', 'campaign_id=' . $id);
+    $updated = campaigns_row($id, $tenantId);
+    json_out(['success' => true, 'campaign' => $updated, 'target_count' => (int) $updated['target_count']]);
+}
+
 function campaigns_handle_delete(array $actor): never
 {
     tet2_require_csrf();
@@ -984,6 +1008,9 @@ try {
     }
     if ($action === 'update' && $method === 'POST') {
         campaigns_handle_update($actor);
+    }
+    if ($action === 'rename' && $method === 'POST') {
+        campaigns_handle_rename($actor);
     }
     if ($action === 'delete' && $method === 'POST') {
         campaigns_handle_delete($actor);

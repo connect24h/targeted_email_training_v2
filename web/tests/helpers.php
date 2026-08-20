@@ -107,7 +107,8 @@ function effective_tenant_id(array $user, ?int $requested = null): int
 function edu_effective_tenant_id(array $user, ?int $requested = null): int { return effective_tenant_id($user, $requested); }
 function assert_campaign_owned(int $campaignId, int $tenantId): array
 {
-    $c = Db::one('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ?', [$campaignId, $tenantId]);
+    // 本番(bootstrap.php)と同じく論理削除済みを404にする。
+    $c = Db::one('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL', [$campaignId, $tenantId]);
     if ($c === null) { json_error('キャンペーンが見つかりません', 404); }
     return $c;
 }

@@ -255,6 +255,8 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator') && ['done','paused','cancelled'].includes(c.status)
           ? `<button class="btn btn-sm btn-outline-success" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-primary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-primary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
@@ -454,6 +456,24 @@ async function toDraftCampaign(id) {
   try {
     await api('api/campaign_launch.php', { method: 'POST', query: { action: 'to_draft' }, body: { id } });
     toast('下書きに戻しました', 'ok'); renderCampaigns();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function renameCampaign(id) {
+  // 現在の名前を初期値にする(一覧APIから取得。onclick属性に名前を埋め込むと
+  // クォート混入で壊れるため、id だけ受け取り名前はここで引く)。
+  let current = '';
+  try {
+    const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+    const c = (campaigns || []).find((x) => x.id === id);
+    current = c ? c.name : '';
+  } catch (e) { /* 取得失敗時は空で続行 */ }
+  const name = prompt('新しいキャンペーン名を入力してください（送信データには影響しません）', current);
+  if (name === null) return;                 // キャンセル
+  if (name.trim() === '') { toast('名称を入力してください', 'err'); return; }
+  if (name.trim() === current) return;       // 変更なし
+  try {
+    await api('api/campaigns.php', { method: 'POST', query: { action: 'rename' }, body: { id, name: name.trim() } });
+    toast('名称を変更しました', 'ok'); renderCampaigns();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function duplicateCampaign(id) {
