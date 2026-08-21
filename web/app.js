@@ -250,7 +250,7 @@ async function renderCampaigns() {
       <td><span class="badge st-${c.status}">${STATUS_LABEL[c.status] || c.status}</span></td>
       <td>${c.target_count}</td>
       <td class="small text-muted">${fmtDate(c.start_at)}</td>
-      <td class="text-nowrap">
+      <td><div class="d-flex flex-wrap gap-1">
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
           ? `<button class="btn btn-sm btn-outline-primary" onclick="editCampaign(${c.id})" title="修正（下書きを編集）"><i class="bi bi-pencil"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
@@ -277,7 +277,7 @@ async function renderCampaigns() {
           ? `<button class="btn btn-sm btn-outline-primary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
-      </td>
+      </div></td>
     </tr>`).join('') : emptyRow(6);
   // 進行中(実行中/予約)のキャンペーンがあれば、送信完了→done 遷移を画面に反映するため
   // 15秒ごとに一覧を自動更新する。緊急停止ボタンが完了後も残る問題への対処。
