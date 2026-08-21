@@ -211,6 +211,9 @@ const STATUS_LABEL = { draft:'下書き', scheduled:'予約', running:'実行中
 let campaignsRefreshTimer = null;
 let campaignSortDesc = true;  // 並び順: true=降順(最新が上, 既定) / false=昇順(古い順が上)
 function toggleCampaignSort() { campaignSortDesc = !campaignSortDesc; renderCampaigns(); }
+// 本番/テスト フィルタ: all=全部(既定・運用一覧なのでまず全部見せる) / prod=本番のみ / test=テストのみ。
+let campaignTestFilter = 'all';
+function setCampaignTestFilter(v) { campaignTestFilter = v; renderCampaigns(); }
 async function renderCampaigns() {
   renderSendControl();  // 送信制御パネル(ステータス+アラート)を描画・ポーリング開始
   const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
@@ -219,8 +222,20 @@ async function renderCampaigns() {
   const campaignsAsc = campaigns.slice().sort((a, b) => a.id - b.id);
   const numById = {};
   campaignsAsc.forEach((c, i) => { numById[c.id] = i + 1; });
+  // 本番/テストフィルタを適用(番号は全体基準で確定済みなので絞っても番号は不変)。
+  const filtered = campaignsAsc.filter((c) => {
+    if (campaignTestFilter === 'prod') return !Number(c.is_test);
+    if (campaignTestFilter === 'test') return Number(c.is_test);
+    return true; // all
+  });
   // 表示順は選択された方向。降順(既定)は最新が上。番号は上記マップで固定。
-  const shown = campaignSortDesc ? campaignsAsc.slice().reverse() : campaignsAsc;
+  const shown = campaignSortDesc ? filtered.slice().reverse() : filtered;
+  // フィルタUI(全部/本番のみ/テストのみ)をツールバーに描画(レポートと同じ btn-group)。
+  const filterBar = document.getElementById('campaignFilterBar');
+  if (filterBar) {
+    const fbtn = (v, label) => `<button class="btn btn-sm ${campaignTestFilter === v ? 'btn-primary' : 'btn-outline-primary'}" onclick="setCampaignTestFilter('${v}')">${label}</button>`;
+    filterBar.innerHTML = `<div class="btn-group btn-group-sm">${fbtn('all', '全部')}${fbtn('prod', '本番のみ')}${fbtn('test', 'テストのみ')}</div>`;
+  }
   // 並び順トグルUI(ヘッダの#列に矢印ボタン)。
   const sortArrow = campaignSortDesc ? 'bi-sort-down' : 'bi-sort-up';
   const sortLabel = campaignSortDesc ? '最新が上(降順)' : '古い順が上(昇順)';
@@ -256,6 +271,8 @@ async function renderCampaigns() {
           ? `<button class="btn btn-sm btn-outline-success" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-primary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-info" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-primary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
@@ -474,6 +491,16 @@ async function renameCampaign(id) {
   try {
     await api('api/campaigns.php', { method: 'POST', query: { action: 'rename' }, body: { id, name: name.trim() } });
     toast('名称を変更しました', 'ok'); renderCampaigns();
+  } catch (e) { toast(e.message, 'err'); }
+}
+// 本番系/テスト系を後から切り替える(分類のみ。status に関わらず可能。送信データには影響しない)。
+async function toggleTestCampaign(id, currentIsTest) {
+  const toTest = Number(currentIsTest) ? 0 : 1;
+  const label = toTest ? 'テスト系' : '本番系';
+  if (!confirm(`このキャンペーンを「${label}」に切り替えます。\n分類のみの変更で、送信済みメールや追跡には影響しません。よろしいですか？`)) return;
+  try {
+    await api('api/campaigns.php', { method: 'POST', query: { action: 'set_test' }, body: { id, is_test: toTest } });
+    toast(`${label}に切り替えました`, 'ok'); renderCampaigns();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function duplicateCampaign(id) {

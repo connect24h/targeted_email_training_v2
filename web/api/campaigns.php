@@ -910,6 +910,33 @@ function campaigns_handle_rename(array $actor): never
     json_out(['success' => true, 'campaign' => $updated, 'target_count' => (int) $updated['target_count']]);
 }
 
+/**
+ * is_test(本番系/テスト系)を後から切り替える専用 API。
+ * 既存 update は draft 限定だが、is_test は送信内容ではなく分類ラベルで、後から
+ * 変えても送信済みメールに影響しない。よって status に関わらず(running/done でも)
+ * 切り替えられる。rename と同型: 分類だけを status 非依存で UPDATE する。
+ */
+function campaigns_handle_set_test(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
+    $id = campaigns_int($body, 'id');
+    // 削除済み/他テナントはここで404
+    assert_campaign_owned($id, $tenantId);
+    // 必須(欠落は400)。0/1 に正規化(create 経路と同じ campaigns_optional_bool_int を流用。
+    // campaigns_int は <1 を拒否するため is_test=0 が通らず使えない)。
+    $isTest = campaigns_optional_bool_int($body, 'is_test');
+    if ($isTest === null) {
+        json_error('is_test が不正です', 400);
+    }
+
+    Db::run('UPDATE campaigns SET is_test = ? WHERE id = ? AND tenant_id = ?', [$isTest, $id, $tenantId]);
+    audit('campaign.set_test', 'campaign_id=' . $id . ',is_test=' . $isTest);
+    $updated = campaigns_row($id, $tenantId);
+    json_out(['success' => true, 'campaign' => $updated, 'target_count' => (int) $updated['target_count']]);
+}
+
 function campaigns_handle_delete(array $actor): never
 {
     tet2_require_csrf();
@@ -1011,6 +1038,9 @@ try {
     }
     if ($action === 'rename' && $method === 'POST') {
         campaigns_handle_rename($actor);
+    }
+    if ($action === 'set_test' && $method === 'POST') {
+        campaigns_handle_set_test($actor);
     }
     if ($action === 'delete' && $method === 'POST') {
         campaigns_handle_delete($actor);
