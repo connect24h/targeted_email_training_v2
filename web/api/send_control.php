@@ -45,16 +45,24 @@ function send_control_read_json(string $path): mixed
 }
 
 /**
- * キャンペーンの送信件数を DB の campaign_targets から集計して返す。
+ * キャンペーンの送信件数(total/sent)を返す。
  *
- * send_status.json は最後に走ったワーカープロセス1回分のカウンタしか持たず、
- * 分割送信・再送があるとキャンペーン全体の累計とズレる(2026-08-20: 再送
- * バッチだけの945が表示され、実際の累計1546と食い違った)。DB は
- * send_status='sent' を1件ずつ記録するため、累計が常に正しい。
+ * total は常に DB campaign_targets の件数(送信中に変わらないので食い違わない)。
+ *
+ * sent の源は2段階:
+ *  1. リアルタイム(推奨): $dataDir/list.csv の「送信フラグ」列が 1 の行数。
+ *     send_email.py が1件送るたびに update_send_flag() で立てるため、送信中も
+ *     数字が動く(2026-08-21: 送信中に画面が固まる問題の解消)。
+ *  2. フォールバック: list.csv が無い/列が無い/$dataDir 未指定なら DB の
+ *     send_status='sent' 集計。完了後・旧データ・data_dir 不明時に累計を保証。
+ *
+ * DB send_status は worker が finish_batch() でバッチ完了時に一括同期する
+ * 「確定台帳」。送信中は遅れるため、リアルタイム表示は list.csv を正とする。
+ * send_status.json はプロセス単位カウンタで累計とズレる(945問題)ため件数には使わない。
  *
  * @return array{total:int, sent:int}
  */
-function send_control_counts(int $campaignId): array
+function send_control_counts(int $campaignId, ?string $dataDir = null): array
 {
     $counts = Db::one(
         "SELECT COUNT(*) AS total,
@@ -62,10 +70,52 @@ function send_control_counts(int $campaignId): array
          FROM campaign_targets WHERE campaign_id=?",
         [$campaignId]
     ) ?? ['total' => 0, 'sent' => 0];
-    return [
-        'total' => (int) ($counts['total'] ?? 0),
-        'sent'  => (int) ($counts['sent'] ?? 0),
-    ];
+    $total = (int) ($counts['total'] ?? 0);
+
+    $realtimeSent = $dataDir !== null ? send_control_list_csv_sent($dataDir) : null;
+    $sent = $realtimeSent ?? (int) ($counts['sent'] ?? 0);
+
+    return ['total' => $total, 'sent' => $sent];
+}
+
+/**
+ * list.csv の「送信フラグ」列が立っている行数を数える。
+ * 読めない/列が無い場合は null を返し、呼び出し側で DB フォールバックさせる。
+ * 送信フラグは ASCII の "1"/"1.0" なので文字コードに依存せず数えられる。
+ */
+function send_control_list_csv_sent(string $dataDir): ?int
+{
+    $path = rtrim($dataDir, '/') . '/list.csv';
+    if (!is_file($path) || !is_readable($path)) {
+        return null;
+    }
+    $fh = @fopen($path, 'r');
+    if ($fh === false) {
+        return null;
+    }
+    try {
+        $header = fgetcsv($fh);
+        if ($header === false || $header === null) {
+            return null;
+        }
+        $flagIdx = array_search('送信フラグ', $header, true);
+        if ($flagIdx === false) {
+            return null; // 列が無い → フォールバック
+        }
+        $sent = 0;
+        while (($row = fgetcsv($fh)) !== false) {
+            if (!isset($row[$flagIdx])) {
+                continue;
+            }
+            $flag = trim((string) $row[$flagIdx]);
+            if ($flag === '1' || $flag === '1.0') {
+                $sent++;
+            }
+        }
+        return $sent;
+    } finally {
+        fclose($fh);
+    }
 }
 
 try {
@@ -84,8 +134,8 @@ try {
                 continue; // まだ送信していない(status.jsonが無い)
             }
             $flag = is_file($dir . '/stop_sending.flag');
-            // 件数(total/送信済み)は DB を正とする(理由は send_control_counts 参照)。
-            $counts = send_control_counts((int) $c['id']);
+            // total は DB、sent は list.csv 起点のリアルタイム(理由は send_control_counts 参照)。
+            $counts = send_control_counts((int) $c['id'], $dir);
             $total = $counts['total'];
             $sent  = $counts['sent'];
             $statuses[] = [
