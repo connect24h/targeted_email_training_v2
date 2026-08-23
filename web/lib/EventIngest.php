@@ -73,7 +73,12 @@ final class EventIngest
                 continue;
             }
             while (($line = fgets($fp)) !== false) {
-                if (!preg_match($pattern, $line, $m)) {
+                // リクエスト行(Apache combined の最初の "METHOD /path HTTP/x")のパスだけを
+                // 判定対象にする。行全体に $pattern を当てると、favicon.ico や認証 POST
+                // (/training_log.php)のように「リファラーに link-{tid}.html を含むだけ」の
+                // 行まで click に誤計上され、1回の開封が複数 click に水増しされる(2026-08-23 修正)。
+                $requestPath = self::apacheRequestPath($line);
+                if ($requestPath === null || !preg_match($pattern, $requestPath, $m)) {
                     continue;
                 }
                 $tid = $m[1];
@@ -170,6 +175,24 @@ final class EventIngest
             }
         }
         return date('Y-m-d H:i:s');
+    }
+
+    /**
+     * Apache combined ログ1行から、リクエスト行のパスを取り出す。
+     * 例: '... "GET /link-1234567890.html HTTP/1.1" 200 ...' → '/link-1234567890.html'
+     * リクエスト行が取れない行は null(=判定対象外)。リファラーや UA に含まれる
+     * パス文字列を誤ってマッチさせないため、クエリ以降とプロトコルは落とす。
+     */
+    private static function apacheRequestPath(string $line): ?string
+    {
+        // 最初の "METHOD /path HTTP/x.y" を取る。メソッドは GET/POST 等。
+        if (!preg_match('/"[A-Z]+\s+(\S+)\s+HTTP\/[0-9.]+"/', $line, $m)) {
+            return null;
+        }
+        $path = $m[1];
+        // クエリ文字列を除く(link-{tid}.html?foo 等でも本体パスで判定)。
+        $q = strpos($path, '?');
+        return $q === false ? $path : substr($path, 0, $q);
     }
 
     private static function insertEvent(array $ref, string $tid, string $type, ?string $variant, string $occurred, string $source, string $raw): int
