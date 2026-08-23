@@ -858,6 +858,25 @@ function reply_maildir_campaign_from_addresses(): ?array
 }
 
 /**
+ * ?campaign_id 指定時、そのキャンペーンの送信開始 start_at('Y-m-d H:i:s')を返す。
+ * 返信の下限(これより前=別キャンペーン/期間外の古いメール)を自動で切るために使う。
+ * 同じ送信元アドレスを複数キャンペーンが使い回すため、送信元一致だけでは期間外が混ざる。
+ * 返信の上限(いつまでの返信を見るか)は画面の終了日フィルタ(end_date)で手動指定する。
+ * start_at 未設定なら null(下限なし)。
+ */
+function reply_maildir_campaign_start(): ?string
+{
+    if (!isset($_GET['campaign_id']) || $_GET['campaign_id'] === '') { return null; }
+    $cid = (int) $_GET['campaign_id'];
+    if ($cid < 1) { json_error('campaign_id が不正です', 400); }
+    $row = Db::one('SELECT start_at FROM campaigns WHERE id = ?', [$cid]);
+    if ($row === null) { return null; }
+    $start = trim((string) ($row['start_at'] ?? ''));
+    $ts = $start !== '' ? strtotime($start) : false;
+    return $ts !== false ? date('Y-m-d H:i:s', $ts) : null;
+}
+
+/**
  * Maildir のアドレスが、キャンペーン送信元アドレス群のいずれかに該当するか。
  * まず完全一致(大小無視)、ダメならローカルパート(@より前)一致でフォールバックする。
  * 訓練の from_address のドメインと、返信を受け取る実 Maildir のドメインが異なる
@@ -894,6 +913,17 @@ function reply_maildir_compute(): array
     // 受信メールだけを「そのキャンペーンの返信」として扱う(2026-08-23)。
     // 返信者タブは superadmin 限定・全テナント横断なのでテナント検証はしない。
     $campaignFromEmails = reply_maildir_campaign_from_addresses();
+
+    // 返信の下限はキャンペーンの送信開始(start_at)。同じ送信元を複数キャンペーンが
+    // 使い回すため、送信元一致だけでは他キャンペーン/期間外の古いメールが混ざる。
+    // 送信開始より前のメールは別キャンペーン/期間外として落とす。画面の開始日フィルタが
+    // より遅ければそちらを優先(利用者が明示的に絞った範囲を尊重)。上限(いつまでの返信か)は
+    // 画面の終了日フィルタ(end_date)で手動指定する。
+    $campaignStart = reply_maildir_campaign_start();
+    if ($campaignStart !== null) {
+        $csTs = strtotime($campaignStart);
+        if ($csTs !== false) { $startTs = ($startTs === null) ? $csTs : max($startTs, $csTs); }
+    }
 
     $allMails = [];
     $counts = [];

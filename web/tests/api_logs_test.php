@@ -327,6 +327,21 @@ check(reply_maildir_email_matches('other@gwin.gr.cojp.online', ['kanri@gwin.gr.c
 check(reply_maildir_email_matches('kanri@a.com', ['keiri@b.com', 'kanri@c.com']) === true,
     '照合: 複数送信元のいずれかにローカルパート一致すれば真');
 
+// 返信の下限=キャンペーン start_at。期間外(送信開始より前)の古いメールを落とすため。
+check(function_exists('reply_maildir_campaign_start'), 'reply_maildir_campaign_start が定義されている');
+$_GET = [];
+check(reply_maildir_campaign_start() === null, 'campaign_id 未指定なら start は null');
+Db::run("INSERT INTO campaigns (id, tenant_id, name, status, from_address, start_at, end_at) VALUES
+    (730, ?, 'Window Fixture', 'done', 'kanri@gwin.gr.cojp.online', '2026-08-20 10:00', '2026-08-21 23:25')", [$tenantId]);
+$_GET = ['campaign_id' => '730'];
+check(reply_maildir_campaign_start() === '2026-08-20 10:00:00', 'start_at を Y-m-d H:i:s で返す');
+// start_at 未設定のキャンペーンは null(下限なし)。
+Db::run("INSERT INTO campaigns (id, tenant_id, name, status, from_address, start_at) VALUES
+    (731, ?, 'NoStart', 'draft', 'kanri@gwin.gr.cojp.online', '')", [$tenantId]);
+$_GET = ['campaign_id' => '731'];
+check(reply_maildir_campaign_start() === null, 'start_at 未設定なら null(下限なし)');
+$_GET = [];
+
 // ロールゲート(ディスパッチャ責務): reply_maildir は superadmin 限定。
 // ディスパッチャは logs.php の try ブロック内なので、ここでは関数の存在のみ確認。
 check(function_exists('logs_handle_reply_maildir'), 'reply_maildir ハンドラが定義されている');
