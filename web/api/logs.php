@@ -1014,69 +1014,9 @@ function logs_handle_reply_maildir_view(): never
  * 全テナント混在の生ログのため superadmin 限定。
  * ============================================================ */
 
-// api/ の親(tet2/)配下の data/ に IP キャッシュを置く。dirname(__DIR__) で曖昧さを排除。
-define('WEBLOG_IP_CACHE', dirname(__DIR__) . '/data/ip_cache.json');
-
-/** IPキャッシュを読む。 */
-function weblog_load_ip_cache(): array
-{
-    $f = WEBLOG_IP_CACHE;
-    if (is_file($f) && is_readable($f)) {
-        $c = json_decode((string) file_get_contents($f), true);
-        if (is_array($c)) { return $c; }
-    }
-    return [];
-}
-
-/** IPキャッシュを保存する。 */
-function weblog_save_ip_cache(array $cache): void
-{
-    $dir = dirname(WEBLOG_IP_CACHE);
-    if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
-    @file_put_contents(WEBLOG_IP_CACHE, json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-}
-
-/** IP → 位置情報。プライベートIPは即返し、公開IPは ip-api.com(3秒timeout)で解決。 */
-function weblog_ip_info(string $ip): array
-{
-    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-        return ['country' => 'Private/Local', 'location' => 'Private Network', 'isp' => 'Private Network',
-                'org' => 'Private Network', 'as' => '', 'hostname' => 'localhost'];
-    }
-    $url = "http://ip-api.com/json/{$ip}?fields=status,country,countryCode,regionName,city,isp,org,as,query";
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 3);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
-    curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
-    $resp = curl_exec($ch);
-    $err = curl_errno($ch);
-    curl_close($ch);
-    if (!$err && $resp) {
-        $d = json_decode((string) $resp, true);
-        if (is_array($d) && ($d['status'] ?? '') === 'success') {
-            $country = $d['country'] ?? 'Unknown';
-            $cc = $d['countryCode'] ?? '';
-            $region = $d['regionName'] ?? '';
-            $city = $d['city'] ?? '';
-            $loc = trim("{$city}, {$region}");
-            $loc = ($loc === '' || $loc === ', ') ? $country : $loc . ", {$country}";
-            return ['country' => "{$country} ({$cc})", 'location' => $loc,
-                    'isp' => $d['isp'] ?? 'Unknown', 'org' => $d['org'] ?? ($d['isp'] ?? 'Unknown'),
-                    'as' => $d['as'] ?? '', 'hostname' => @gethostbyaddr($ip) ?: $ip];
-        }
-    }
-    $hostname = @gethostbyaddr($ip);
-    $org = 'Unknown';
-    if ($hostname && $hostname !== $ip) {
-        $parts = explode('.', $hostname);
-        if (count($parts) >= 2) { $org = $parts[count($parts) - 2]; }
-    }
-    return ['country' => 'Unknown', 'location' => 'Unknown', 'isp' => 'Unknown',
-            'org' => $org, 'as' => '', 'hostname' => $hostname ?: $ip];
-}
+// IPキャッシュと ip-api.com 解決は lib/GeoIpCache.php に集約(WebアクセスLog画面と
+// CLI一括解決 bin/geoip_resolve.php で共有。2026-08-23 切り出し)。
+require_once __DIR__ . '/../lib/GeoIpCache.php';
 
 /** access.log 群(新しい順: 本体→.1→.gz最新3)を返す。 */
 function weblog_log_files(): array
@@ -1184,22 +1124,26 @@ function weblog_parse_access(?string $start, ?string $end, ?string $pathFilter, 
     return ['logs' => $pageLogs, 'total_count' => $total];
 }
 
-/** ログ配列に GeoIP を付与(キャッシュ優先, 1回40件までAPI)。参照渡し。 */
-function weblog_enrich_geoip(array &$logs, bool $allowApi = false): void
+/**
+ * ログ配列に GeoIP を付与(キャッシュ優先)。参照渡し。
+ * $allowApi=false(既定)は外部APIを呼ばずキャッシュのみ。$maxApi は1回に許可する
+ * 外部API呼び出しの上限で、$maxApi<=0 なら無制限(明示refresh用)。
+ */
+function weblog_enrich_geoip(array &$logs, bool $allowApi = false, int $maxApi = 40): void
 {
     // $allowApi=false(既定): 外部GeoIP API を一切呼ばず、キャッシュ済み情報だけ付与する。
     //   一覧表示のたびに ip-api.com へ問い合わせると、未知IPが多い時に
     //   「3秒×IP数」でリクエストがタイムアウトするため、一覧は必ずキャッシュのみ。
     // $allowApi=true: CSV出力や明示的な「GeoIP更新」操作でのみ外部APIを許可する。
+    //   明示refresh は $maxApi=0(無制限)で呼び、未解決IPを一括で埋める(2026-08-23)。
     $cache = weblog_load_ip_cache();
     $updated = false;
     $apiCalls = 0;
-    $maxApi = 40;
     foreach ($logs as &$log) {
         $ip = $log['ip'];
         $needs = (!isset($cache[$ip]) && $ip !== 'unknown')
               || (isset($cache[$ip]) && ($cache[$ip]['country'] ?? '') === 'Unknown');
-        if ($allowApi && $needs && $apiCalls < $maxApi) {
+        if ($allowApi && $needs && ($maxApi <= 0 || $apiCalls < $maxApi)) {
             $cache[$ip] = weblog_ip_info($ip);
             $updated = true;
             $apiCalls++;
@@ -1275,9 +1219,22 @@ function weblog_handle_geoip_refresh(): never
 
     $res = weblog_parse_access($start, $end, $pathFilter, $search, $page, $perPage);
     $logs = $res['logs'];
-    weblog_enrich_geoip($logs, true); // 明示操作なので外部APIを許可(最大40件/回)
-    audit('logs.weblog_geoip', 'page=' . $page);
-    json_out(['success' => true, 'logs' => $logs,
+    // 明示操作なので外部APIを許可。1リクエストの実行時間が延びすぎないよう1回200件までに
+    // 抑え、未解決の残数を返す。フロントは残数>0の間このアクションを繰り返し叩いて埋める。
+    $batch = 200;
+    weblog_enrich_geoip($logs, true, $batch);
+    // このページ内で解決を要するIP(未解決 or Unknown)の残数を数える。
+    $cache = weblog_load_ip_cache();
+    $remaining = 0;
+    $seen = [];
+    foreach ($logs as $log) {
+        $ip = $log['ip'] ?? '';
+        if ($ip === '' || $ip === 'unknown' || isset($seen[$ip])) { continue; }
+        $seen[$ip] = true;
+        if (!isset($cache[$ip]) || ($cache[$ip]['country'] ?? '') === 'Unknown') { $remaining++; }
+    }
+    audit('logs.weblog_geoip', 'page=' . $page . ',remaining=' . $remaining);
+    json_out(['success' => true, 'logs' => $logs, 'geoip_remaining' => $remaining, 'geoip_batch' => $batch,
               'pagination' => ['page' => $page, 'per_page' => $perPage, 'total_count' => $res['total_count'],
                                'total_pages' => max(1, (int) ceil($res['total_count'] / $perPage))]]);
 }

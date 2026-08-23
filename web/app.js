@@ -836,17 +836,30 @@ async function loadWebAccessLog() {
   }
 }
 // GeoIP を後追い補完する（未知IPだけ外部APIで解決。一覧は即座に返すのでタイムアウトしない）。
+// サーバは1回200件まで解決し未解決の残数(geoip_remaining)を返す。残数が0になるまで
+// 自動で繰り返し叩き、その時点で表示中の全IPの国/ISPを埋め切る。
 async function refreshWebAccessGeoip() {
   const btn = document.getElementById('webGeoipBtn');
-  if (btn) { btn.disabled = true; btn.dataset.orig = btn.innerHTML; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> GeoIP取得中…'; }
+  if (btn) { btn.disabled = true; btn.dataset.orig = btn.innerHTML; }
   const query = { action: 'webaccess_geoip', page: logsState.webPage || 1, per_page: 5000 };
   const sd = logDateVal('#logsStartDate'); if (sd) query.start_date = sd;
   const ed = logDateVal('#logsEndDate'); if (ed) query.end_date = ed;
   const pf = $('#logsPathFilter')?.value.trim(); if (pf) query.path = pf;
   const kw = $('#logsKeyword')?.value.trim(); if (kw) query.search = kw;
+  const setLabel = (t) => { if (btn) btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${t}`; };
   try {
-    await api('api/logs.php', { query });
-    toast('GeoIP情報を更新しました（未知IPは最大40件/回）', 'ok');
+    // 残数が尽きるまで繰り返す。上限は暴走防止(200件×100回=2万件)。
+    // 残数が2回続けて減らなければ(API失敗でUnknown固定等)打ち切る。
+    let prevRemaining = Infinity, stall = 0;
+    for (let i = 0; i < 100; i++) {
+      const res = await api('api/logs.php', { query });
+      const remaining = Number(res?.geoip_remaining ?? 0);
+      if (remaining <= 0) { break; }
+      setLabel(`GeoIP取得中… 残り${remaining}件`);
+      if (remaining >= prevRemaining) { if (++stall >= 2) break; } else { stall = 0; }
+      prevRemaining = remaining;
+    }
+    toast('GeoIP情報を更新しました（未知IPをすべて解決）', 'ok');
     await loadWebAccessLog();  // キャッシュが埋まった状態で再表示
   } catch (e) {
     toast(e.message || 'GeoIP更新に失敗しました', 'err');

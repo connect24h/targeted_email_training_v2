@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
+// weblog_ip_info 等は lib/GeoIpCache.php に集約。load_api は require 行を剥がすため先読みする。
+require_once __DIR__ . '/../lib/GeoIpCache.php';
 load_api('logs');
 
 $tenantId = current_user()['tenant_id'];
