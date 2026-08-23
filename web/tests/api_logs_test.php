@@ -10,7 +10,12 @@ declare(strict_types=1);
 require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
 // weblog_ip_info 等は lib/GeoIpCache.php に集約。load_api は require 行を剥がすため先読みする。
+// キャッシュ書き込みが本番/正本の data/ を汚さないよう、テスト専用の一時ファイルに向ける。
+$ipCacheTmp = tempnam(sys_get_temp_dir(), 'iplogtest_') ?: (sys_get_temp_dir() . '/iplogtest.json');
+@unlink($ipCacheTmp);
+putenv('TET2_IP_CACHE=' . $ipCacheTmp);
 require_once __DIR__ . '/../lib/GeoIpCache.php';
+register_shutdown_function(static function () use ($ipCacheTmp) { @unlink($ipCacheTmp); });
 load_api('logs');
 
 $tenantId = current_user()['tenant_id'];
@@ -127,6 +132,26 @@ check($parsed['country'] === 'Japan (JP)', 'training_log_parse_raw: 国');
 check($parsed['isp'] === 'TestISP', 'training_log_parse_raw: ISP');
 check($parsed['as'] === 'AS12345 Test', 'training_log_parse_raw: AS');
 check(strpos($parsed['useragent'], 'Mozilla/5.0 Test') !== false, 'training_log_parse_raw: UserAgent(末尾)');
+
+// click(apache_access 生ログ)の国/ISP は raw にラベルがないので ip_cache.json から補完する。
+// テスト用にキャッシュへ既知IPを注入し、Apache combined 形式の raw で補完を固定する。
+$cacheForTest = weblog_load_ip_cache();
+$cacheForTest['198.51.100.7'] = ['country' => 'Japan (JP)', 'location' => 'Chiyoda, Tokyo, Japan',
+    'isp' => 'ClickISP', 'org' => 'ClickOrg', 'as' => 'AS64500 Click', 'hostname' => 'click.example.jp'];
+weblog_save_ip_cache($cacheForTest);
+$clickRaw = '198.51.100.7 - - [15/Jul/2026:09:59:00 +0900] "GET /link-1234567890.html HTTP/1.1" 200 '
+    . '6900 "https://filesend.cojp.online/link-1234567890.html" "Mozilla/5.0 (iPhone) ClickUA"';
+$pc = training_log_parse_raw($clickRaw);
+check($pc['ip'] === '198.51.100.7', 'click補完: IPを生ログから抽出');
+check($pc['country'] === 'Japan (JP)', 'click補完: 国をキャッシュから補完');
+check($pc['isp'] === 'ClickISP', 'click補完: ISPをキャッシュから補完');
+check($pc['as'] === 'AS64500 Click', 'click補完: ASをキャッシュから補完');
+check($pc['hostname'] === 'click.example.jp', 'click補完: ホスト名をキャッシュから補完');
+check(strpos($pc['useragent'], 'ClickUA') !== false, 'click補完: UAを生ログ末尾から抽出');
+// キャッシュに無い IP は空のまま(機械除外や再API通信はしない)。
+$clickRawUnknown = '203.0.113.222 - - [15/Jul/2026:09:59:00 +0900] "GET /link-1234567890.html HTTP/1.1" 200 6900 "-" "UA-x"';
+$pu = training_log_parse_raw($clickRawUnknown);
+check($pu['ip'] === '203.0.113.222' && $pu['country'] === '', 'click補完: 未キャッシュIPは国が空のまま');
 
 // 明細行の生成(キャンペーン別)。
 $_GET = ['action' => 'training_log_detail', 'campaign_id' => (string) $cid];

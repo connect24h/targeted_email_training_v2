@@ -367,6 +367,39 @@ function training_log_parse_raw(string $raw): array
             $out[$key] = trim($m[1]);
         }
     }
+    // click(apache_access 由来)の raw は v1 形式のラベルを持たず、Apache 生ログそのもの。
+    // その場合 country 等が空になるので、生ログから IP と UA を抜き、WebアクセスLog と
+    // 同じ ip_cache.json(GeoIpCache)を引いて国/ISP/組織/AS/ホスト名を補完する。
+    // auth(text_log 由来。Country ラベルあり)は上のパースで埋まるのでここは素通りする。
+    if ($out['country'] === '' && preg_match('/^(\S+) \S+ \S+ \[[^\]]+\] "/', $raw, $ma)) {
+        $out = training_log_enrich_from_access_log($raw, $ma[1], $out);
+    }
+    return $out;
+}
+
+/**
+ * Apache 生ログ由来(=click)の1行から IP/UA を抽出し、GeoIP キャッシュで
+ * 国/場所/ISP/組織/AS/ホスト名を補完する。キャッシュに無い IP は空のままにする
+ * (機械除外や再API通信はしない。キャッシュは bin/geoip_resolve.php や画面の
+ *  GeoIP取得で事前に埋まっている前提)。
+ */
+function training_log_enrich_from_access_log(string $raw, string $ip, array $out): array
+{
+    $out['ip'] = $ip;
+    // Apache combined の末尾フィールド "..." が UserAgent。
+    if (preg_match('/"([^"]*)"\s*$/', rtrim($raw), $mu)) {
+        $out['useragent'] = $mu[1] === '-' ? '' : $mu[1];
+    }
+    $cache = weblog_load_ip_cache();
+    $info = $cache[$ip] ?? null;
+    if (is_array($info)) {
+        $out['country']  = (string) ($info['country']  ?? '');
+        $out['location'] = (string) ($info['location'] ?? '');
+        $out['isp']      = (string) ($info['isp']      ?? '');
+        $out['org']      = (string) ($info['org']      ?? '');
+        $out['as']       = (string) ($info['as']       ?? '');
+        $out['hostname'] = (string) ($info['hostname'] ?? '');
+    }
     return $out;
 }
 
