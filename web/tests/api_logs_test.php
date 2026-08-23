@@ -182,6 +182,40 @@ if ($otherTid !== null) {
     check(count($leak) === 0, '明細: 他テナントに乱数が漏れない(分離)');
 }
 
+// 明細のシステム開封除外と人間の n/m 回目。ip_cache にクラウド/実回線IPを注入して固定。
+$cacheSys = weblog_load_ip_cache();
+$cacheSys['203.0.113.50'] = ['country' => 'United States (US)', 'isp' => 'Microsoft Corporation', 'org' => 'Azure', 'as' => 'AS8075'];
+$cacheSys['198.51.100.60'] = ['country' => 'Japan (JP)', 'isp' => 'NTT Docomo', 'org' => 'OCN', 'as' => 'AS4713'];
+weblog_save_ip_cache($cacheSys);
+$sysCid = 640;
+Db::run("INSERT INTO campaigns (id, tenant_id, name, status) VALUES (?,?,?,?)", [$sysCid, $tenantId, 'System Filter Fixture', 'done']);
+Db::run("INSERT INTO targets (id, tenant_id, email, name, status) VALUES (?,?,?,?,?)", [64001, $tenantId, 'sysfix@example.test', 'システム試験', 'active']);
+Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, send_status) VALUES (?,?,?,?)", [$sysCid, 64001, '6400000001', 'sent']);
+// 人間の click 2回(時間差) + システム(Azure)の click 1回。
+$mk = fn ($ip, $t) => "$ip - - [$t] \"GET /link-6400000001.html HTTP/1.1\" 200 100 \"https://filesend.cojp.online/link-6400000001.html\" \"UA\"";
+Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source, raw) VALUES (?,?,?,?,?,?,?)",
+    [$tenantId, $sysCid, '6400000001', 'click', '2026-07-15 10:00:00', 'apache_access', $mk('198.51.100.60', '15/Jul/2026:10:00:00 +0900')]);
+Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source, raw) VALUES (?,?,?,?,?,?,?)",
+    [$tenantId, $sysCid, '6400000001', 'click', '2026-07-15 14:00:00', 'apache_access', $mk('198.51.100.60', '15/Jul/2026:14:00:00 +0900')]);
+Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source, raw) VALUES (?,?,?,?,?,?,?)",
+    [$tenantId, $sysCid, '6400000001', 'click', '2026-07-15 10:00:05', 'apache_access', $mk('203.0.113.50', '15/Jul/2026:10:00:05 +0900')]);
+
+$_GET = ['action' => 'training_log_detail', 'campaign_id' => (string) $sysCid];
+$sysDefault = training_log_detail_rows($tenantId);
+check(count($sysDefault) === 2, '明細: 既定でシステム行を除外(人間click 2行のみ)');
+check(count(array_filter($sysDefault, fn ($r) => $r['is_system'])) === 0, '明細: 既定の結果にシステム行が無い');
+// 時刻昇順で 1/2, 2/2 回目が付く。
+$byTime = $sysDefault;
+usort($byTime, fn ($a, $b) => strcmp($a['timestamp'], $b['timestamp']));
+check($byTime[0]['human_seq'] === 1 && $byTime[0]['human_total'] === 2, '明細: 人間の1回目/全2回');
+check($byTime[1]['human_seq'] === 2 && $byTime[1]['human_total'] === 2, '明細: 人間の2回目/全2回');
+
+$_GET = ['action' => 'training_log_detail', 'campaign_id' => (string) $sysCid, 'exclude_system' => '0'];
+$sysAll = training_log_detail_rows($tenantId);
+check(count($sysAll) === 3, '明細: exclude_system=0 で全3行(システム含む)');
+check(count(array_filter($sysAll, fn ($r) => $r['is_system'])) === 1, '明細: システム行(Azure)が1行判定される');
+$_GET = [];
+
 // ============================================================
 // WebAccessLog — ログ行パース/フィルタ(実ファイル非依存)。
 // ============================================================

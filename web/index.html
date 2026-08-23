@@ -372,6 +372,10 @@
           <select class="form-select form-select-sm" id="logsTypeFilter" style="width:auto;display:none">
             <option value="">全タイプ</option>
           </select>
+          <div class="form-check form-check-inline" id="logsInclSystemWrap" style="display:none">
+            <input class="form-check-input" type="checkbox" id="logsInclSystem">
+            <label class="form-check-label small" for="logsInclSystem">システム開封も表示</label>
+          </div>
           <select class="form-select form-select-sm" id="logsSenderFilter" style="width:auto;display:none">
             <option value="">全送信元アカウント</option>
           </select>
@@ -568,7 +572,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=2238a9d8"></script>
+<script src="app.js?v=1d68017b"></script>
 <script src="assets/campaign-automations.js?v=b847062f"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 </body>

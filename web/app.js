@@ -594,11 +594,16 @@ const LOG_COLUMNS = {
     },
   },
   training_log_detail: {
-    headers: ['日時', '乱数', '重複', 'タイプ', '送信先メール', '氏名', '会社名', '本務役職', '役職カテゴリ',
+    headers: ['日時', '乱数', '区分', '開封回数', 'タイプ', '送信先メール', '氏名', '会社名', '本務役職', '役職カテゴリ',
       '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名'],
     cells: (r) => [
       esc(r.timestamp), esc(r.random),
-      r.duplicate ? `<span class="badge bg-warning text-dark">${r.duplicate_count}回</span>` : '',
+      // 区分: 人間 or システム(サンドボックス/SWG等。exclude_system=0 の時だけ混在)。
+      r.is_system ? '<span class="badge bg-secondary">装置</span>' : '<span class="badge bg-success">人間</span>',
+      // 開封回数: 人間アクセスの「n/m回目」。システム行は対象外なので空。
+      (!r.is_system && r.human_total > 1)
+        ? `<span class="badge bg-info text-dark">${r.human_seq}/${r.human_total}回目</span>`
+        : (!r.is_system && r.human_total === 1 ? '1回' : ''),
       logTypeBadge(r.type), esc(r.recipient_email), esc(r.fullname), esc(r.company), esc(r.position),
       esc(r.position_category), esc(r.email), esc(r.password), esc(r.ip), esc(r.country),
       esc(r.location), esc(r.isp), esc(r.org), esc(r.as), esc(r.hostname),
@@ -745,6 +750,9 @@ async function loadTrainingLogDetail() {
   const tp = $('#logsTypeFilter')?.value; if (tp) query.type = tp;
   const sd = logDateVal('#logsStartDate'); if (sd) query.start_date = sd;
   const ed = logDateVal('#logsEndDate'); if (ed) query.end_date = ed;
+  // 「システム開封を除外」チェック(既定ON)。外すとシステム(サンドボックス/SWG等)も表示。
+  const inclSys = $('#logsInclSystem')?.checked;
+  if (inclSys) query.exclude_system = '0';
   let data;
   try { data = await api('api/logs.php', { query }); }
   catch (e) { $('#logsBody').innerHTML = `<tr><td colspan="${def.headers.length}" class="text-center text-danger py-3">${esc(e.message)}</td></tr>`; return; }
@@ -1023,6 +1031,7 @@ function switchLogTab(type) {
 
   show('#logsStatusFilter', isTr);
   show('#logsTypeFilter', isTld);
+  show('#logsInclSystemWrap', isTld);
   show('#logsSenderFilter', isMd);
   show('#logsStartLabel', hasPeriod);
   show('#logsEndLabel', hasPeriod);
@@ -3304,6 +3313,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#logsApplyBtn')?.addEventListener('click', () => { logsState.webPage = 1; loadLogs(); });
   $('#logsStatusFilter')?.addEventListener('change', () => loadLogs());
   $('#logsTypeFilter')?.addEventListener('change', () => loadLogs());
+  $('#logsInclSystem')?.addEventListener('change', () => loadLogs());
   $('#logsSenderFilter')?.addEventListener('change', () => loadLogs());
   $('#logsKeyword')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { logsState.webPage = 1; loadLogs(); } });
   $('#logsPathFilter')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { logsState.webPage = 1; loadLogs(); } });

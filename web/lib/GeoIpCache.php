@@ -135,3 +135,36 @@ function weblog_resolve_ips(array $ips, int $limit = 0, int $sleepUs = 1500000, 
     if ($sinceFlush > 0) { weblog_save_ip_cache($cache); }
     return $calls;
 }
+
+/**
+ * IP が「システム/自動アクセス」(サンドボックス・SWG・メールセキュリティ・Teams/Skype 等)
+ * によるものかを、ip_cache.json の ISP/組織/AS で判定する(2026-08-23)。
+ *
+ * 訓練の開封判定で、人間の開封と機械の開封を分けるために使う。クラウド/ホスティング
+ * 事業者(Azure/AWS/GCP 等)や既知の検査基盤からのアクセスをシステムとみなす。
+ * ただし Cloudflare WARP と iCloud Private Relay は個人のプライバシー経路(=人間)なので
+ * 除外しない。キャッシュに無い IP は false(=人間扱い。安全側に倒し機械除外しすぎない)。
+ *
+ * $info を渡せばその場の解決結果で判定(キャッシュ再読込を避ける)。省略時はキャッシュを引く。
+ */
+function weblog_ip_is_system(string $ip, ?array $info = null): bool
+{
+    if ($info === null) {
+        $cache = weblog_load_ip_cache();
+        $info = $cache[$ip] ?? null;
+    }
+    if (!is_array($info)) { return false; }
+    $hay = strtolower(($info['isp'] ?? '') . ' ' . ($info['org'] ?? '') . ' ' . ($info['as'] ?? ''));
+    // 個人のプライバシー経路は人間扱い(誤って機械除外しない)。
+    if (strpos($hay, 'warp') !== false || strpos($hay, 'private relay') !== false) { return false; }
+    // クラウド/ホスティング/メール基盤/検査基盤の事業者名・ASキーワード。
+    $needles = [
+        'azure', 'amazon', 'aws', 'google llc', 'google cloud', 'microsoft',
+        'digitalocean', 'linode', 'ovh', 'hetzner', 'hostroyale', 'akamai',
+        'oracle cloud', 'alibaba', 'tencent', 'vultr', 'cloudflare',
+    ];
+    foreach ($needles as $n) {
+        if (strpos($hay, $n) !== false) { return true; }
+    }
+    return false;
+}

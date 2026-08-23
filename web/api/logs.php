@@ -470,11 +470,40 @@ function training_log_detail_rows(int $tenantId): array
         $rows = array_values(array_filter($rows, fn ($r) => $r['type'] === $typeFilter));
     }
 
+    // システム/自動アクセス(サンドボックス・SWG・Teams 等)を判定して各行に付与する。
+    // click(apache_access)は raw 先頭の IP を、auth は parsed['ip'] を使う。判定は
+    // ip_cache.json の ISP/AS ベース(WARP/iCloud Relay は人間扱い)。
+    foreach ($rows as &$r) {
+        $r['is_system'] = ($r['ip'] !== '') ? weblog_ip_is_system((string) $r['ip']) : false;
+    }
+    unset($r);
+
     // 乱数重複フラグ(同一乱数が複数行 = 複数回アクセス)。
     $counts = [];
     foreach ($rows as $r) {
         $rand = $r['random'];
         if ($rand !== '') { $counts[$rand] = ($counts[$rand] ?? 0) + 1; }
+    }
+    // 人間アクセスの通し番号: 同一乱数×人間(is_system=false)の行に、時刻昇順で
+    // 「m回中n回目」を付ける。時間差で複数回開いた人間を可視化する(システム行は数えない)。
+    $humanTotal = [];
+    foreach ($rows as $r) {
+        if (!$r['is_system'] && $r['random'] !== '') {
+            $humanTotal[$r['random']] = ($humanTotal[$r['random']] ?? 0) + 1;
+        }
+    }
+    // $rows は occurred_at 降順。昇順の通し番号にするため乱数ごとに逆から数える。
+    $humanSeen = [];
+    for ($i = count($rows) - 1; $i >= 0; $i--) {
+        $rand = $rows[$i]['random'];
+        if (!$rows[$i]['is_system'] && $rand !== '') {
+            $humanSeen[$rand] = ($humanSeen[$rand] ?? 0) + 1;
+            $rows[$i]['human_seq'] = $humanSeen[$rand];
+            $rows[$i]['human_total'] = $humanTotal[$rand] ?? 0;
+        } else {
+            $rows[$i]['human_seq'] = 0;
+            $rows[$i]['human_total'] = 0;
+        }
     }
     foreach ($rows as &$r) {
         $rand = $r['random'];
@@ -482,6 +511,12 @@ function training_log_detail_rows(int $tenantId): array
         $r['duplicate'] = $r['duplicate_count'] > 1;
     }
     unset($r);
+
+    // exclude_system=1(既定) はシステム行を除外。0 で全行返す(画面トグル用)。
+    $excludeSystem = !isset($_GET['exclude_system']) || $_GET['exclude_system'] !== '0';
+    if ($excludeSystem) {
+        $rows = array_values(array_filter($rows, fn ($r) => !$r['is_system']));
+    }
 
     return $rows;
 }
