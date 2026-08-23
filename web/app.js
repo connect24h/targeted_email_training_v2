@@ -662,6 +662,55 @@ function logStatusBadge(v) {
   return `<span class="badge ${cls}">${esc(v)}</span>`;
 }
 const logsState = { type: 'delivery', offset: 0, limit: 100 };
+
+// ログ管理テーブルの列見出しクリックソート(共通)。表示済みの tbody 行を並べ替える
+// DOM ベース方式で、各タブの cells 実装に依存しない。列のセル値から数値/日時/文字を
+// 自動判定して比較する。バッジ等のHTMLはテキスト内容(例「2/7回目」→数値2)で比較する。
+function makeLogTableSortable(headSel, bodySel) {
+  const head = $(headSel);
+  const body = $(bodySel);
+  if (!head || !body) return;
+  const ths = [...head.querySelectorAll('th')];
+  if (!ths.length) return;
+  // ソート用の値を取り出す: 日時 > 数値 > 文字 の順で判定。
+  const sortKey = (text) => {
+    const t = (text || '').trim();
+    // 日時 YYYY-MM-DD[ HH:MM[:SS]]
+    if (/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(t)) {
+      const ms = Date.parse(t.replace(' ', 'T'));
+      return { num: isNaN(ms) ? null : ms, str: t };
+    }
+    // 先頭に数値を含む(「2/7回目」「5059」「12回」等)→ 先頭数値で比較。
+    const m = t.match(/-?\d[\d,]*\.?\d*/);
+    if (m) return { num: parseFloat(m[0].replace(/,/g, '')), str: t };
+    return { num: null, str: t };
+  };
+  ths.forEach((th, idx) => {
+    th.style.cursor = 'pointer';
+    th.title = 'クリックで並び替え';
+    th.addEventListener('click', () => {
+      const cur = th.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+      ths.forEach((o) => { delete o.dataset.sortDir; o.querySelector('.sort-caret')?.remove(); });
+      th.dataset.sortDir = cur;
+      const caret = document.createElement('span');
+      caret.className = 'sort-caret text-muted small ms-1';
+      caret.textContent = cur === 'asc' ? '▲' : '▼';
+      th.appendChild(caret);
+      const rows = [...body.querySelectorAll('tr')].filter((tr) => tr.querySelectorAll('td').length === ths.length);
+      rows.sort((ra, rb) => {
+        const a = sortKey(ra.children[idx]?.textContent);
+        const b = sortKey(rb.children[idx]?.textContent);
+        let cmp;
+        if (a.num !== null && b.num !== null) cmp = a.num - b.num;
+        else if (a.num !== null) cmp = -1; // 数値を空文字より前に
+        else if (b.num !== null) cmp = 1;
+        else cmp = a.str.localeCompare(b.str, 'ja');
+        return cur === 'asc' ? cmp : -cmp;
+      });
+      rows.forEach((tr) => body.appendChild(tr));
+    });
+  });
+}
 async function renderLogs() {
   // キャンペーン絞込セレクトは画面を開くたびに毎回作り直す。
   // キャンペーンは随時追加されるためキャッシュしない(新規作成分がすぐ出るように)。
@@ -709,6 +758,7 @@ async function loadLogs() {
   $('#logsBody').innerHTML = rows.length
     ? rows.map((r) => `<tr>${def.cells(r).map((c) => `<td>${c ?? ''}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">ログはありません</td></tr>`;
+  makeLogTableSortable('#logsHead', '#logsBody');
   const from = rows.length ? logsState.offset + 1 : 0;
   $('#logsInfo').textContent = `${from}–${logsState.offset + rows.length} 件目（${logsState.limit} 件/ページ）`;
   $('#logsPrevBtn').disabled = logsState.offset === 0;
@@ -770,6 +820,7 @@ async function loadTrainingLogDetail() {
   $('#logsBody').innerHTML = rows.length
     ? rows.map((r) => `<tr>${def.cells(r).map((c) => `<td class="text-nowrap">${c ?? ''}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">対象データがありません</td></tr>`;
+  makeLogTableSortable('#logsHead', '#logsBody');
   const byType = data.by_type ? Object.entries(data.by_type).map(([k, v]) => `${k}:${v}`).join(' / ') : '';
   $('#logsInfo').textContent = `${data.count ?? rows.length} 件${byType ? '（' + byType + '）' : ''}`;
 }
@@ -803,6 +854,7 @@ async function loadCampaignFiles() {
   $('#logsBody').innerHTML = rows.length
     ? rows.map((r) => `<tr>${def.cells(r).map((c) => `<td class="text-nowrap">${c ?? ''}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">対象者がいません（キャンペーン未生成の可能性）。</td></tr>`;
+  makeLogTableSortable('#logsHead', '#logsBody');
   $('#logsInfo').textContent = `${data.count ?? rows.length} 名（base: ${esc(data.beacon_base || '')}）`;
 }
 // キャンペーン別 リンク/ビーコン ファイル一覧を CSV ダウンロード。
@@ -830,6 +882,7 @@ async function loadWebAccessLog() {
   $('#logsBody').innerHTML = rows.length
     ? rows.map((r) => `<tr>${def.cells(r).map((c) => `<td class="text-nowrap">${c ?? ''}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">該当するアクセスログがありません</td></tr>`;
+  makeLogTableSortable('#logsHead', '#logsBody');
   const pg = data.pagination || {};
   $('#logsInfo').textContent = `全 ${pg.total_count ?? rows.length} 件中 ${rows.length} 件表示（ページ ${pg.page ?? 1}/${pg.total_pages ?? 1}、最大5000件/ページ）`;
   // ページャ(webaccess専用)。
@@ -912,6 +965,7 @@ async function loadTrainingResults() {
   $('#logsBody').innerHTML = rows.length
     ? rows.map((r) => `<tr>${def.cells(r).map((c) => `<td>${c ?? ''}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">対象データがありません</td></tr>`;
+  makeLogTableSortable('#logsHead', '#logsBody');
   $('#logsInfo').textContent = `${rows.length} 件`;
 }
 // 訓練結果ログを CSV ダウンロード。
@@ -969,6 +1023,7 @@ async function loadReplyMaildir() {
         return `<tr${cls}>${def.cells(r).map((c) => `<td>${c ?? ''}</td>`).join('')}</tr>`;
       }).join('')
     : `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">受信メールはありません</td></tr>`;
+  makeLogTableSortable('#logsHead', '#logsBody');
   const unreadable = rows.filter((r) => r.unreadable).length;
   const info = $('#logsInfo');
   info.textContent = `${data.total ?? rows.length} 件（送信元アカウントの受信トレイを直接参照）`;
