@@ -833,6 +833,30 @@ function maildir_unreadable_entry(string $filepath): array
  * 返信者一覧を計算する(list/csv 共通)。$_GET の sender/start_date/end_date/q でフィルタ。
  * 戻り値: ['mails' => [...], 'counts' => [...], 'accounts' => [...]]。
  */
+/**
+ * ?campaign_id 指定時、そのキャンペーンの送信元アドレス群(小文字)を返す。
+ * campaigns.from_address と campaign_contents.from_address の両方を集める
+ * (コンテンツ別に送信元が異なるキャンペーンがあるため)。未指定なら null(=絞らない)。
+ * 返信者タブは superadmin 限定・全テナント横断のためテナント検証はしない。
+ */
+function reply_maildir_campaign_from_addresses(): ?array
+{
+    if (!isset($_GET['campaign_id']) || $_GET['campaign_id'] === '') { return null; }
+    $cid = (int) $_GET['campaign_id'];
+    if ($cid < 1) { json_error('campaign_id が不正です', 400); }
+    $emails = [];
+    foreach (Db::all('SELECT from_address FROM campaigns WHERE id = ?', [$cid]) as $r) {
+        $a = strtolower(trim((string) ($r['from_address'] ?? '')));
+        if ($a !== '') { $emails[$a] = true; }
+    }
+    foreach (Db::all('SELECT from_address FROM campaign_contents WHERE campaign_id = ?', [$cid]) as $r) {
+        $a = strtolower(trim((string) ($r['from_address'] ?? '')));
+        if ($a !== '') { $emails[$a] = true; }
+    }
+    // 送信元が1つも設定されていない場合は空配列を返す(=どの Maildir にも一致せず0件)。
+    return array_keys($emails);
+}
+
 function reply_maildir_compute(): array
 {
     $maildirs = discover_maildirs();
@@ -841,11 +865,22 @@ function reply_maildir_compute(): array
     $endTs   = (isset($_GET['end_date'])   && $_GET['end_date']   !== '') ? strtotime((string) $_GET['end_date'])   : null;
     $keyword = isset($_GET['q']) && is_string($_GET['q']) ? trim($_GET['q']) : '';
 
+    // campaign_id 指定時は、そのキャンペーンの送信元アドレス(=返信の宛先)に届いた
+    // Maildir だけに絞る。返信は訓練の from_address 宛に届くため、キャンペーンの
+    // from_address(campaigns + campaign_contents 両方)と一致する Maildir アカウントの
+    // 受信メールだけを「そのキャンペーンの返信」として扱う(2026-08-23)。
+    // 返信者タブは superadmin 限定・全テナント横断なのでテナント検証はしない。
+    $campaignFromEmails = reply_maildir_campaign_from_addresses();
+
     $allMails = [];
     $counts = [];
     foreach ($maildirs as $key => $config) {
         $counts[$key] = 0;
         if ($sender !== '' && $sender !== $key) { continue; }
+        // campaign_id 指定時、この Maildir のアドレスがキャンペーン送信元でなければ除外。
+        if ($campaignFromEmails !== null && !in_array(strtolower($config['email']), $campaignFromEmails, true)) {
+            continue;
+        }
         $mails = maildir_list($config['maildir']);
         foreach ($mails as &$mail) {
             $mail['sender_account'] = $key;

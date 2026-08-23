@@ -288,6 +288,31 @@ check($mails2[0]['unreadable'] === false || $mails2[1]['unreadable'] === false, 
 @rmdir($tmpMaildir . '/cur');
 @rmdir($tmpMaildir);
 
+// 返信者のキャンペーン絞り込み: reply_maildir_campaign_from_addresses が
+// campaigns.from_address と campaign_contents.from_address の両方を小文字集合で返す。
+check(function_exists('reply_maildir_campaign_from_addresses'),
+    'reply_maildir_campaign_from_addresses が定義されている');
+$_GET = [];
+check(reply_maildir_campaign_from_addresses() === null,
+    'campaign_id 未指定なら null(絞らない)');
+Db::run("INSERT INTO campaigns (id, tenant_id, name, status, from_address) VALUES
+    (720, ?, 'Reply Filter Fixture', 'draft', 'Kanri@Gwin.gr.cojp.online')", [$tenantId]);
+Db::run("INSERT INTO campaign_contents (campaign_id, content_no, from_address) VALUES
+    (720, 1, 'health_kanri@gwin.gr.cojp.online')");
+Db::run("INSERT INTO campaign_contents (campaign_id, content_no, from_address) VALUES (720, 2, '')");
+$_GET = ['campaign_id' => '720'];
+$froms = reply_maildir_campaign_from_addresses();
+check(is_array($froms) && in_array('kanri@gwin.gr.cojp.online', $froms, true),
+    '送信元アドレスを小文字化して返す');
+check(in_array('health_kanri@gwin.gr.cojp.online', $froms, true),
+    'campaign_contents 側の送信元も集める');
+check(count($froms) === 2, '空の from_address は除外し重複なく集める');
+// 送信元未設定のキャンペーンは空配列(=どの Maildir にも一致せず0件)。
+Db::run("INSERT INTO campaigns (id, tenant_id, name, status, from_address) VALUES (721, ?, 'NoFrom', 'draft', '')", [$tenantId]);
+$_GET = ['campaign_id' => '721'];
+check(reply_maildir_campaign_from_addresses() === [], '送信元未設定なら空配列');
+$_GET = [];
+
 // ロールゲート(ディスパッチャ責務): reply_maildir は superadmin 限定。
 // ディスパッチャは logs.php の try ブロック内なので、ここでは関数の存在のみ確認。
 check(function_exists('logs_handle_reply_maildir'), 'reply_maildir ハンドラが定義されている');

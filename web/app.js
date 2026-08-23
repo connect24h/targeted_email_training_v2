@@ -930,6 +930,8 @@ async function loadReplyMaildir() {
   $('#logsHead').innerHTML = `<tr>${def.headers.map((h) => `<th>${h}</th>`).join('')}</tr>`;
   $('#logsBody').innerHTML = `<tr><td colspan="${def.headers.length}" class="text-center text-muted py-3">読込中…</td></tr>`;
   const query = { action: 'reply_maildir' };
+  // キャンペーン選択時は、その送信元アドレス宛に届いた受信メールだけに絞る。
+  const cid = $('#logsCampaignFilter')?.value; if (cid) query.campaign_id = cid;
   const sender = $('#logsSenderFilter')?.value; if (sender) query.sender = sender;
   const kw = $('#logsKeyword')?.value.trim(); if (kw) query.q = kw;
   const sd = logDateVal('#logsStartDate'); if (sd) query.start_date = sd;
@@ -986,6 +988,7 @@ async function viewMailBody(account, filename, meta) {
 // 返信者(受信メール)一覧を CSV ダウンロード。
 function downloadReplyMaildirCsv() {
   const qs = new URLSearchParams({ action: 'reply_maildir_csv' });
+  const cid = $('#logsCampaignFilter')?.value; if (cid) qs.set('campaign_id', cid);
   const sender = $('#logsSenderFilter')?.value; if (sender) qs.set('sender', sender);
   const kw = $('#logsKeyword')?.value.trim(); if (kw) qs.set('q', kw);
   const sd = logDateVal('#logsStartDate'); if (sd) qs.set('start_date', sd);
