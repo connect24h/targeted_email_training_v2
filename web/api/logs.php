@@ -857,6 +857,29 @@ function reply_maildir_campaign_from_addresses(): ?array
     return array_keys($emails);
 }
 
+/**
+ * Maildir のアドレスが、キャンペーン送信元アドレス群のいずれかに該当するか。
+ * まず完全一致(大小無視)、ダメならローカルパート(@より前)一致でフォールバックする。
+ * 訓練の from_address のドメインと、返信を受け取る実 Maildir のドメインが異なる
+ * 配送があるため(例: 送信元 event-support@mail.cojp.online → 返信は
+ * event-support@gwin.gr.cojp.online の Maildir に届く)。
+ */
+function reply_maildir_email_matches(string $maildirEmail, array $fromEmails): bool
+{
+    $md = strtolower(trim($maildirEmail));
+    if (in_array($md, $fromEmails, true)) { return true; }
+    $localOf = static function (string $e): string {
+        $at = strpos($e, '@');
+        return $at === false ? $e : substr($e, 0, $at);
+    };
+    $mdLocal = $localOf($md);
+    if ($mdLocal === '') { return false; }
+    foreach ($fromEmails as $from) {
+        if ($localOf($from) === $mdLocal) { return true; }
+    }
+    return false;
+}
+
 function reply_maildir_compute(): array
 {
     $maildirs = discover_maildirs();
@@ -877,8 +900,8 @@ function reply_maildir_compute(): array
     foreach ($maildirs as $key => $config) {
         $counts[$key] = 0;
         if ($sender !== '' && $sender !== $key) { continue; }
-        // campaign_id 指定時、この Maildir のアドレスがキャンペーン送信元でなければ除外。
-        if ($campaignFromEmails !== null && !in_array(strtolower($config['email']), $campaignFromEmails, true)) {
+        // campaign_id 指定時、この Maildir がキャンペーン送信元と一致しなければ除外。
+        if ($campaignFromEmails !== null && !reply_maildir_email_matches($config['email'], $campaignFromEmails)) {
             continue;
         }
         $mails = maildir_list($config['maildir']);

@@ -313,6 +313,20 @@ $_GET = ['campaign_id' => '721'];
 check(reply_maildir_campaign_from_addresses() === [], '送信元未設定なら空配列');
 $_GET = [];
 
+// Maildir アドレスとキャンペーン送信元の照合: 完全一致 → ローカルパート一致フォールバック。
+check(function_exists('reply_maildir_email_matches'), 'reply_maildir_email_matches が定義されている');
+check(reply_maildir_email_matches('kanri@gwin.gr.cojp.online', ['kanri@gwin.gr.cojp.online']) === true,
+    '照合: 完全一致');
+check(reply_maildir_email_matches('KANRI@Gwin.gr.cojp.online', ['kanri@gwin.gr.cojp.online']) === true,
+    '照合: 大小無視で完全一致');
+// 送信元 event-support@mail.cojp.online の返信が event-support@gwin.gr.cojp.online の Maildir に届くケース。
+check(reply_maildir_email_matches('event-support@gwin.gr.cojp.online', ['event-support@mail.cojp.online']) === true,
+    '照合: ドメイン違いでもローカルパート一致で拾う');
+check(reply_maildir_email_matches('other@gwin.gr.cojp.online', ['kanri@gwin.gr.cojp.online']) === false,
+    '照合: ローカルパートも違えば不一致');
+check(reply_maildir_email_matches('kanri@a.com', ['keiri@b.com', 'kanri@c.com']) === true,
+    '照合: 複数送信元のいずれかにローカルパート一致すれば真');
+
 // ロールゲート(ディスパッチャ責務): reply_maildir は superadmin 限定。
 // ディスパッチャは logs.php の try ブロック内なので、ここでは関数の存在のみ確認。
 check(function_exists('logs_handle_reply_maildir'), 'reply_maildir ハンドラが定義されている');
