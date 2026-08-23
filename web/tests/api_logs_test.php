@@ -214,6 +214,56 @@ $_GET = ['action' => 'training_log_detail', 'campaign_id' => (string) $sysCid, '
 $sysAll = training_log_detail_rows($tenantId);
 check(count($sysAll) === 3, '明細: exclude_system=0 で全3行(システム含む)');
 check(count(array_filter($sysAll, fn ($r) => $r['is_system'])) === 1, '明細: システム行(Azure)が1行判定される');
+// 開封回数の分母は人間のみ。システム1回が混在しても human_total は人間2回のまま
+// (人間なのに 5/10 のようにシステム込みの分母にならないことを固定)。
+foreach ($sysAll as $r) {
+    if ($r['is_system']) {
+        check($r['human_total'] === 0 && $r['human_seq'] === 0, '明細: システム行は開封回数を持たない(ht=0,seq=0)');
+    } else {
+        check($r['human_total'] === 2, '明細: 人間行の分母はシステムを含まず人間2回(1回のシステムを数えない)');
+        check($r['human_seq'] >= 1 && $r['human_seq'] <= 2, '明細: 人間の通し番号は1..2(分母超えない)');
+    }
+}
+
+// ケース: システムのみ(人間0回)。開封回数を付けず、既定表示では行ごと消える。
+Db::run("INSERT INTO targets (id, tenant_id, email, name, status) VALUES (?,?,?,?,?)", [64002, $tenantId, 'sysonly@example.test', 'システムのみ', 'active']);
+Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, send_status) VALUES (?,?,?,?)", [$sysCid, 64002, '6400000002', 'sent']);
+Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source, raw) VALUES (?,?,?,?,?,?,?)",
+    [$tenantId, $sysCid, '6400000002', 'click', '2026-07-15 09:00:00', 'apache_access', $mk('203.0.113.50', '15/Jul/2026:09:00:00 +0900')]);
+Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source, raw) VALUES (?,?,?,?,?,?,?)",
+    [$tenantId, $sysCid, '6400000002', 'click', '2026-07-15 09:00:05', 'apache_access', $mk('203.0.113.50', '15/Jul/2026:09:00:05 +0900')]);
+// ケース: 人間3回。分母が3になり通し番号1..3。
+Db::run("INSERT INTO targets (id, tenant_id, email, name, status) VALUES (?,?,?,?,?)", [64003, $tenantId, 'human3@example.test', '人間3回', 'active']);
+Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, send_status) VALUES (?,?,?,?)", [$sysCid, 64003, '6400000003', 'sent']);
+foreach (['08:00:00', '09:30:00', '11:00:00'] as $hhmmss) {
+    Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source, raw) VALUES (?,?,?,?,?,?,?)",
+        [$tenantId, $sysCid, '6400000003', 'click', "2026-07-15 {$hhmmss}", 'apache_access', $mk('198.51.100.60', "15/Jul/2026:{$hhmmss} +0900")]);
+}
+
+$_GET = ['action' => 'training_log_detail', 'campaign_id' => (string) $sysCid];
+$sysDefault2 = training_log_detail_rows($tenantId);
+$onlyRows = array_filter($sysDefault2, fn ($r) => $r['random'] === '6400000002');
+check(count($onlyRows) === 0, '明細: システムのみの対象者は既定表示で0行(開封回数なし)');
+$h3 = array_values(array_filter($sysDefault2, fn ($r) => $r['random'] === '6400000003'));
+check(count($h3) === 3, '明細: 人間3回は3行');
+foreach ($h3 as $r) {
+    check($r['human_total'] === 3, '明細: 人間3回の分母は3');
+}
+$seqs = array_map(fn ($r) => $r['human_seq'], $h3);
+sort($seqs);
+check($seqs === [1, 2, 3], '明細: 人間3回の通し番号は1,2,3(重複なく連番)');
+
+// 注: 同一 tracking_id・同一 event_type・同一秒の多重行は events の
+// UNIQUE(tracking_id,event_type,occurred_at) 制約で発生し得ないため、
+// human_seq の同一秒順序ズレは構造的に起きない(テスト不要)。
+
+// weblog_ip_is_system 単体: needles(クラウド)は true、WARP/Relay/実回線は false、未解決は false。
+check(weblog_ip_is_system('x', ['isp' => 'Microsoft Corporation', 'org' => 'Azure', 'as' => 'AS8075']) === true, 'is_system: Azure/Microsoft は true');
+check(weblog_ip_is_system('x', ['isp' => 'Amazon.com, Inc.', 'org' => 'AWS', 'as' => 'AS16509']) === true, 'is_system: Amazon/AWS は true');
+check(weblog_ip_is_system('x', ['isp' => 'NTT Docomo', 'org' => 'OCN', 'as' => 'AS4713']) === false, 'is_system: 実回線(NTT) は false');
+check(weblog_ip_is_system('x', ['isp' => 'Cloudflare, Inc.', 'org' => 'Cloudflare WARP', 'as' => 'AS13335']) === false, 'is_system: Cloudflare WARP は人間(false)');
+check(weblog_ip_is_system('x', ['isp' => 'Akamai', 'org' => 'iCloud Private Relay', 'as' => 'AS36183']) === false, 'is_system: iCloud Private Relay は人間(false)');
+check(weblog_ip_is_system('x', null) === false, 'is_system: 未解決(info=null)は false(人間扱い)');
 $_GET = [];
 
 // ============================================================

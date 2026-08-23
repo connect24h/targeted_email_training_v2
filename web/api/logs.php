@@ -466,6 +466,9 @@ function training_log_detail_rows(int $tenantId): array
         ];
     }
 
+    // type フィルタは human_total/human_seq 計算(下記)より前に適用する。よって type で
+    // 絞り込むと、開封回数はその type 内(例: link_click だけ)の人間回数になる。
+    // 「クリックと認証を跨いだ通算開封回数」ではない点に注意。
     if ($typeFilter !== '') {
         $rows = array_values(array_filter($rows, fn ($r) => $r['type'] === $typeFilter));
     }
