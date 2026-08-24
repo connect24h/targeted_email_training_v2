@@ -175,8 +175,21 @@ function renderCurrentView() { const fn = VIEWS[State.view]; if (fn) fn().catch(
 
 /* ========== ダッシュボード ========== */
 let dashChart = null;
+// 本番/テスト フィルタ: prod=本番のみ(既定・日常の確認は本番数値) / test=テストのみ / all=全部。
+let dashTestFilter = 'prod';
+function setDashTestFilter(v) { dashTestFilter = v; renderDashboard(); }
 async function renderDashboard() {
-  const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+  const { campaigns: allCampaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+  const filterBar = document.getElementById('dashFilterBar');
+  if (filterBar) {
+    const btn = (v, label) => `<button class="btn btn-sm ${dashTestFilter === v ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setDashTestFilter('${v}')">${label}</button>`;
+    filterBar.innerHTML = `<div class="btn-group btn-group-sm">${btn('prod', '本番のみ')}${btn('test', 'テストのみ')}${btn('all', '全部')}</div>`;
+  }
+  const campaigns = allCampaigns.filter((c) => {
+    if (dashTestFilter === 'prod') return !Number(c.is_test);
+    if (dashTestFilter === 'test') return Number(c.is_test);
+    return true; // all
+  });
   const total = campaigns.length;
   const running = campaigns.filter((c) => c.status === 'running' || c.status === 'scheduled').length;
   const done = campaigns.filter((c) => c.status === 'done').length;

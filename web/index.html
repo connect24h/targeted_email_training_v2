@@ -77,7 +77,10 @@
 
       <!-- ダッシュボード -->
       <section data-panel="dashboard" class="view-panel">
-        <h5 class="mb-3"><i class="bi bi-speedometer2 me-1"></i>ダッシュボード</h5>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-speedometer2 me-1"></i>ダッシュボード</h5>
+          <div id="dashFilterBar"></div>
+        </div>
         <div class="row g-3 mb-4" id="kpiRow"></div>
         <div class="card">
           <div class="card-header">キャンペーン別 反応状況</div>
@@ -576,7 +579,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=6befcc94"></script>
+<script src="app.js?v=1235d975"></script>
 <script src="assets/campaign-automations.js?v=b847062f"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 </body>
