@@ -1809,6 +1809,11 @@ let reportTimelineChart = null;
 let reportSelectedId = null;
 let reportCommitCampaignId = null;
 function pct(v) { return `${(Number(v) || 0).toFixed(1)}%`; }
+// 数と率の併記セル。率が null(分母0で未定義)のときは数だけを出す。
+function countRate(count, rate) { const c = Number(count) || 0; return rate === null ? `${c}` : `${c} <span class="small text-muted">(${pct(rate)})</span>`; }
+// 認証率 = 認証数 ÷ クリック数(2026-08-24 に定義を統一)。クリック0のときは null(未定義)。
+// 従来の「分母=サイト表示数」だと表ごとに定義が揺れて誤読するため、全テーブルこの定義で表示する。
+function authRateOf(auth, clicks) { const c = Number(clicks) || 0; return c > 0 ? (Number(auth) || 0) / c * 100 : null; }
 function rateClass(v, warn, danger) { const n = Number(v) || 0; return n >= danger ? 'val-danger' : n >= warn ? 'val-warning' : 'val-success'; }
 // 報告率は「高いほど良い」ので rateClass とは色の向きが逆になる。
 // 失敗率と同じ関数を使い回すと、よく報告している部署が赤く出て判断を誤る。
@@ -1835,9 +1840,9 @@ async function renderReports() {
     return `<tr style="cursor:pointer" onclick="showReportDetail(${c.id})">
       <td>${numById[c.id]}</td><td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td><td>${s.target_count}</td>
       <td>${pct(s.sent_rate)}</td>
-      <td class="${rateClass(s.open_rate,25,50)}">${pct(s.open_rate)}</td>
-      <td class="${rateClass(s.click_rate,15,35)}">${pct(s.click_rate)}</td>
-      <td class="${rateClass(s.auth_rate,5,20)}">${pct(s.auth_rate)}</td>
+      <td class="${rateClass(s.open_rate,25,50)}">${countRate(s.open_count, s.open_rate)}</td>
+      <td class="${rateClass(s.click_rate,15,35)}">${countRate(s.click_count, s.click_rate)}</td>
+      <td class="${rateClass(authRateOf(s.auth_count, s.click_count) ?? 0,5,20)}">${countRate(s.auth_count, authRateOf(s.auth_count, s.click_count))}</td>
       <td><i class="bi bi-chevron-right"></i></td>
     </tr>`;
   }).join('') : emptyRow(8);
@@ -1895,26 +1900,25 @@ async function renderReportDetail(campaignId) {
   ['reportStartDate', 'reportEndDate', 'reportPeriodBtn', 'reportPeriodClearBtn'].forEach((id) => {
     const el = $('#' + id); if (el) el.disabled = committed;
   });
-  // 会社別
+  // 会社別(数と率の併記。表示率/クリック率の分母=数、認証率の分母=クリック数)
   $('#reportByCompany').innerHTML = (d.by_company || []).length
     ? d.by_company.map((r) => `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
-        <td class="${rateClass(r.beacon_rate,25,50)}">${r.beacon_opened}</td>
-        <td>${r.link_clicked}</td>
-        <td class="${rateClass(r.auth_rate,5,20)}">${r.auth_count}</td>
+        <td class="${rateClass(r.beacon_rate,25,50)}">${countRate(r.beacon_opened, r.beacon_rate)}</td>
+        <td class="${rateClass(r.link_rate,15,35)}">${countRate(r.link_clicked, r.link_rate)}</td>
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
         <td class="${goodRateClass(r.report_rate,5,15)}">${Number(r.report_count) || 0}</td></tr>`).join('')
     : emptyRow(6);
-  // 役職別(率表示)
+  // 役職別(数と率の併記。報告率は判断材料にならないため削除・2026-08-24)
   $('#reportByPosition').innerHTML = (d.by_position || []).length
     ? d.by_position.map((r) => `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
-        <td class="${rateClass(r.beacon_rate,25,50)}">${pct(r.beacon_rate)}</td>
-        <td class="${rateClass(r.auth_rate,5,20)}">${pct(r.auth_rate)}</td>
-        <td class="${goodRateClass(r.report_rate,5,15)}">${pct(r.report_rate)}</td></tr>`).join('')
-    : emptyRow(5);
-  // コンテンツ別(率表示)
+        <td class="${rateClass(r.beacon_rate,25,50)}">${countRate(r.beacon_opened, r.beacon_rate)}</td>
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
+    : emptyRow(4);
+  // コンテンツ別(数と率の併記)
   $('#reportByContent').innerHTML = (d.by_content || []).length
     ? d.by_content.map((r) => `<tr><td>${esc(r.content_no)}</td><td>${r.count}</td>
-        <td class="${rateClass(r.beacon_rate,25,50)}">${pct(r.beacon_rate)}</td>
-        <td class="${rateClass(r.auth_rate,5,20)}">${pct(r.auth_rate)}</td></tr>`).join('')
+        <td class="${rateClass(r.beacon_rate,25,50)}">${countRate(r.beacon_opened, r.beacon_rate)}</td>
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
     : emptyRow(4);
   // 日別タイムライン(累積 beacon/auth)
   const tl = d.timeline || [];
@@ -1966,6 +1970,15 @@ async function renderReportBeacons(campaignId) {
   }
 }
 // レポート確定(コミット): 現時点の集計値を固定し、以後変更されないようにする
+/** レポートを Excel (.xlsx) でダウンロードする。 */
+function exportReportXlsx() {
+  if (!reportSelectedId) { toast('先にキャンペーンを選択してください', 'warn'); return; }
+  const tid = State.activeTenantId || State.user?.tenant_id;
+  const url = `api/report.php?action=export_xlsx&campaign_id=${reportSelectedId}` + (tid ? `&tenant_id=${tid}` : '');
+  // 認証クッキー付きで直接ダウンロードさせる(API は Content-Disposition: attachment で返す)
+  window.location.href = url;
+}
+
 async function commitReport() {
   const id = reportCommitCampaignId;
   if (!id) return;
@@ -3347,6 +3360,7 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#reportStartDate').value = ''; $('#reportEndDate').value = '';
     if (reportSelectedId) renderReportDetail(reportSelectedId);
   });
+  $('#reportExportBtn')?.addEventListener('click', exportReportXlsx);
   $('#reportCommitBtn')?.addEventListener('click', commitReport);
   $('#reportUncommitBtn')?.addEventListener('click', uncommitReport);
   $('#logsTabs')?.addEventListener('click', (e) => {

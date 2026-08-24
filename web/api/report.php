@@ -1,6 +1,7 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__."/../lib/EventIngest.php";
 require_once __DIR__."/../lib/EduAutoEnroll.php";
+require_once __DIR__."/../lib/SimpleXlsx.php";
 
 function report_json_body(): array
 {
@@ -800,6 +801,129 @@ function report_handle_risk_by_company(): never
     json_out(['success' => true, 'computed_date' => $computedDate, 'companies' => $rows]);
 }
 
+/**
+ * レポートを Excel (.xlsx) でダウンロードする。
+ * 5シート構成: サマリー / 会社別 / 役職別 / コンテンツ別 / 日別タイムライン。
+ * ビーコン別明細はユーザー指示で除外。
+ */
+function report_handle_export_xlsx(): never
+{
+    $user = require_role('viewer');
+    $campaignId = report_query_int('campaign_id');
+    if ($campaignId === null) {
+        json_error('campaign_id は必須です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    assert_campaign_owned($campaignId, $tenantId);
+
+    // キャンペーン名(ファイル名に使う)
+    $campaign = Db::one('SELECT name FROM campaigns WHERE id = ? AND tenant_id = ?', [$campaignId, $tenantId]);
+    $campaignName = $campaign ? (string) $campaign['name'] : 'campaign_' . $campaignId;
+
+    // 確定済みスナップショットがあればそれを使う(数値固定)。なければリアルタイム集計。
+    $snap = report_snapshot_of($campaignId, $tenantId);
+    if ($snap !== null) {
+        $d = json_decode((string) $snap['payload'], true);
+    }
+    if (!isset($d) || !is_array($d)) {
+        $d = report_compute_detail($campaignId, $tenantId, '', []);
+    }
+
+    $xlsx = new SimpleXlsx();
+
+    // ---- シート1: サマリー ----
+    $s = $d['summary'] ?? [];
+    $summaryRows = [
+        ['項目', '値'],
+        ['キャンペーン名', $campaignName],
+        ['対象者数', (int) ($s['count'] ?? 0)],
+        ['サイト表示数', (int) ($s['beacon_opened'] ?? 0)],
+        ['サイト表示率 (%)', (float) ($s['beacon_rate'] ?? 0)],
+        ['クリック数', (int) ($s['link_clicked'] ?? 0)],
+        ['クリック率 (%)', (float) ($s['link_rate'] ?? 0)],
+        ['認証数', (int) ($s['auth_count'] ?? 0)],
+        ['認証率 (認証/クリック %)', (int) ($s['link_clicked'] ?? 0) > 0
+            ? round((int) ($s['auth_count'] ?? 0) / (int) $s['link_clicked'] * 100, 1)
+            : 0],
+        ['報告数', (int) ($s['report_count'] ?? 0)],
+        ['報告率 (%)', (float) ($s['report_rate'] ?? 0)],
+        ['生成日時', $d['generated_at'] ?? date('Y-m-d H:i:s')],
+    ];
+    $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
+
+    // ---- シート2: 会社別 ----
+    $companyRows = [['会社', '対象数', '表示数', '表示率 (%)', 'クリック数', 'クリック率 (%)', '認証数', '認証率 (認証/クリック %)', '報告数']];
+    foreach (($d['by_company'] ?? []) as $r) {
+        $lc = (int) ($r['link_clicked'] ?? 0);
+        $ac = (int) ($r['auth_count'] ?? 0);
+        $companyRows[] = [
+            (string) ($r['company'] ?? ''),
+            (int) ($r['count'] ?? 0),
+            (int) ($r['beacon_opened'] ?? 0),
+            (float) ($r['beacon_rate'] ?? 0),
+            $lc,
+            (float) ($r['link_rate'] ?? 0),
+            $ac,
+            $lc > 0 ? round($ac / $lc * 100, 1) : 0,
+            (int) ($r['report_count'] ?? 0),
+        ];
+    }
+    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 10, 3 => 12, 4 => 12, 5 => 14, 6 => 10, 7 => 22, 8 => 10]);
+
+    // ---- シート3: 役職別 ----
+    $posRows = [['役職', '対象数', '表示数', '表示率 (%)', '認証数', '認証率 (認証/クリック %)']];
+    foreach (($d['by_position'] ?? []) as $r) {
+        $lc = (int) ($r['link_clicked'] ?? 0);
+        $ac = (int) ($r['auth_count'] ?? 0);
+        $posRows[] = [
+            (string) ($r['position'] ?? ''),
+            (int) ($r['count'] ?? 0),
+            (int) ($r['beacon_opened'] ?? 0),
+            (float) ($r['beacon_rate'] ?? 0),
+            $ac,
+            $lc > 0 ? round($ac / $lc * 100, 1) : 0,
+        ];
+    }
+    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 10, 3 => 14, 4 => 10, 5 => 22]);
+
+    // ---- シート4: コンテンツ別 ----
+    $contentRows = [['コンテンツNo', '対象数', '表示数', '表示率 (%)', '認証数', '認証率 (認証/クリック %)']];
+    foreach (($d['by_content'] ?? []) as $r) {
+        $lc = (int) ($r['link_clicked'] ?? 0);
+        $ac = (int) ($r['auth_count'] ?? 0);
+        $contentRows[] = [
+            (string) ($r['content_no'] ?? ''),
+            (int) ($r['count'] ?? 0),
+            (int) ($r['beacon_opened'] ?? 0),
+            (float) ($r['beacon_rate'] ?? 0),
+            $ac,
+            $lc > 0 ? round($ac / $lc * 100, 1) : 0,
+        ];
+    }
+    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 10, 2 => 10, 3 => 14, 4 => 10, 5 => 22]);
+
+    // ---- シート5: 日別タイムライン ----
+    $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];
+    foreach (($d['timeline'] ?? []) as $t) {
+        $tlRows[] = [
+            (string) ($t['date'] ?? ''),
+            (int) ($t['beacon'] ?? 0),
+            (int) ($t['auth'] ?? 0),
+            (int) ($t['cum_beacon'] ?? 0),
+            (int) ($t['cum_auth'] ?? 0),
+        ];
+    }
+    $xlsx->addSheet('日別タイムライン', $tlRows, [0 => 14, 1 => 14, 2 => 10, 3 => 14, 4 => 14]);
+
+    // ファイル名: キャンペーン名を安全にする
+    $safeName = preg_replace('/[^\p{L}\p{N}_\-]/u', '_', $campaignName);
+    $safeName = mb_substr($safeName, 0, 60);
+    $filename = 'report_' . $safeName . '_' . date('Ymd') . '.xlsx';
+
+    audit('report.export_xlsx', 'campaign_id=' . $campaignId);
+    $xlsx->download($filename);
+}
+
 try {
     $body = report_json_body();
     $action = $_GET['action'] ?? ($body['action'] ?? '');
@@ -834,6 +958,9 @@ try {
     }
     if ($action === 'uncommit' && $method === 'POST') {
         report_handle_uncommit();
+    }
+    if ($action === 'export_xlsx' && $method === 'GET') {
+        report_handle_export_xlsx();
     }
     json_error('不正なアクション', 400);
 } catch (Throwable $e) {
