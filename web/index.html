@@ -151,6 +151,9 @@
           </table></div>
         </div>
         <div id="reportDetail" class="d-none">
+          <div class="d-flex justify-content-end mb-2 gap-2">
+            <button class="btn btn-sm btn-outline-success" id="reportExportBtn"><i class="bi bi-file-earmark-spreadsheet"></i> Excel出力</button>
+          </div>
           <div class="row g-3">
             <div class="col-lg-6">
               <div class="card h-100"><div class="card-header" id="reportDetailTitle">詳細</div>
@@ -181,7 +184,6 @@
                     <input type="datetime-local" class="form-control form-control-sm" id="reportEndDate" style="width:auto">
                     <button class="btn btn-sm btn-outline-primary" id="reportPeriodBtn"><i class="bi bi-funnel"></i> 期間で絞込</button>
                     <button class="btn btn-sm btn-outline-secondary" id="reportPeriodClearBtn">クリア</button>
-                    <button class="btn btn-sm btn-outline-success" id="reportExportBtn"><i class="bi bi-file-earmark-spreadsheet"></i> Excel出力</button>
                     <button class="btn btn-sm btn-success" data-perm="operator" id="reportCommitBtn"><i class="bi bi-lock"></i> 確定</button>
                     <button class="btn btn-sm btn-outline-danger d-none" data-perm="tenant_admin" id="reportUncommitBtn"><i class="bi bi-unlock"></i> 確定解除</button>
                   </div>
@@ -388,6 +390,7 @@
           <input type="text" class="form-control form-control-sm" id="logsKeyword" placeholder="キーワードで絞込" style="width:auto;display:none">
           <button class="btn btn-sm btn-outline-primary" id="logsApplyBtn" style="display:none"><i class="bi bi-arrow-clockwise"></i> 更新</button>
           <button class="btn btn-sm btn-outline-secondary" id="logsCsvBtn" style="display:none"><i class="bi bi-download"></i> CSV出力</button>
+          <button class="btn btn-sm btn-outline-success" id="logsXlsxBtn" style="display:none"><i class="bi bi-file-earmark-spreadsheet"></i> Excel出力</button>
           <button class="btn btn-sm btn-outline-info" id="webGeoipBtn" style="display:none" onclick="refreshWebAccessGeoip()"><i class="bi bi-geo-alt"></i> GeoIP取得</button>
           <button class="btn btn-sm btn-outline-secondary" id="logsRawDlBtn" style="display:none"><i class="bi bi-file-earmark-arrow-down"></i> ログ全件DL</button>
           <span class="badge bg-light text-dark border" id="logsFileInfo" style="display:none"></span>
@@ -573,7 +576,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=b8e39784"></script>
+<script src="app.js?v=3f60d138"></script>
 <script src="assets/campaign-automations.js?v=b847062f"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 </body>

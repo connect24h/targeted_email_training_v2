@@ -1,4 +1,5 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
+require_once __DIR__."/../lib/SimpleXlsx.php";
 
 /**
  * P8: ログ管理 API。
@@ -144,6 +145,24 @@ function logs_handle_audit(int $tenantId): never
     json_out(['success' => true, 'rows' => $rows, 'limit' => $limit, 'offset' => $offset]);
 }
 
+/**
+ * ログデータを XLSX で出力する汎用ヘルパー。
+ * @param string $sheetName シート名
+ * @param list<string> $headers ヘッダー行
+ * @param list<list<scalar>> $dataRows データ行(ヘッダーなし)
+ * @param string $filename ダウンロードファイル名
+ */
+function logs_xlsx_download(string $sheetName, array $headers, array $dataRows, string $filename): never
+{
+    $xlsx = new SimpleXlsx();
+    $rows = [$headers];
+    foreach ($dataRows as $r) {
+        $rows[] = $r;
+    }
+    $xlsx->addSheet($sheetName, $rows);
+    $xlsx->download($filename);
+}
+
 /** バイト数を人間可読(B/KB/MB/GB)に整形する。 */
 function logs_format_bytes(int $size): string
 {
@@ -163,14 +182,16 @@ function logs_min_role_for_action(string $action): string
         'reply_maildir',
         'reply_maildir_view',
         'reply_maildir_csv',
+        'reply_maildir_xlsx',
         'webaccess',
         'webaccess_geoip',
         'webaccess_csv',
+        'webaccess_xlsx',
     ];
     if (in_array($action, $superadminActions, true)) {
         return 'superadmin';
     }
-    return $action === 'audit' ? 'operator' : 'viewer';
+    return ($action === 'audit' || $action === 'audit_xlsx') ? 'operator' : 'viewer';
 }
 
 /**
@@ -342,6 +363,45 @@ function logs_handle_training_results_csv(int $tenantId): never
     echo "\xEF\xBB\xBF";
     echo $csv;
     exit;
+}
+
+/** 訓練結果ログを XLSX でダウンロード。 */
+function logs_handle_training_results_xlsx(int $tenantId): never
+{
+    $cid = logs_campaign_filter($tenantId);
+    $where = 'c.tenant_id = ?';
+    $params = [$tenantId];
+    if ($cid !== null) { $where .= ' AND ct.campaign_id = ?'; $params[] = $cid; }
+    $rows = Db::all(
+        "SELECT ct.campaign_id, c.name AS campaign_name, ct.koban,
+                t.email, t.name AS target_name, t.company, t.department, t.position_category,
+                ct.send_status,
+                MAX(CASE WHEN e.event_type='open'  THEN 1 ELSE 0 END) AS opened,
+                MAX(CASE WHEN e.event_type='click' THEN 1 ELSE 0 END) AS clicked,
+                MAX(CASE WHEN e.event_type='auth'  THEN 1 ELSE 0 END) AS authed
+         FROM campaign_targets ct
+         INNER JOIN campaigns c ON c.id = ct.campaign_id
+         INNER JOIN targets t   ON t.id = ct.target_id
+         LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
+               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth')
+         WHERE {$where}
+         GROUP BY ct.id
+         ORDER BY ct.campaign_id DESC, ct.koban",
+        array_merge([$tenantId], $params)
+    );
+    $data = [];
+    foreach ($rows as $r) {
+        $data[] = [
+            (string) ($r['campaign_name'] ?? ''), (int) $r['koban'], (string) $r['email'],
+            (string) ($r['target_name'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['department'] ?? ''),
+            (string) ($r['position_category'] ?? ''),
+            $r['send_status'] === 'sent' ? '済' : (string) $r['send_status'],
+            (int) $r['opened'] ? '○' : '—', (int) $r['clicked'] ? '○' : '—', (int) $r['authed'] ? '○' : '—',
+        ];
+    }
+    audit('logs.training_results_xlsx', 'count=' . count($rows));
+    logs_xlsx_download('訓練結果', ['キャンペーン', '項番', 'メール', '氏名', '会社', '部署', '役職カテゴリ', '送信', '開封', 'クリック', '認証'],
+        $data, 'training_results_' . date('Ymd_His') . '.xlsx');
 }
 
 /* ============================================================
@@ -564,6 +624,31 @@ function logs_handle_training_log_detail_csv(int $tenantId): never
     exit;
 }
 
+/** 訓練結果ログ(明細)を XLSX でダウンロード。 */
+function logs_handle_training_log_detail_xlsx(int $tenantId): never
+{
+    $rows = training_log_detail_rows($tenantId);
+    $headers = ['日時', '乱数', '重複', 'タイプ', '送信先メールアドレス', '表示氏名（姓名）',
+                'メールアドレス（会社）', '会社名', '略称', '本務役職名称', '役職カテゴリ',
+                '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent'];
+    $data = [];
+    foreach ($rows as $r) {
+        $data[] = [
+            (string) ($r['timestamp'] ?? ''), (string) ($r['random'] ?? ''),
+            $r['duplicate'] ? ($r['duplicate_count'] . '回') : '',
+            (string) ($r['type'] ?? ''), (string) ($r['recipient_email'] ?? ''), (string) ($r['fullname'] ?? ''),
+            (string) ($r['company_email'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['abbreviation'] ?? ''),
+            (string) ($r['position'] ?? ''), (string) ($r['position_category'] ?? ''),
+            (string) ($r['email'] ?? ''), (string) ($r['password'] ?? ''),
+            (string) ($r['ip'] ?? ''), (string) ($r['country'] ?? ''), (string) ($r['location'] ?? ''),
+            (string) ($r['isp'] ?? ''), (string) ($r['org'] ?? ''), (string) ($r['as'] ?? ''),
+            (string) ($r['hostname'] ?? ''), (string) ($r['useragent'] ?? ''),
+        ];
+    }
+    audit('logs.training_log_detail_xlsx', 'rows=' . count($rows));
+    logs_xlsx_download('訓練結果ログ明細', $headers, $data, 'training_logs_' . date('Ymd_His') . '.xlsx');
+}
+
 /* ============================================================
  * キャンペーン別 リンク/ビーコン ファイル一覧。
  * キャンペーン作成時、対象者ごとに tracking_id が振られ、リンク型なら
@@ -688,6 +773,26 @@ function logs_handle_campaign_files_csv(int $tenantId): never
     echo "\xEF\xBB\xBF";
     echo $csv;
     exit;
+}
+
+/** キャンペーン別 リンク/ビーコン ファイル一覧を XLSX でダウンロード。 */
+function logs_handle_campaign_files_xlsx(int $tenantId): never
+{
+    $d = campaign_files_rows($tenantId);
+    $headers = ['項番', '乱数(tracking_id)', '送信先メールアドレス', '表示氏名', '会社名', '送信状況',
+                'リンクHTMLファイル名', 'リンクHTML URL', 'ビーコン画像ファイル名', 'ビーコン画像 URL'];
+    $data = [];
+    foreach ($d['rows'] as $r) {
+        $data[] = [
+            (int) $r['koban'], (string) $r['tracking_id'], (string) ($r['recipient_email'] ?? ''),
+            (string) ($r['fullname'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['send_status'] ?? ''),
+            (string) ($r['link_file'] ?? ''), (string) ($r['link_url'] ?? ''),
+            (string) ($r['beacon_file'] ?? ''), (string) ($r['beacon_url'] ?? ''),
+        ];
+    }
+    audit('logs.campaign_files_xlsx', 'campaign=' . $d['campaign_id'] . ',rows=' . count($d['rows']));
+    logs_xlsx_download('リンク・ビーコンファイル', $headers, $data,
+        'campaign_' . $d['campaign_id'] . '_files_' . date('Ymd_His') . '.xlsx');
 }
 
 /* ============================================================
@@ -1038,6 +1143,23 @@ function logs_handle_reply_maildir_csv(): never
     echo "\xEF\xBB\xBF";
     echo $csv;
     exit;
+}
+
+/** 返信者一覧を XLSX でダウンロード。 */
+function logs_handle_reply_maildir_xlsx(): never
+{
+    $r = reply_maildir_compute();
+    $headers = ['受信日時', '送信元アカウント', '送信元メール', '差出人', '差出人アドレス', '宛先', '件名', '添付'];
+    $data = [];
+    foreach ($r['mails'] as $m) {
+        $data[] = [
+            (string) ($m['date'] ?? ''), (string) ($m['sender_account'] ?? ''), (string) ($m['sender_email'] ?? ''),
+            (string) ($m['from'] ?? ''), (string) ($m['from_email'] ?? ''), (string) ($m['to'] ?? ''),
+            (string) ($m['subject'] ?? ''), !empty($m['has_attachment']) ? '有' : '',
+        ];
+    }
+    audit('logs.reply_maildir_xlsx', 'total=' . count($r['mails']));
+    logs_xlsx_download('返信者', $headers, $data, 'mail_replies_' . date('Ymd_His') . '.xlsx');
 }
 
 /** multipart から text/plain または text/html パートを再帰的に抽出する。 */
@@ -1438,6 +1560,138 @@ function weblog_handle_csv(): never
     exit;
 }
 
+/** WebAccessLog を XLSX でダウンロード。 */
+function weblog_handle_xlsx(): never
+{
+    $start = isset($_GET['start_date']) ? (string) $_GET['start_date'] : null;
+    $end = isset($_GET['end_date']) ? (string) $_GET['end_date'] : null;
+    $pathFilter = isset($_GET['path']) ? (string) $_GET['path'] : null;
+    weblog_validate_date($start, '開始日時');
+    weblog_validate_date($end, '終了日時');
+    $res = weblog_parse_access($start, $end, $pathFilter, null, 1, 0);
+    $logs = $res['logs'];
+    weblog_enrich_geoip($logs, true);
+    $headers = ['IP', 'Timestamp', 'Method', 'Path', 'Protocol', 'Status', 'Size', 'Referer',
+                'User-Agent', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'ログファイル'];
+    $data = [];
+    foreach ($logs as $l) {
+        $data[] = [
+            (string) ($l['ip'] ?? ''), (string) ($l['timestamp'] ?? ''), (string) ($l['method'] ?? ''),
+            (string) ($l['path'] ?? ''), (string) ($l['protocol'] ?? ''), (string) ($l['status'] ?? ''),
+            (string) ($l['size'] ?? ''), (string) ($l['referer'] ?? ''), (string) ($l['useragent'] ?? ''),
+            (string) ($l['country'] ?? ''), (string) ($l['location'] ?? ''), (string) ($l['isp'] ?? ''),
+            (string) ($l['org'] ?? ''), (string) ($l['as'] ?? ''), (string) ($l['hostname'] ?? ''),
+            (string) ($l['source_file'] ?? ''),
+        ];
+    }
+    audit('logs.weblog_xlsx', 'rows=' . count($logs));
+    logs_xlsx_download('WebアクセスLog', $headers, $data, 'apache_access_log_' . date('Ymd_His') . '.xlsx');
+}
+
+/** 送信ログを XLSX でダウンロード。 */
+function logs_handle_delivery_xlsx(int $tenantId): never
+{
+    $cid = logs_campaign_filter($tenantId);
+    $where = 'c.tenant_id = ?';
+    $params = [$tenantId];
+    if ($cid !== null) { $where .= ' AND dl.campaign_id = ?'; $params[] = $cid; }
+    $rows = Db::all(
+        "SELECT dl.id, dl.campaign_id, c.name AS campaign_name, dl.tracking_id,
+                dl.to_email, dl.result, dl.smtp_message, dl.occurred_at
+         FROM delivery_log dl
+         INNER JOIN campaigns c ON c.id = dl.campaign_id
+         WHERE {$where}
+         ORDER BY dl.id DESC",
+        $params
+    );
+    $data = [];
+    foreach ($rows as $r) {
+        $data[] = [(int) $r['id'], (string) ($r['campaign_name'] ?? ''), (string) ($r['tracking_id'] ?? ''),
+            (string) ($r['to_email'] ?? ''), (string) ($r['result'] ?? ''), (string) ($r['smtp_message'] ?? ''),
+            (string) ($r['occurred_at'] ?? '')];
+    }
+    audit('logs.delivery_xlsx', 'rows=' . count($rows));
+    logs_xlsx_download('送信ログ', ['#', 'キャンペーン', '追跡ID', '宛先', '結果', 'SMTPメッセージ', '日時'],
+        $data, 'delivery_log_' . date('Ymd_His') . '.xlsx');
+}
+
+/** 訓練イベントを XLSX でダウンロード。 */
+function logs_handle_events_xlsx(int $tenantId): never
+{
+    $cid = logs_campaign_filter($tenantId);
+    $where = 'e.tenant_id = ?';
+    $params = [$tenantId];
+    if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
+    $rows = Db::all(
+        "SELECT e.id, e.campaign_id, c.name AS campaign_name, e.tracking_id,
+                e.event_type, e.auth_variant, e.source, e.occurred_at
+         FROM events e
+         LEFT JOIN campaigns c ON c.id = e.campaign_id
+         WHERE {$where}
+         ORDER BY e.id DESC",
+        $params
+    );
+    $data = [];
+    foreach ($rows as $r) {
+        $data[] = [(int) $r['id'], (string) ($r['campaign_name'] ?? ''), (string) ($r['tracking_id'] ?? ''),
+            (string) ($r['event_type'] ?? ''), (string) ($r['auth_variant'] ?? ''),
+            (string) ($r['source'] ?? ''), (string) ($r['occurred_at'] ?? '')];
+    }
+    audit('logs.events_xlsx', 'rows=' . count($rows));
+    logs_xlsx_download('訓練イベント', ['#', 'キャンペーン', '追跡ID', '種別', '認証種', 'source', '日時'],
+        $data, 'events_' . date('Ymd_His') . '.xlsx');
+}
+
+/** スケジュールログを XLSX でダウンロード。 */
+function logs_handle_schedule_xlsx(int $tenantId): never
+{
+    $cid = logs_campaign_filter($tenantId);
+    $where = 'c.tenant_id = ?';
+    $params = [$tenantId];
+    if ($cid !== null) { $where .= ' AND ss.campaign_id = ?'; $params[] = $cid; }
+    $rows = Db::all(
+        "SELECT ss.id, ss.campaign_id, c.name AS campaign_name, ss.batch_no,
+                ss.scheduled_at, ss.koban_from, ss.koban_to, ss.interval_sec,
+                ss.status, ss.claimed_at, ss.worker_pid, ss.attempts
+         FROM send_schedule ss
+         INNER JOIN campaigns c ON c.id = ss.campaign_id
+         WHERE {$where}
+         ORDER BY ss.id DESC",
+        $params
+    );
+    $data = [];
+    foreach ($rows as $r) {
+        $data[] = [(int) $r['id'], (string) ($r['campaign_name'] ?? ''), (int) ($r['batch_no'] ?? 0),
+            (string) ($r['scheduled_at'] ?? ''), (string) ($r['koban_from'] ?? ''), (string) ($r['koban_to'] ?? ''),
+            (int) ($r['interval_sec'] ?? 0), (string) ($r['status'] ?? ''),
+            (string) ($r['worker_pid'] ?? ''), (int) ($r['attempts'] ?? 0)];
+    }
+    audit('logs.schedule_xlsx', 'rows=' . count($rows));
+    logs_xlsx_download('スケジュール', ['#', 'キャンペーン', 'バッチ', '予定時刻', '項番From', '項番To', '間隔(秒)', '状態', 'PID', '試行'],
+        $data, 'schedule_' . date('Ymd_His') . '.xlsx');
+}
+
+/** 操作ログを XLSX でダウンロード。 */
+function logs_handle_audit_xlsx(int $tenantId): never
+{
+    $rows = Db::all(
+        "SELECT al.id, al.user_id, u.email AS user_email, al.action, al.detail, al.ip, al.occurred_at
+         FROM audit_log al
+         LEFT JOIN users u ON u.id = al.user_id
+         WHERE al.tenant_id = ?
+         ORDER BY al.id DESC",
+        [$tenantId]
+    );
+    $data = [];
+    foreach ($rows as $r) {
+        $data[] = [(int) $r['id'], (string) ($r['user_email'] ?? ''), (string) ($r['action'] ?? ''),
+            (string) ($r['detail'] ?? ''), (string) ($r['ip'] ?? ''), (string) ($r['occurred_at'] ?? '')];
+    }
+    audit('logs.audit_xlsx', 'rows=' . count($rows));
+    logs_xlsx_download('操作ログ', ['#', 'ユーザ', 'アクション', '詳細', 'IP', '日時'],
+        $data, 'audit_log_' . date('Ymd_His') . '.xlsx');
+}
+
 try {
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $action = $_GET['action'] ?? '';
@@ -1457,6 +1711,8 @@ try {
     if ($action === 'webaccess')         { weblog_handle_list(); }
     if ($action === 'webaccess_geoip')   { weblog_handle_geoip_refresh(); }
     if ($action === 'webaccess_csv')     { weblog_handle_csv(); }
+    if ($action === 'reply_maildir_xlsx') { logs_handle_reply_maildir_xlsx(); }
+    if ($action === 'webaccess_xlsx')     { weblog_handle_xlsx(); }
 
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
 
@@ -1472,6 +1728,13 @@ try {
         case 'training_log_detail_csv': logs_handle_training_log_detail_csv($tenantId);
         case 'campaign_files':          logs_handle_campaign_files($tenantId);
         case 'campaign_files_csv':      logs_handle_campaign_files_csv($tenantId);
+        case 'delivery_xlsx':           logs_handle_delivery_xlsx($tenantId);
+        case 'events_xlsx':             logs_handle_events_xlsx($tenantId);
+        case 'schedule_xlsx':           logs_handle_schedule_xlsx($tenantId);
+        case 'audit_xlsx':              logs_handle_audit_xlsx($tenantId);
+        case 'training_results_xlsx':       logs_handle_training_results_xlsx($tenantId);
+        case 'training_log_detail_xlsx':    logs_handle_training_log_detail_xlsx($tenantId);
+        case 'campaign_files_xlsx':         logs_handle_campaign_files_xlsx($tenantId);
         default: json_error('不正なアクション', 400);
     }
 } catch (Throwable $e) {

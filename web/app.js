@@ -1095,6 +1095,8 @@ function switchLogTab(type) {
   show('#logsApplyBtn', hasFilter);
   // CSV 出力: 訓練結果/訓練結果ログ明細/WebアクセスLog/返信者Maildir/リンク・ビーコンファイル一覧。
   show('#logsCsvBtn', isTr || isTld || isWeb || isMd || isCf);
+  // Excel(XLSX)出力: 生ログ以外の全タブ。
+  show('#logsXlsxBtn', !isRaw);
   // GeoIP取得: WebアクセスLog のみ(一覧はキャッシュのみ表示、未知IPはこのボタンで後追い解決)。
   show('#webGeoipBtn', isWeb);
   // 「更新」ボタンは campaign_files では上部キャンペーン選択で再読込するため隠す(専用フィルタなし)。
@@ -3400,6 +3402,35 @@ document.addEventListener('DOMContentLoaded', () => {
   // 生ログ全件DLはタブ(raw_mail/raw_web)別。
   $('#logsRawDlBtn')?.addEventListener('click', () => {
     if (logsState.type === 'raw_mail' || logsState.type === 'raw_web') downloadRawLog(logsState.type);
+  });
+  // Excel(XLSX)出力はタブ別にディスパッチ。
+  $('#logsXlsxBtn')?.addEventListener('click', () => {
+    const type = logsState.type;
+    const qs = new URLSearchParams({ action: type + '_xlsx' });
+    const cid = $('#logsCampaignFilter')?.value; if (cid) qs.set('campaign_id', cid);
+    const tid = State.activeTenantId || State.user?.tenant_id;
+    if (tid) qs.set('tenant_id', tid);
+    // タブ固有のフィルタを引き継ぐ
+    if (type === 'training_log_detail') {
+      const tp = $('#logsTypeFilter')?.value; if (tp) qs.set('type', tp);
+      const sd = logDateVal('#logsStartDate'); if (sd) qs.set('start_date', sd);
+      const ed = logDateVal('#logsEndDate'); if (ed) qs.set('end_date', ed);
+    }
+    if (type === 'webaccess') {
+      const sd = logDateVal('#logsStartDate'); if (sd) qs.set('start_date', sd);
+      const ed = logDateVal('#logsEndDate'); if (ed) qs.set('end_date', ed);
+      const pf = $('#logsPathFilter')?.value.trim(); if (pf) qs.set('path', pf);
+    }
+    if (type === 'reply_maildir') {
+      const sender = $('#logsSenderFilter')?.value; if (sender) qs.set('sender', sender);
+      const kw = $('#logsKeyword')?.value.trim(); if (kw) qs.set('q', kw);
+      const sd = logDateVal('#logsStartDate'); if (sd) qs.set('start_date', sd);
+      const ed = logDateVal('#logsEndDate'); if (ed) qs.set('end_date', ed);
+    }
+    if (type === 'training_results') {
+      const st = $('#logsStatusFilter')?.value; if (st) qs.set('status', st);
+    }
+    window.open(`api/logs.php?${qs}`, '_blank');
   });
   // 受信メール本文表示ボタン(イベント委譲)。
   $('#logsBody')?.addEventListener('click', (e) => {
