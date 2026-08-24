@@ -360,16 +360,15 @@ function report_resilience_ratio(int $reportCount, int $clickCount): ?float
     return round($reportCount / $clickCount, 2);
 }
 
-/** 日別タイムライン(open/auth の日次件数 + 累積)。 */
+/** 日別タイムライン(click/auth の日次件数 + 累積)。click = ボットUA除外済みのサイト表示。 */
 function report_detail_timeline(int $campaignId, int $tenantId, string $periodClause, array $periodParams): array
 {
-    // occurred_at の日付部分で GROUP。open(=beacon) と auth を tracking_id DISTINCT で。
     $sql =
         "SELECT substr(e.occurred_at, 1, 10) AS d,
-                COUNT(DISTINCT CASE WHEN e.event_type = 'open' THEN e.tracking_id END) AS beacon,
+                COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.tracking_id END) AS beacon,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'auth' THEN e.tracking_id END) AS auth
          FROM events e
-         WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('open','auth')
+         WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('click','auth')
                {$periodClause}
          GROUP BY d
          ORDER BY d";

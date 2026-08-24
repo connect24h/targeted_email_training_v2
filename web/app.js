@@ -1928,7 +1928,7 @@ async function renderReportDetail(campaignId) {
     data: {
       labels: tl.map((t) => t.date),
       datasets: [
-        { label: '累積開封', data: tl.map((t) => t.cum_beacon), borderColor: '#3a9d5d', backgroundColor: 'rgba(58,157,93,.1)', tension: .2, fill: true },
+        { label: '累積サイト表示', data: tl.map((t) => t.cum_beacon), borderColor: '#3a9d5d', backgroundColor: 'rgba(58,157,93,.1)', tension: .2, fill: true },
         { label: '累積認証', data: tl.map((t) => t.cum_auth), borderColor: '#d64545', backgroundColor: 'rgba(214,69,69,.1)', tension: .2, fill: true },
       ],
     },
@@ -1966,7 +1966,7 @@ async function renderReportBeacons(campaignId) {
     : emptyRow(8);
   if (summaryEl && d.summary) {
     const s = d.summary;
-    summaryEl.textContent = `全${s.total}ビーコン中 開封${s.opened}(${pct(s.open_rate)}) / クリック${s.clicked} / 認証${s.authed}`;
+    summaryEl.textContent = `全${s.total}件中 サイト表示${s.clicked} / 認証${s.authed}`;
   }
 }
 // レポート確定(コミット): 現時点の集計値を固定し、以後変更されないようにする
