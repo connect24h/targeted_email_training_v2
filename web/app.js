@@ -1842,12 +1842,11 @@ async function renderReports() {
     return `<tr style="cursor:pointer" onclick="showReportDetail(${c.id})">
       <td>${numById[c.id]}</td><td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td><td>${s.target_count}</td>
       <td>${pct(s.sent_rate)}</td>
-      <td class="${rateClass(s.open_rate,25,50)}">${countRate(s.open_count, s.open_rate)}</td>
-      <td class="${rateClass(s.click_rate,15,35)}">${countRate(s.click_count, s.click_rate)}</td>
+      <td class="${rateClass(s.click_rate,25,50)}">${countRate(s.click_count, s.click_rate)}</td>
       <td class="${rateClass(authRateOf(s.auth_count, s.click_count) ?? 0,5,20)}">${countRate(s.auth_count, authRateOf(s.auth_count, s.click_count))}</td>
       <td><i class="bi bi-chevron-right"></i></td>
     </tr>`;
-  }).join('') : emptyRow(8);
+  }).join('') : emptyRow(7);
   if (reportSelectedId && Cache.reports[reportSelectedId]) showReportDetail(reportSelectedId);
   else { $('#reportDetail').classList.add('d-none'); reportSelectedId = null; }
 }
@@ -1866,9 +1865,9 @@ async function showReportDetail(id) {
       // 埋め込まれており、訓練メール本文はプレーンテキスト(send_email.py の MIMEText(...,'plain'))で
       // 画像を含まないため、メールを開いただけでは計測されない。実体はクリック先ページの表示。
       // メール開封を本当に測るには HTML メール化が必要(2026-08-19 時点では見送り)。
-      labels: ['送信', 'サイト表示', 'クリック', '認証'],
-      datasets: [{ label: '件数', data: [s.sent_count, s.open_count, s.click_count, s.auth_count],
-        backgroundColor: ['#4a90d9', '#3a9d5d', '#e0a136', '#d64545'] }],
+      labels: ['送信', 'サイト表示', '認証'],
+      datasets: [{ label: '件数', data: [s.sent_count, s.click_count, s.auth_count],
+        backgroundColor: ['#4a90d9', '#e0a136', '#d64545'] }],
     },
     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
   });
@@ -1902,24 +1901,23 @@ async function renderReportDetail(campaignId) {
   ['reportStartDate', 'reportEndDate', 'reportPeriodBtn', 'reportPeriodClearBtn'].forEach((id) => {
     const el = $('#' + id); if (el) el.disabled = committed;
   });
-  // 会社別(数と率の併記。表示率/クリック率の分母=数、認証率の分母=クリック数)
+  // 会社別(サイト表示=click。beacon と click はほぼ同一事象のため click に統一・2026-08-24)
   $('#reportByCompany').innerHTML = (d.by_company || []).length
     ? d.by_company.map((r) => `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
-        <td class="${rateClass(r.beacon_rate,25,50)}">${countRate(r.beacon_opened, r.beacon_rate)}</td>
-        <td class="${rateClass(r.link_rate,15,35)}">${countRate(r.link_clicked, r.link_rate)}</td>
+        <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
         <td class="${goodRateClass(r.report_rate,5,15)}">${Number(r.report_count) || 0}</td></tr>`).join('')
-    : emptyRow(6);
-  // 役職別(数と率の併記。報告率は判断材料にならないため削除・2026-08-24)
+    : emptyRow(5);
+  // 役職別
   $('#reportByPosition').innerHTML = (d.by_position || []).length
     ? d.by_position.map((r) => `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
-        <td class="${rateClass(r.beacon_rate,25,50)}">${countRate(r.beacon_opened, r.beacon_rate)}</td>
+        <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
     : emptyRow(4);
-  // コンテンツ別(数と率の併記)
+  // コンテンツ別
   $('#reportByContent').innerHTML = (d.by_content || []).length
     ? d.by_content.map((r) => `<tr><td>${esc(r.content_no)}</td><td>${r.count}</td>
-        <td class="${rateClass(r.beacon_rate,25,50)}">${countRate(r.beacon_opened, r.beacon_rate)}</td>
+        <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
     : emptyRow(4);
   // 日別タイムライン(累積 beacon/auth)
@@ -2034,14 +2032,13 @@ async function renderIndividuals() {
         <td>${esc(p.company)}</td>
         <td>${p.position_category ? esc(p.position_category) : ''}</td>
         <td>${p.campaigns}</td>
-        <td class="${rateClass(p.open_rate,25,50)}">${pct(p.open_rate)}</td>
-        <td class="${rateClass(p.click_rate,15,35)}">${pct(p.click_rate)}</td>
+        <td class="${rateClass(p.click_rate,25,50)}">${pct(p.click_rate)}</td>
         <td class="${rateClass(p.auth_rate,5,20)}">${pct(p.auth_rate)}</td>
         <td>${statusBadge}</td>
       </tr>`;
-    }).join('') : `<tr><td colspan="8" class="text-center text-muted py-3">対象データがありません</td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="text-center text-muted py-3">対象データがありません</td></tr>`;
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-3">${esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-3">${esc(e.message)}</td></tr>`;
   }
 }
 function toggleIndividuals() {

@@ -522,7 +522,7 @@ function report_handle_individuals(): never
          WHERE t.tenant_id = ?" . $testWhere . "
          GROUP BY t.id
          HAVING campaigns > 0
-         ORDER BY opens DESC, auths DESC, clicks DESC
+         ORDER BY clicks DESC, auths DESC, opens DESC
          LIMIT ?",
         [$tenantId, $tenantId, $limit]
     );
@@ -833,18 +833,17 @@ function report_handle_export_xlsx(): never
 
     // ---- シート1: サマリー ----
     $s = $d['summary'] ?? [];
+    $lc = (int) ($s['link_clicked'] ?? 0);
+    $ac = (int) ($s['auth_count'] ?? 0);
+    $cnt = (int) ($s['count'] ?? 0);
     $summaryRows = [
         ['項目', '値'],
         ['キャンペーン名', $campaignName],
-        ['対象者数', (int) ($s['count'] ?? 0)],
-        ['サイト表示数', (int) ($s['beacon_opened'] ?? 0)],
-        ['サイト表示率 (%)', (float) ($s['beacon_rate'] ?? 0)],
-        ['クリック数', (int) ($s['link_clicked'] ?? 0)],
-        ['クリック率 (%)', (float) ($s['link_rate'] ?? 0)],
-        ['認証数', (int) ($s['auth_count'] ?? 0)],
-        ['認証率 (認証/クリック %)', (int) ($s['link_clicked'] ?? 0) > 0
-            ? round((int) ($s['auth_count'] ?? 0) / (int) $s['link_clicked'] * 100, 1)
-            : 0],
+        ['対象者数', $cnt],
+        ['サイト表示数', $lc],
+        ['サイト表示率 (%)', $cnt > 0 ? round($lc / $cnt * 100, 1) : 0],
+        ['認証数', $ac],
+        ['認証率 (認証/表示 %)', $lc > 0 ? round($ac / $lc * 100, 1) : 0],
         ['報告数', (int) ($s['report_count'] ?? 0)],
         ['報告率 (%)', (float) ($s['report_rate'] ?? 0)],
         ['生成日時', $d['generated_at'] ?? date('Y-m-d H:i:s')],
@@ -852,26 +851,25 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
     // ---- シート2: 会社別 ----
-    $companyRows = [['会社', '対象数', '表示数', '表示率 (%)', 'クリック数', 'クリック率 (%)', '認証数', '認証率 (認証/クリック %)', '報告数']];
+    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '報告数']];
     foreach (($d['by_company'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
+        $cnt = (int) ($r['count'] ?? 0);
         $companyRows[] = [
             (string) ($r['company'] ?? ''),
-            (int) ($r['count'] ?? 0),
-            (int) ($r['beacon_opened'] ?? 0),
-            (float) ($r['beacon_rate'] ?? 0),
+            $cnt,
             $lc,
-            (float) ($r['link_rate'] ?? 0),
+            $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
             (int) ($r['report_count'] ?? 0),
         ];
     }
-    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 10, 3 => 12, 4 => 12, 5 => 14, 6 => 10, 7 => 22, 8 => 10]);
+    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 10]);
 
     // ---- シート3: 役職別 ----
-    $posRows = [['役職', '対象数', '表示数', '表示率 (%)', 'クリック数', 'クリック率 (%)', '認証数', '認証率 (認証/クリック %)']];
+    $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
     foreach (($d['by_position'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -879,18 +877,16 @@ function report_handle_export_xlsx(): never
         $posRows[] = [
             (string) ($r['position'] ?? ''),
             $cnt,
-            (int) ($r['beacon_opened'] ?? 0),
-            (float) ($r['beacon_rate'] ?? 0),
             $lc,
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 10, 3 => 14, 4 => 12, 5 => 14, 6 => 10, 7 => 22]);
+    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
 
     // ---- シート4: コンテンツ別 ----
-    $contentRows = [['コンテンツNo', '対象数', '表示数', '表示率 (%)', 'クリック数', 'クリック率 (%)', '認証数', '認証率 (認証/クリック %)']];
+    $contentRows = [['コンテンツNo', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
     foreach (($d['by_content'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -898,15 +894,13 @@ function report_handle_export_xlsx(): never
         $contentRows[] = [
             (string) ($r['content_no'] ?? ''),
             $cnt,
-            (int) ($r['beacon_opened'] ?? 0),
-            (float) ($r['beacon_rate'] ?? 0),
             $lc,
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 10, 2 => 10, 3 => 14, 4 => 12, 5 => 14, 6 => 10, 7 => 22]);
+    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
 
     // ---- シート5: 日別タイムライン ----
     $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];
