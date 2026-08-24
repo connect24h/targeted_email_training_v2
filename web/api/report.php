@@ -48,7 +48,7 @@ function report_summary_from_counts(array $row): array
         'click_count' => $clickCount,
         'click_rate' => report_rate($clickCount, $targetCount),
         'auth_count' => $authCount,
-        'auth_rate' => report_rate($authCount, $targetCount),
+        'auth_rate' => report_rate($authCount, $clickCount),
     ];
 }
 
@@ -210,7 +210,7 @@ function report_handle_campaigns(): never
 
 /**
  * v1 report.php の率定義を踏襲。
- * link_rate / beacon_rate は分母 = count(母数)、auth_rate は分母 = beacon_opened。
+ * link_rate / beacon_rate は分母 = count(母数)、auth_rate は分母 = link_clicked(クリック数)。
  */
 function report_detail_rate(int $numerator, int $denominator): float
 {
@@ -308,7 +308,7 @@ function report_detail_shape(array $rows, string $keyName): array
             'opened' => $link,
             'link_rate' => report_detail_rate($link, $count),
             'beacon_rate' => report_detail_rate($beacon, $count),
-            'auth_rate' => report_detail_rate($auth, $beacon),
+            'auth_rate' => report_detail_rate($auth, $link),
             'open_rate' => report_detail_rate($link, $count),
             'report_rate' => report_detail_rate($report, $count),
         ];
@@ -339,7 +339,7 @@ function report_detail_totals(array $rows): array
         'report_count' => $report,
         'link_rate' => report_detail_rate($link, $count),
         'beacon_rate' => report_detail_rate($beacon, $count),
-        'auth_rate' => report_detail_rate($auth, $beacon),
+        'auth_rate' => report_detail_rate($auth, $link),
         'report_rate' => report_detail_rate($report, $count),
         // 報告数 ÷ クリック数。1.0 を超えるほど「踏むより先に報告する」組織に近い。
         // 失敗率だけを見る従来の指標に対し、正しい行動の伸びを見るための比率。
@@ -871,36 +871,42 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 10, 3 => 12, 4 => 12, 5 => 14, 6 => 10, 7 => 22, 8 => 10]);
 
     // ---- シート3: 役職別 ----
-    $posRows = [['役職', '対象数', '表示数', '表示率 (%)', '認証数', '認証率 (認証/クリック %)']];
+    $posRows = [['役職', '対象数', '表示数', '表示率 (%)', 'クリック数', 'クリック率 (%)', '認証数', '認証率 (認証/クリック %)']];
     foreach (($d['by_position'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
+        $cnt = (int) ($r['count'] ?? 0);
         $posRows[] = [
             (string) ($r['position'] ?? ''),
-            (int) ($r['count'] ?? 0),
+            $cnt,
             (int) ($r['beacon_opened'] ?? 0),
             (float) ($r['beacon_rate'] ?? 0),
+            $lc,
+            $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 10, 3 => 14, 4 => 10, 5 => 22]);
+    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 10, 3 => 14, 4 => 12, 5 => 14, 6 => 10, 7 => 22]);
 
     // ---- シート4: コンテンツ別 ----
-    $contentRows = [['コンテンツNo', '対象数', '表示数', '表示率 (%)', '認証数', '認証率 (認証/クリック %)']];
+    $contentRows = [['コンテンツNo', '対象数', '表示数', '表示率 (%)', 'クリック数', 'クリック率 (%)', '認証数', '認証率 (認証/クリック %)']];
     foreach (($d['by_content'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
+        $cnt = (int) ($r['count'] ?? 0);
         $contentRows[] = [
             (string) ($r['content_no'] ?? ''),
-            (int) ($r['count'] ?? 0),
+            $cnt,
             (int) ($r['beacon_opened'] ?? 0),
             (float) ($r['beacon_rate'] ?? 0),
+            $lc,
+            $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 10, 2 => 10, 3 => 14, 4 => 10, 5 => 22]);
+    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 10, 2 => 10, 3 => 14, 4 => 12, 5 => 14, 6 => 10, 7 => 22]);
 
     // ---- シート5: 日別タイムライン ----
     $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];
