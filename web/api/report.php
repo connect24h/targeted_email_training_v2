@@ -428,7 +428,7 @@ function report_compute_detail(int $campaignId, int $tenantId, string $periodCla
     $position = report_detail_shape($positionRows, 'position');
     $content = report_detail_shape($contentRows, 'content_no');
 
-    return [
+    $data = [
         'campaign_id' => $campaignId,
         'summary' => report_detail_totals($company),
         'by_company' => $company,
@@ -437,6 +437,44 @@ function report_compute_detail(int $campaignId, int $tenantId, string $periodCla
         'timeline' => report_detail_timeline($campaignId, $tenantId, $periodClause, $periodParams),
         'generated_at' => date('Y-m-d H:i:s'),
     ];
+    report_detail_postprocess($data, $campaignId);
+    return $data;
+}
+
+/**
+ * detail データの表示用後処理。リアルタイム集計と確定スナップショットの両方に適用する
+ * (スナップショットは確定時点の構造のまま保存されており、後から足した並び順・件名を持たないため)。
+ *  - 役職別: 役員→管理職→一般従業員→その他 の固定順
+ *  - コンテンツ別: content_no 昇順 + 件名(subject)付与
+ */
+function report_detail_postprocess(array &$data, int $campaignId): void
+{
+    if (isset($data['by_position']) && is_array($data['by_position'])) {
+        $posOrder = ['役員' => 0, '管理職' => 1, '一般従業員' => 2];
+        usort($data['by_position'], fn ($a, $b) => ($posOrder[$a['position']] ?? 99) <=> ($posOrder[$b['position']] ?? 99));
+    }
+    if (isset($data['by_content']) && is_array($data['by_content'])) {
+        usort($data['by_content'], function ($a, $b) {
+            $an = ($a['content_no'] ?? '') === '(単一)' ? -1 : (int) ($a['content_no'] ?? 0);
+            $bn = ($b['content_no'] ?? '') === '(単一)' ? -1 : (int) ($b['content_no'] ?? 0);
+            return $an <=> $bn;
+        });
+        // 件名(Subject)を付与。subject_template の content が件名文字列。
+        $subjectByNo = [];
+        foreach (Db::all(
+            'SELECT cc.content_no, tp.content AS subject
+             FROM campaign_contents cc
+             LEFT JOIN templates tp ON tp.id = cc.subject_template_id
+             WHERE cc.campaign_id = ?',
+            [$campaignId]
+        ) as $r) {
+            $subjectByNo[(string) $r['content_no']] = (string) ($r['subject'] ?? '');
+        }
+        foreach ($data['by_content'] as &$c) {
+            $c['subject'] = $subjectByNo[$c['content_no'] ?? ''] ?? ($c['subject'] ?? '');
+        }
+        unset($c);
+    }
 }
 
 /** キャンペーンの確定済みスナップショットを返す(なければ null)。 */
@@ -474,6 +512,7 @@ function report_handle_detail(): never
         if ($snap !== null) {
             $data = json_decode((string) $snap['payload'], true);
             if (is_array($data)) {
+                report_detail_postprocess($data, $campaignId);
                 $data['success'] = true;
                 $data['is_committed'] = true;
                 $data['committed_at'] = $snap['committed_at'];
@@ -823,6 +862,9 @@ function report_handle_export_xlsx(): never
     $snap = report_snapshot_of($campaignId, $tenantId);
     if ($snap !== null) {
         $d = json_decode((string) $snap['payload'], true);
+        if (is_array($d)) {
+            report_detail_postprocess($d, $campaignId);
+        }
     }
     if (!isset($d) || !is_array($d)) {
         $d = report_compute_detail($campaignId, $tenantId, '', []);
@@ -850,7 +892,7 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
     // ---- シート2: 会社別 ----
-    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '報告数']];
+    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
     foreach (($d['by_company'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -862,10 +904,9 @@ function report_handle_export_xlsx(): never
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
-            (int) ($r['report_count'] ?? 0),
         ];
     }
-    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 10]);
+    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
 
     // ---- シート3: 役職別 ----
     $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
@@ -885,13 +926,14 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
 
     // ---- シート4: コンテンツ別 ----
-    $contentRows = [['コンテンツNo', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
+    $contentRows = [['コンテンツNo', '件名', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
     foreach (($d['by_content'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
         $cnt = (int) ($r['count'] ?? 0);
         $contentRows[] = [
             (string) ($r['content_no'] ?? ''),
+            (string) ($r['subject'] ?? ''),
             $cnt,
             $lc,
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
@@ -899,7 +941,7 @@ function report_handle_export_xlsx(): never
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
+    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 40, 2 => 10, 3 => 14, 4 => 16, 5 => 10, 6 => 20]);
 
     // ---- シート5: 日別タイムライン ----
     $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];

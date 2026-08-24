@@ -1905,21 +1905,22 @@ async function renderReportDetail(campaignId) {
   $('#reportByCompany').innerHTML = (d.by_company || []).length
     ? d.by_company.map((r) => `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
-        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
-        <td class="${goodRateClass(r.report_rate,5,15)}">${Number(r.report_count) || 0}</td></tr>`).join('')
-    : emptyRow(5);
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
+    : emptyRow(4);
   // 役職別
   $('#reportByPosition').innerHTML = (d.by_position || []).length
     ? d.by_position.map((r) => `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
     : emptyRow(4);
-  // コンテンツ別
+  // コンテンツ別(No昇順・件名付き)
   $('#reportByContent').innerHTML = (d.by_content || []).length
-    ? d.by_content.map((r) => `<tr><td>${esc(r.content_no)}</td><td>${r.count}</td>
+    ? d.by_content.map((r) => `<tr><td>${esc(r.content_no)}</td>
+        <td class="small" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.subject || '')}">${esc(r.subject || '')}</td>
+        <td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
-    : emptyRow(4);
+    : emptyRow(5);
   // 日別タイムライン(累積 beacon/auth)
   const tl = d.timeline || [];
   if (reportTimelineChart) reportTimelineChart.destroy();
