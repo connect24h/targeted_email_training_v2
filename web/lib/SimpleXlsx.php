@@ -173,6 +173,9 @@ class SimpleXlsx
             $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
 
+            // sheetViews は sheetData より前(OpenXML 仕様の要素順序)
+            $xml .= '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+
             // 列幅
             if ($sheet['colWidths']) {
                 $xml .= '<cols>';
@@ -213,9 +216,6 @@ class SimpleXlsx
                 $xml .= '<autoFilter ref="A1:' . $lastCol . $lastRow . '"/>';
             }
 
-            // ヘッダ行固定(フリーズ)
-            $xml .= '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
-
             $xml .= '</worksheet>';
             $zip->addFromString('xl/worksheets/sheet' . $n . '.xml', $xml);
         }
@@ -237,6 +237,8 @@ class SimpleXlsx
 
     private function xmlEscape(string $s): string
     {
+        // XML 1.0 で許可される制御文字は \x09, \x0A, \x0D のみ。それ以外を除去。
+        $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $s);
         return htmlspecialchars($s, ENT_XML1 | ENT_QUOTES, 'UTF-8');
     }
 }
