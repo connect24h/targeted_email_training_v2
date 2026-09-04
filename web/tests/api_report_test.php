@@ -56,18 +56,18 @@ $r = call_handler('report_handle_detail', [], 'viewer');
 check($r['code'] === 200, 'detail → 200(viewer可)');
 $d = $r['payload'];
 
-// summary: count5 / beacon4 / auth1 → beacon_rate 80, auth_rate 25(分母=beacon)
+// summary: count5 / link2 / beacon4 / auth1 → beacon_rate 80, auth_rate 50(分母=link_clicked)
 check($d['summary']['count'] === 5, 'summary count = 5');
 check($d['summary']['beacon_opened'] === 4, 'summary beacon = 4(重複openはDISTINCT集約)');
 check($d['summary']['auth_count'] === 1, 'summary auth = 1');
 check($d['summary']['beacon_rate'] === 80.0, 'beacon_rate = 80(分母=count)');
-check($d['summary']['auth_rate'] === 25.0, 'auth_rate = 25(分母=beacon_opened, v1定義)');
+check($d['summary']['auth_rate'] === 50.0, 'auth_rate = 50(1/2, 分母=link_clicked, v1定義)');
 
-// 会社別: 会社A(count3,beacon3,auth1), 会社B(count2,beacon1)
+// 会社別: 会社A(count3,link2,beacon3,auth1), 会社B(count2,beacon1)
 $byCompany = [];
 foreach ($d['by_company'] as $row) { $byCompany[$row['company']] = $row; }
 check($byCompany['会社A']['count'] === 3 && $byCompany['会社A']['beacon_opened'] === 3, '会社A count3/beacon3');
-check($byCompany['会社A']['auth_rate'] === 33.33, '会社A auth_rate=33.33(1/3)');
+check($byCompany['会社A']['auth_rate'] === 50.0, '会社A auth_rate=50(1/2, 分母=link_clicked)');
 check($byCompany['会社B']['beacon_rate'] === 50.0, '会社B beacon_rate=50(1/2)');
 
 // 役職別: 不正役職(部長)は「その他」
@@ -79,9 +79,9 @@ $byContent = [];
 foreach ($d['by_content'] as $row) { $byContent[$row['content_no']] = $row; }
 check($byContent['1']['count'] === 3 && $byContent['2']['count'] === 2, 'コンテンツ別 content1=3/content2=2');
 
-// タイムライン累積: 2→3→4
+// タイムライン累積サイト表示(click): 1→2
 $cum = array_column($d['timeline'], 'cum_beacon');
-check($cum === [2, 3, 4], 'タイムライン累積 beacon = [2,3,4]');
+check($cum === [1, 2], 'タイムライン累積サイト表示(click) = [1,2]');
 
 // --- 期間フィルタ: 07-11以降 ---
 $_GET = ['action' => 'detail', 'campaign_id' => (string) $campaignId, 'start_date' => '2026-07-11 00:00:00'];
@@ -89,7 +89,7 @@ $r = call_handler('report_handle_detail', [], 'viewer');
 $d2 = $r['payload'];
 check($d2['summary']['count'] === 5, '期間フィルタでも母数count=5維持(campaign_targetsは期間対象外)');
 check($d2['summary']['beacon_opened'] === 2, '期間07-11以降 beacon=2(07-10分が除外)');
-check(count($d2['timeline']) === 2, '期間フィルタでtimelineが2日に絞られる');
+check(count($d2['timeline']) === 1, '期間フィルタでtimelineがclickのある1日に絞られる');
 
 // --- IDOR: 他テナントの campaign_id ---
 $other = Db::one('SELECT id FROM campaigns WHERE tenant_id != ? LIMIT 1', [$tenantId]);

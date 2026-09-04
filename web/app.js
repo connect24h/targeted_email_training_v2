@@ -837,6 +837,41 @@ async function loadTrainingLogDetail() {
   const byType = data.by_type ? Object.entries(data.by_type).map(([k, v]) => `${k}:${v}`).join(' / ') : '';
   $('#logsInfo').textContent = `${data.count ?? rows.length} 件${byType ? '（' + byType + '）' : ''}`;
 }
+// 訓練結果ログ(明細)の GeoIP を後追い補完する。click 行の国/場所/ISP は ip_cache.json 頼みで、
+// 未登録IPだと空欄になる。このボタンで表示中の条件に含まれる未解決IPを解決してから再表示する。
+// サーバは1回200件まで解決し未解決の残数(geoip_remaining)を返すので、残数0まで繰り返す。
+async function refreshTrainingLogGeoip() {
+  const btn = document.getElementById('tldGeoipBtn');
+  if (btn) { btn.disabled = true; btn.dataset.orig = btn.innerHTML; }
+  const query = { action: 'training_log_geoip' };
+  const cid = $('#logsCampaignFilter')?.value; if (cid) query.campaign_id = cid;
+  const tp = $('#logsTypeFilter')?.value; if (tp) query.type = tp;
+  const sd = logDateVal('#logsStartDate'); if (sd) query.start_date = sd;
+  const ed = logDateVal('#logsEndDate'); if (ed) query.end_date = ed;
+  // 補完対象は表示中の行に合わせる(システム除外チェックの状態も引き継ぐ)。
+  const inclSys = $('#logsInclSystem')?.checked;
+  if (inclSys) query.exclude_system = '0';
+  const setLabel = (t) => { if (btn) btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> ${t}`; };
+  try {
+    // 残数が尽きるまで繰り返す。上限は暴走防止(200件×100回=2万件)。
+    // 残数が2回続けて減らなければ(API失敗でUnknown固定等)打ち切る。
+    let prevRemaining = Infinity, stall = 0;
+    for (let i = 0; i < 100; i++) {
+      const res = await api('api/logs.php', { query });
+      const remaining = Number(res?.geoip_remaining ?? 0);
+      if (remaining <= 0) { break; }
+      setLabel(`GeoIP取得中… 残り${remaining}件`);
+      if (remaining >= prevRemaining) { if (++stall >= 2) break; } else { stall = 0; }
+      prevRemaining = remaining;
+    }
+    toast('GeoIP情報を更新しました（未知IPをすべて解決）', 'ok');
+    await loadTrainingLogDetail();  // キャッシュが埋まった状態で再表示
+  } catch (e) {
+    toast(e.message || 'GeoIP更新に失敗しました', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; if (btn.dataset.orig) btn.innerHTML = btn.dataset.orig; }
+  }
+}
 // 訓練結果ログ(明細)を CSV ダウンロード。
 function downloadTrainingLogDetailCsv() {
   const qs = new URLSearchParams({ action: 'training_log_detail_csv' });
@@ -1112,6 +1147,7 @@ function switchLogTab(type) {
   show('#logsXlsxBtn', !isRaw);
   // GeoIP取得: WebアクセスLog のみ(一覧はキャッシュのみ表示、未知IPはこのボタンで後追い解決)。
   show('#webGeoipBtn', isWeb);
+  show('#tldGeoipBtn', isTld);
   // 「更新」ボタンは campaign_files では上部キャンペーン選択で再読込するため隠す(専用フィルタなし)。
   if (isCf) show('#logsApplyBtn', false);
   // ログ全件DL: 生ログ(mail/web)のみ。
@@ -1829,6 +1865,7 @@ function countRate(count, rate) { const c = Number(count) || 0; return rate === 
 // 認証率 = 認証数 ÷ クリック数(2026-08-24 に定義を統一)。クリック0のときは null(未定義)。
 // 従来の「分母=サイト表示数」だと表ごとに定義が揺れて誤読するため、全テーブルこの定義で表示する。
 function authRateOf(auth, clicks) { const c = Number(clicks) || 0; return c > 0 ? (Number(auth) || 0) / c * 100 : null; }
+function authTargetRateOf(auth, targets) { const t = Number(targets) || 0; return t > 0 ? (Number(auth) || 0) / t * 100 : null; }
 function rateClass(v, warn, danger) { const n = Number(v) || 0; return n >= danger ? 'val-danger' : n >= warn ? 'val-warning' : 'val-success'; }
 // 報告率は「高いほど良い」ので rateClass とは色の向きが逆になる。
 // 失敗率と同じ関数を使い回すと、よく報告している部署が赤く出て判断を誤る。
@@ -1852,14 +1889,16 @@ async function renderReports() {
   const shown = reportsAsc.slice().reverse();  // 最新が一番上
   $('#reportsBody').innerHTML = shown.length ? shown.map((c) => {
     const s = c.summary || c;
+    const authTargetRate = authTargetRateOf(s.auth_count, s.target_count);
     return `<tr style="cursor:pointer" onclick="showReportDetail(${c.id})">
       <td>${numById[c.id]}</td><td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td><td>${s.target_count}</td>
       <td>${pct(s.sent_rate)}</td>
       <td class="${rateClass(s.click_rate,25,50)}">${countRate(s.click_count, s.click_rate)}</td>
       <td class="${rateClass(authRateOf(s.auth_count, s.click_count) ?? 0,5,20)}">${countRate(s.auth_count, authRateOf(s.auth_count, s.click_count))}</td>
+      <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
       <td><i class="bi bi-chevron-right"></i></td>
     </tr>`;
-  }).join('') : emptyRow(7);
+  }).join('') : emptyRow(8);
   if (reportSelectedId && Cache.reports[reportSelectedId]) showReportDetail(reportSelectedId);
   else { $('#reportDetail').classList.add('d-none'); reportSelectedId = null; }
 }
@@ -1916,24 +1955,27 @@ async function renderReportDetail(campaignId) {
   });
   // 会社別(サイト表示=click。beacon と click はほぼ同一事象のため click に統一・2026-08-24)
   $('#reportByCompany').innerHTML = (d.by_company || []).length
-    ? d.by_company.map((r) => `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
+    ? d.by_company.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
-        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
-    : emptyRow(4);
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
+        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td></tr>`; }).join('')
+    : emptyRow(5);
   // 役職別
   $('#reportByPosition').innerHTML = (d.by_position || []).length
-    ? d.by_position.map((r) => `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
+    ? d.by_position.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
-        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
-    : emptyRow(4);
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
+        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td></tr>`; }).join('')
+    : emptyRow(5);
   // コンテンツ別(No昇順・件名付き)
   $('#reportByContent').innerHTML = (d.by_content || []).length
-    ? d.by_content.map((r) => `<tr><td>${esc(r.content_no)}</td>
+    ? d.by_content.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.content_no)}</td>
         <td class="small" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.subject || '')}">${esc(r.subject || '')}</td>
         <td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
-        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td></tr>`).join('')
-    : emptyRow(5);
+        <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
+        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td></tr>`; }).join('')
+    : emptyRow(6);
   // 日別タイムライン(累積 beacon/auth)
   const tl = d.timeline || [];
   if (reportTimelineChart) reportTimelineChart.destroy();

@@ -2,6 +2,12 @@
 require_once __DIR__."/../lib/EventIngest.php";
 require_once __DIR__."/../lib/EduAutoEnroll.php";
 require_once __DIR__."/../lib/SimpleXlsx.php";
+// 訓練結果 / 訓練結果ログ(明細)の行生成。ログ管理(api/logs.php)と同一ロジックを共有する
+// (api/logs.php は末尾でディスパッチが走るため直接 require できない。2026-08-30)。
+require_once __DIR__."/../lib/TrainingLogRows.php";
+// 返信者(Maildir パース)。ログ管理の同名タブと共有する(2026-08-31)。
+// 全テナント混在の superadmin 限定機能のため、出力可否は reply_maildir_export_allowed() で判定する。
+require_once __DIR__."/../lib/ReplyMaildir.php";
 
 function report_json_body(): array
 {
@@ -841,7 +847,12 @@ function report_handle_risk_by_company(): never
 
 /**
  * レポートを Excel (.xlsx) でダウンロードする。
- * 5シート構成: サマリー / 会社別 / 役職別 / コンテンツ別 / 日別タイムライン。
+ * 8シート構成: サマリー / 会社別 / 役職別 / コンテンツ別 / 日別タイムライン /
+ *              訓練結果 / 訓練結果ログ(明細) / 返信者。
+ * 後半3シートはログ管理の同名タブと同じ内容で、lib/TrainingLogRows.php と
+ * lib/ReplyMaildir.php を共有する(2026-08-30/31 追加)。
+ * 返信者だけは全テナントのメールが混在する superadmin 限定機能のため、
+ * それ未満の権限ではシートを作るが中身を出さない(理由を1行入れる)。
  * ビーコン別明細はユーザー指示で除外。
  */
 function report_handle_export_xlsx(): never
@@ -885,6 +896,7 @@ function report_handle_export_xlsx(): never
         ['サイト表示率 (%)', $cnt > 0 ? round($lc / $cnt * 100, 1) : 0],
         ['認証数', $ac],
         ['認証率 (認証/表示 %)', $lc > 0 ? round($ac / $lc * 100, 1) : 0],
+        ['認証率 (認証/対象数 %)', $cnt > 0 ? round($ac / $cnt * 100, 1) : 0],
         ['報告数', (int) ($s['report_count'] ?? 0)],
         ['報告率 (%)', (float) ($s['report_rate'] ?? 0)],
         ['生成日時', $d['generated_at'] ?? date('Y-m-d H:i:s')],
@@ -892,7 +904,7 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
     // ---- シート2: 会社別 ----
-    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
+    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)']];
     foreach (($d['by_company'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -904,12 +916,13 @@ function report_handle_export_xlsx(): never
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
+            $cnt > 0 ? round($ac / $cnt * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
+    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20]);
 
     // ---- シート3: 役職別 ----
-    $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
+    $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)']];
     foreach (($d['by_position'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -921,12 +934,13 @@ function report_handle_export_xlsx(): never
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
+            $cnt > 0 ? round($ac / $cnt * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20]);
+    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20]);
 
     // ---- シート4: コンテンツ別 ----
-    $contentRows = [['コンテンツNo', '件名', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)']];
+    $contentRows = [['コンテンツNo', '件名', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)']];
     foreach (($d['by_content'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -939,9 +953,10 @@ function report_handle_export_xlsx(): never
             $cnt > 0 ? round($lc / $cnt * 100, 1) : 0,
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
+            $cnt > 0 ? round($ac / $cnt * 100, 1) : 0,
         ];
     }
-    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 40, 2 => 10, 3 => 14, 4 => 16, 5 => 10, 6 => 20]);
+    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 40, 2 => 10, 3 => 14, 4 => 16, 5 => 10, 6 => 20, 7 => 20]);
 
     // ---- シート5: 日別タイムライン ----
     $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];
@@ -955,6 +970,38 @@ function report_handle_export_xlsx(): never
         ];
     }
     $xlsx->addSheet('日別タイムライン', $tlRows, [0 => 14, 1 => 14, 2 => 10, 3 => 14, 4 => 14]);
+
+    // ---- シート6: 訓練結果 / シート7: 訓練結果ログ(明細) ----
+    // ログ管理の同名タブと同じ内容。行生成は lib/TrainingLogRows.php で共有しており、
+    // フィルタは $_GET から読む。ここは campaign_id が必須なので、そのキャンペーンに
+    // 限定された行だけが入る(logs_campaign_filter が所有権も検証する)。
+    // 明細はシステム(サンドボックス/SWG等)の反応を既定で除外する。ログ管理画面と同じく
+    // ?exclude_system=0 を付ければ装置の行も含める。
+    $trRows = array_merge([training_results_headers()], training_results_rows($tenantId));
+    $xlsx->addSheet('訓練結果', $trRows, [0 => 24, 1 => 8, 2 => 28, 3 => 16, 4 => 20, 5 => 16, 6 => 14]);
+
+    $tldSrc = training_log_detail_rows($tenantId);
+    $tldRows = array_merge([training_log_detail_headers()], training_log_detail_table_rows($tldSrc));
+    $xlsx->addSheet('訓練結果ログ(明細)', $tldRows,
+        [0 => 20, 1 => 12, 2 => 8, 3 => 14, 4 => 28, 5 => 16, 6 => 28, 7 => 20, 8 => 10,
+         9 => 18, 10 => 14, 11 => 24, 12 => 18, 13 => 18, 14 => 16, 15 => 18, 16 => 22,
+         17 => 22, 18 => 18, 19 => 24, 20 => 40]);
+
+    // ---- シート8: 返信者 ----
+    // ログ管理の「返信者」タブと同じ内容(訓練メール送信元の Maildir に届いた受信メール)。
+    // このレポートExcelは viewer でも出力できるが、返信者は DB ではなくメールサーバの
+    // Maildir を直接読むため全テナントのメールが混在し、ログ管理では superadmin 限定に
+    // している。そのまま載せると権限の低い利用者に他テナントの差出人・件名が渡るため、
+    // superadmin 以外にはシートだけ作って中身を出さない(シート構成は権限で変えない)。
+    if (reply_maildir_export_allowed($user)) {
+        $replyRows = array_merge([reply_maildir_headers()],
+            reply_maildir_table_rows(reply_maildir_compute()['mails']));
+    } else {
+        $replyRows = [reply_maildir_headers(),
+            ['返信者の一覧は superadmin のみ出力できます（全テナントのメールが混在するため）。'
+             . 'ログ管理 > 返信者 から superadmin で出力してください。']];
+    }
+    $xlsx->addSheet('返信者', $replyRows, [0 => 20, 1 => 18, 2 => 28, 3 => 20, 4 => 28, 5 => 28, 6 => 44, 7 => 8]);
 
     // ファイル名: キャンペーン名を安全にする
     $safeName = preg_replace('/[^\p{L}\p{N}_\-]/u', '_', $campaignName);
