@@ -79,6 +79,14 @@ preg_match_all('/認証率 \(認証\/対象数 %\)/u', (string) $reportSrc, $aut
 check(count($authTargetRateMatches[0] ?? []) === 4,
     'レポートExcel: 認証/対象数の率がサマリーと3明細ヘッダにある');
 
+// 報告数/報告率はサマリーだけでなく、3明細シートの末尾にも出力する。
+check(substr_count((string) $reportSrc, "'報告数', '報告率 (%)'") === 3,
+    'レポートExcel: 会社別・役職別・コンテンツ別ヘッダの末尾に報告数/報告率がある');
+$reportValueColumns = "(int) (\$r['report_count'] ?? 0),\n"
+    . "            (float) (\$r['report_rate'] ?? 0),";
+check(substr_count((string) $reportSrc, $reportValueColumns) === 3,
+    'レポートExcel: 3明細シートの各行に報告数/報告率を出力する');
+
 // レポートUIも一覧・会社別・役職別・コンテンツ別の4表で対象比を表示する。
 $indexSrc = (string) file_get_contents(__DIR__ . '/../index.html');
 $appSrc = (string) file_get_contents(__DIR__ . '/../app.js');

@@ -1954,15 +1954,17 @@ async function renderReportDetail(campaignId) {
     ? d.by_company.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
-        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td></tr>`; }).join('')
-    : emptyRow(5);
+        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
+        <td class="${r.report_rate == null ? '' : goodRateClass(r.report_rate,5,20)}">${r.report_rate == null ? '-' : countRate(r.report_count, r.report_rate)}</td></tr>`; }).join('')
+    : emptyRow(6);
   // 役職別
   $('#reportByPosition').innerHTML = (d.by_position || []).length
     ? d.by_position.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
-        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td></tr>`; }).join('')
-    : emptyRow(5);
+        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
+        <td class="${r.report_rate == null ? '' : goodRateClass(r.report_rate,5,20)}">${r.report_rate == null ? '-' : countRate(r.report_count, r.report_rate)}</td></tr>`; }).join('')
+    : emptyRow(6);
   // コンテンツ別(No昇順・件名付き)
   $('#reportByContent').innerHTML = (d.by_content || []).length
     ? d.by_content.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.content_no)}</td>
@@ -1970,8 +1972,9 @@ async function renderReportDetail(campaignId) {
         <td>${r.count}</td>
         <td class="${rateClass(r.link_rate,25,50)}">${countRate(r.link_clicked, r.link_rate)}</td>
         <td class="${rateClass(authRateOf(r.auth_count, r.link_clicked) ?? 0,5,20)}">${countRate(r.auth_count, authRateOf(r.auth_count, r.link_clicked))}</td>
-        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td></tr>`; }).join('')
-    : emptyRow(6);
+        <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
+        <td class="${r.report_rate == null ? '' : goodRateClass(r.report_rate,5,20)}">${r.report_rate == null ? '-' : countRate(r.report_count, r.report_rate)}</td></tr>`; }).join('')
+    : emptyRow(7);
   // 日別タイムライン(累積 beacon/auth)
   const tl = d.timeline || [];
   if (reportTimelineChart) reportTimelineChart.destroy();

@@ -933,7 +933,7 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
     // ---- シート2: 会社別 ----
-    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)']];
+    $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
     foreach (($d['by_company'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -946,12 +946,14 @@ function report_handle_export_xlsx(): never
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
             $cnt > 0 ? round($ac / $cnt * 100, 1) : 0,
+            (int) ($r['report_count'] ?? 0),
+            (float) ($r['report_rate'] ?? 0),
         ];
     }
-    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20]);
+    $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20, 7 => 12, 8 => 14]);
 
     // ---- シート3: 役職別 ----
-    $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)']];
+    $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
     foreach (($d['by_position'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -964,12 +966,14 @@ function report_handle_export_xlsx(): never
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
             $cnt > 0 ? round($ac / $cnt * 100, 1) : 0,
+            (int) ($r['report_count'] ?? 0),
+            (float) ($r['report_rate'] ?? 0),
         ];
     }
-    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20]);
+    $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20, 7 => 12, 8 => 14]);
 
     // ---- シート4: コンテンツ別 ----
-    $contentRows = [['コンテンツNo', '件名', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)']];
+    $contentRows = [['コンテンツNo', '件名', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
     foreach (($d['by_content'] ?? []) as $r) {
         $lc = (int) ($r['link_clicked'] ?? 0);
         $ac = (int) ($r['auth_count'] ?? 0);
@@ -983,9 +987,11 @@ function report_handle_export_xlsx(): never
             $ac,
             $lc > 0 ? round($ac / $lc * 100, 1) : 0,
             $cnt > 0 ? round($ac / $cnt * 100, 1) : 0,
+            (int) ($r['report_count'] ?? 0),
+            (float) ($r['report_rate'] ?? 0),
         ];
     }
-    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 40, 2 => 10, 3 => 14, 4 => 16, 5 => 10, 6 => 20, 7 => 20]);
+    $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 40, 2 => 10, 3 => 14, 4 => 16, 5 => 10, 6 => 20, 7 => 20, 8 => 12, 9 => 14]);
 
     // ---- シート5: 日別タイムライン ----
     $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];

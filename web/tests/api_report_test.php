@@ -61,7 +61,8 @@ check($d['summary']['count'] === 5, 'summary count = 5');
 check($d['summary']['beacon_opened'] === 4, 'summary beacon = 4(重複openはDISTINCT集約)');
 check($d['summary']['auth_count'] === 1, 'summary auth = 1');
 check($d['summary']['beacon_rate'] === 80.0, 'beacon_rate = 80(分母=count)');
-check($d['summary']['auth_rate'] === 50.0, 'auth_rate = 50(1/2, 分母=link_clicked, v1定義)');
+check($d['summary']['auth_rate'] === 50.0,
+    'auth_rate = 50(1/2, 認証率=認証/link_clicked, 2026-08-24統一定義)');
 
 // 会社別: 会社A(count3,link2,beacon3,auth1), 会社B(count2,beacon1)
 $byCompany = [];
