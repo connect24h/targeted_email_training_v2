@@ -1949,10 +1949,6 @@ async function renderReportDetail(campaignId) {
   const commitBtn = $('#reportCommitBtn'), uncommitBtn = $('#reportUncommitBtn');
   if (commitBtn) commitBtn.classList.toggle('d-none', committed);
   if (uncommitBtn) uncommitBtn.classList.toggle('d-none', !committed);
-  // 確定済みは全期間固定なので期間絞込は無効化
-  ['reportStartDate', 'reportEndDate', 'reportPeriodBtn', 'reportPeriodClearBtn'].forEach((id) => {
-    const el = $('#' + id); if (el) el.disabled = committed;
-  });
   // 会社別(サイト表示=click。beacon と click はほぼ同一事象のため click に統一・2026-08-24)
   $('#reportByCompany').innerHTML = (d.by_company || []).length
     ? d.by_company.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
@@ -2030,9 +2026,13 @@ async function renderReportBeacons(campaignId) {
 function exportReportXlsx() {
   if (!reportSelectedId) { toast('先にキャンペーンを選択してください', 'warn'); return; }
   const tid = State.activeTenantId || State.user?.tenant_id;
-  const url = `api/report.php?action=export_xlsx&campaign_id=${reportSelectedId}` + (tid ? `&tenant_id=${tid}` : '');
+  const query = new URLSearchParams({ action: 'export_xlsx', campaign_id: reportSelectedId });
+  if (tid) query.set('tenant_id', tid);
+  const sd = $('#reportStartDate')?.value, ed = $('#reportEndDate')?.value;
+  if (sd) query.set('start_date', sd);
+  if (ed) query.set('end_date', ed);
   // 認証クッキー付きで直接ダウンロードさせる(API は Content-Disposition: attachment で返す)
-  window.location.href = url;
+  window.location.href = `api/report.php?${query.toString()}`;
 }
 
 async function commitReport() {

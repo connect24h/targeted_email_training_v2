@@ -120,6 +120,18 @@ $r = call_handler('report_handle_detail', [], 'viewer');
 check(($r['payload']['is_committed'] ?? null) === true, 'コミット後 detail は is_committed=true');
 check($r['payload']['summary']['beacon_opened'] === $beaconBeforeCommit, 'コミット直後の値はコミット前と一致');
 
+// Excel出力のデータ解決も、期間指定中は確定値ではなくリアルタイム集計を使う。
+$_GET = ['action' => 'export_xlsx', 'campaign_id' => (string) $campaignId,
+    'start_date' => '2026-07-11 00:00:00'];
+$exportPeriod = report_export_resolve_detail($campaignId, $tenantId);
+check($exportPeriod['summary']['beacon_opened'] === 2,
+    'export解決: 期間指定時は確定済みスナップショットをバイパスして期間集計を返す');
+
+$_GET = ['action' => 'export_xlsx', 'campaign_id' => (string) $campaignId];
+$exportSnapshot = report_export_resolve_detail($campaignId, $tenantId);
+check($exportSnapshot['summary']['beacon_opened'] === $beaconBeforeCommit,
+    'export解決: 期間指定なしは確定済みスナップショットを返す');
+
 // ★核心: コミット後に新イベントを追加しても、レポート値が変わらない
 Db::run('INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at) VALUES (?,?,?,?,?)',
     [$tenantId, $campaignId, $trk[3], 'open', '2026-07-13 09:00:00']); // trk3(未openだった)を新規open

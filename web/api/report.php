@@ -492,6 +492,34 @@ function report_snapshot_of(int $campaignId, int $tenantId): ?array
     );
 }
 
+/** Excel出力用の詳細データを、期間指定の有無に応じて解決する。 */
+function report_export_resolve_detail(int $campaignId, int $tenantId): array
+{
+    [$periodClause, $periodParams] = report_detail_period();
+    if ($periodClause !== '') {
+        return report_compute_detail($campaignId, $tenantId, $periodClause, $periodParams);
+    }
+
+    $snap = report_snapshot_of($campaignId, $tenantId);
+    if ($snap !== null) {
+        $data = json_decode((string) $snap['payload'], true);
+        if (is_array($data)) {
+            report_detail_postprocess($data, $campaignId);
+            return $data;
+        }
+    }
+    return report_compute_detail($campaignId, $tenantId, '', []);
+}
+
+/** 期間入力の先頭の日付をファイル名用 YYYYMMDD にする。 */
+function report_export_period_date(string $value): string
+{
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})/', trim($value), $matches) !== 1) {
+        return '';
+    }
+    return $matches[1] . $matches[2] . $matches[3];
+}
+
 function report_handle_detail(): never
 {
     $user = require_role('viewer');
@@ -869,17 +897,10 @@ function report_handle_export_xlsx(): never
     $campaign = Db::one('SELECT name FROM campaigns WHERE id = ? AND tenant_id = ?', [$campaignId, $tenantId]);
     $campaignName = $campaign ? (string) $campaign['name'] : 'campaign_' . $campaignId;
 
-    // 確定済みスナップショットがあればそれを使う(数値固定)。なければリアルタイム集計。
-    $snap = report_snapshot_of($campaignId, $tenantId);
-    if ($snap !== null) {
-        $d = json_decode((string) $snap['payload'], true);
-        if (is_array($d)) {
-            report_detail_postprocess($d, $campaignId);
-        }
-    }
-    if (!isset($d) || !is_array($d)) {
-        $d = report_compute_detail($campaignId, $tenantId, '', []);
-    }
+    $start = trim((string) ($_GET['start_date'] ?? ''));
+    $end = trim((string) ($_GET['end_date'] ?? ''));
+    $hasPeriod = $start !== '' || $end !== '';
+    $d = report_export_resolve_detail($campaignId, $tenantId);
 
     $xlsx = new SimpleXlsx();
 
@@ -901,6 +922,14 @@ function report_handle_export_xlsx(): never
         ['報告率 (%)', (float) ($s['report_rate'] ?? 0)],
         ['生成日時', $d['generated_at'] ?? date('Y-m-d H:i:s')],
     ];
+    if ($hasPeriod) {
+        $periodLabel = $start !== '' && $end !== ''
+            ? $start . ' 〜 ' . $end
+            : ($start !== '' ? $start . ' 〜' : '〜 ' . $end);
+        array_splice($summaryRows, 2, 0, [[
+            '集計期間', $periodLabel,
+        ]]);
+    }
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
     // ---- シート2: 会社別 ----
@@ -1006,7 +1035,12 @@ function report_handle_export_xlsx(): never
     // ファイル名: キャンペーン名を安全にする
     $safeName = preg_replace('/[^\p{L}\p{N}_\-]/u', '_', $campaignName);
     $safeName = mb_substr($safeName, 0, 60);
-    $filename = 'report_' . $safeName . '_' . date('Ymd') . '.xlsx';
+    $periodDates = array_values(array_filter([
+        report_export_period_date($start),
+        report_export_period_date($end),
+    ], static fn ($date) => $date !== ''));
+    $periodSuffix = $hasPeriod && $periodDates !== [] ? '_' . implode('-', $periodDates) : '';
+    $filename = 'report_' . $safeName . '_' . date('Ymd') . $periodSuffix . '.xlsx';
 
     audit('report.export_xlsx', 'campaign_id=' . $campaignId);
     $xlsx->download($filename);

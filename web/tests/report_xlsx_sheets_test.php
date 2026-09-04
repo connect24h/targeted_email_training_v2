@@ -87,6 +87,12 @@ check(str_contains($indexSrc, '認証率(対象比)')
     'レポートUI: 認証率(対象比)ヘッダが4表にある');
 check(str_contains($appSrc, 'function authTargetRateOf'),
     'レポートUI: authTargetRateOf ヘルパーがある');
+check(str_contains($appSrc, "query.set('start_date', sd)"),
+    'レポートUI: Excel出力URLにstart_dateを付与する');
+check(!str_contains($appSrc, 'el.disabled = committed'),
+    'レポートUI: 確定済みでも期間コントロールを無効化しない');
+check(str_contains($indexSrc, 'title="期間指定中は確定値ではなくリアルタイム集計を表示します"'),
+    'レポートUI: 期間指定中の集計仕様をtitleで案内する');
 
 // ---- 5) SimpleXlsx が日本語・括弧入りのシート名を壊さないこと ----
 $xlsx = new SimpleXlsx();
