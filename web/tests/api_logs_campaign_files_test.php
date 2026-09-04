@@ -13,6 +13,8 @@ tet2_test_boot();
 // campaign_files ハンドラは PipelineRunner::beaconUrlBase を使う。
 // load_api は関数内の require 行も剥がすため、テスト側で先にロードしておく。
 require_once __DIR__ . '/../lib/PipelineRunner.php';
+// logs_campaign_filter() は lib/TrainingLogRows.php に移設済み(レポートExcelと共有のため)。
+require_once __DIR__ . '/../lib/TrainingLogRows.php';
 load_api('logs');
 
 $TENANT = 1; // current_user() の tenant(seed の tenant_id IS NOT NULL 最初 = tenant 1)

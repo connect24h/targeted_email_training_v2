@@ -15,6 +15,11 @@ $ipCacheTmp = tempnam(sys_get_temp_dir(), 'iplogtest_') ?: (sys_get_temp_dir() .
 @unlink($ipCacheTmp);
 putenv('TET2_IP_CACHE=' . $ipCacheTmp);
 require_once __DIR__ . '/../lib/GeoIpCache.php';
+// 訓練結果/明細の行生成と logs_campaign_filter() は lib/TrainingLogRows.php に集約
+// (レポートExcelと共有するため)。これも load_api が require を剥がすので先読みする。
+require_once __DIR__ . '/../lib/TrainingLogRows.php';
+// 返信者(Maildir パース)一式も lib/ReplyMaildir.php に移設済み(レポートExcelと共有のため)。
+require_once __DIR__ . '/../lib/ReplyMaildir.php';
 register_shutdown_function(static function () use ($ipCacheTmp) { @unlink($ipCacheTmp); });
 load_api('logs');
 
@@ -301,7 +306,40 @@ check($dateNg, 'weblog_validate_date: 不正形式は 400');
 
 // ハンドラ存在。
 check(function_exists('weblog_handle_list') && function_exists('weblog_handle_csv'), 'WebAccessLog ハンドラが定義されている');
-check(function_exists('logs_handle_training_log_detail_csv'), '訓練結果ログ明細CSVハンドラが定義されている');
+check(function_exists('logs_handle_training_log_geoip'), '訓練結果ログGeoIP補完ハンドラが定義されている');
+
+// ============================================================
+// 訓練結果ログの GeoIP 後追い補完(2026-08-30 追加)。
+// click 行の国はキャッシュ(ip_cache.json)頼みで、未登録IPだと空欄になる。
+// WebアクセスLog の「GeoIP取得」は superadmin 限定かつ access.log 由来の IP しか
+// 対象にせず、訓練結果ログにだけ現れる IP を埋められなかったため専用actionを追加した。
+// 外部APIを呼ばない範囲(=キャッシュ済みIPのみ)で、補完が効くことを検証する。
+// ============================================================
+$geoCache = weblog_load_ip_cache();
+$geoCache['198.51.100.77'] = ['country' => 'Japan (JP)', 'location' => 'Tokyo',
+    'isp' => 'GeoFixISP', 'org' => 'GeoFixOrg', 'as' => 'AS64999 GeoFix', 'hostname' => 'geofix.example.jp'];
+weblog_save_ip_cache($geoCache);
+
+// 補完前: キャッシュに無い IP は国が空(既存仕様の再確認)。
+$beforeRaw = '203.0.113.231 - - [15/Jul/2026:11:00:00 +0900] "GET /link-1234567890.html HTTP/1.1" 200 100 "-" "UA"';
+$before = training_log_parse_raw($beforeRaw);
+check($before['country'] === '', 'GeoIP補完: キャッシュ未登録IPは補完前に国が空');
+
+// キャッシュに入れば同じ raw から国が埋まる(=ボタンで解決した後の状態)。
+$geoCache2 = weblog_load_ip_cache();
+$geoCache2['203.0.113.231'] = ['country' => 'Japan (JP)', 'location' => 'Osaka',
+    'isp' => 'ResolvedISP', 'org' => 'ResolvedOrg', 'as' => 'AS65000', 'hostname' => 'resolved.example.jp'];
+weblog_save_ip_cache($geoCache2);
+$after = training_log_parse_raw($beforeRaw);
+check($after['country'] === 'Japan (JP)', 'GeoIP補完: キャッシュ登録後は国が埋まる');
+check($after['isp'] === 'ResolvedISP' && $after['location'] === 'Osaka', 'GeoIP補完: ISP/場所も同時に埋まる');
+
+// weblog_enrich_geoip は $allowApi=false ならキャッシュのみ参照し外部通信しない。
+// (訓練結果ログ一覧の表示経路がタイムアウトしないことの担保)
+$enrichRows = [['ip' => '198.51.100.77'], ['ip' => '203.0.113.244']];
+weblog_enrich_geoip($enrichRows, false);
+check($enrichRows[0]['country'] === 'Japan (JP)', 'GeoIP補完: allowApi=false でもキャッシュ済みは埋まる');
+check($enrichRows[1]['country'] === '', 'GeoIP補完: allowApi=false は未キャッシュIPに外部APIを使わない');
 check(function_exists('logs_handle_reply_maildir_csv'), '返信者Maildir CSVハンドラが定義されている');
 
 // ============================================================

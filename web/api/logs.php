@@ -1,5 +1,11 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__."/../lib/SimpleXlsx.php";
+// 訓練結果 / 訓練結果ログ(明細)の行生成。レポートExcel(api/report.php)と共有するため
+// lib/ に切り出してある(2026-08-30)。logs_campaign_filter() もここに含まれる。
+require_once __DIR__."/../lib/TrainingLogRows.php";
+// 返信者(Maildir パース)の一覧計算。レポートExcelと共有するため lib/ に切り出してある
+// (2026-08-31)。superadmin 限定・全テナント混在である点は同ファイルの冒頭に明記。
+require_once __DIR__."/../lib/ReplyMaildir.php";
 
 /**
  * P8: ログ管理 API。
@@ -18,20 +24,6 @@ function logs_paging(): array
     $offset = isset($_GET['offset']) ? (int) $_GET['offset'] : 0;
     if ($offset < 0) { $offset = 0; }
     return [$limit, $offset];
-}
-
-/** ?campaign_id= 指定があればテナント所有を検証して返す。無ければ null。 */
-function logs_campaign_filter(int $tenantId): ?int
-{
-    if (!isset($_GET['campaign_id']) || $_GET['campaign_id'] === '') {
-        return null;
-    }
-    $cid = (int) $_GET['campaign_id'];
-    if ($cid < 1) {
-        json_error('campaign_id が不正です', 400);
-    }
-    assert_campaign_owned($cid, $tenantId); // IDOR 防止(他テナントは 404)
-    return $cid;
 }
 
 /** 送信ログ(delivery_log)。campaigns 経由でテナント絞り込み。 */
@@ -365,224 +357,15 @@ function logs_handle_training_results_csv(int $tenantId): never
     exit;
 }
 
-/** 訓練結果ログを XLSX でダウンロード。 */
+/** 訓練結果ログを XLSX でダウンロード。行生成は lib/TrainingLogRows.php と共有。 */
 function logs_handle_training_results_xlsx(int $tenantId): never
 {
-    $cid = logs_campaign_filter($tenantId);
-    $where = 'c.tenant_id = ?';
-    $params = [$tenantId];
-    if ($cid !== null) { $where .= ' AND ct.campaign_id = ?'; $params[] = $cid; }
-    $rows = Db::all(
-        "SELECT ct.campaign_id, c.name AS campaign_name, ct.koban,
-                t.email, t.name AS target_name, t.company, t.department, t.position_category,
-                ct.send_status,
-                MAX(CASE WHEN e.event_type='open'  THEN 1 ELSE 0 END) AS opened,
-                MAX(CASE WHEN e.event_type='click' THEN 1 ELSE 0 END) AS clicked,
-                MAX(CASE WHEN e.event_type='auth'  THEN 1 ELSE 0 END) AS authed
-         FROM campaign_targets ct
-         INNER JOIN campaigns c ON c.id = ct.campaign_id
-         INNER JOIN targets t   ON t.id = ct.target_id
-         LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
-               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth')
-         WHERE {$where}
-         GROUP BY ct.id
-         ORDER BY ct.campaign_id DESC, ct.koban",
-        array_merge([$tenantId], $params)
-    );
-    $data = [];
-    foreach ($rows as $r) {
-        $data[] = [
-            (string) ($r['campaign_name'] ?? ''), (int) $r['koban'], (string) $r['email'],
-            (string) ($r['target_name'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['department'] ?? ''),
-            (string) ($r['position_category'] ?? ''),
-            $r['send_status'] === 'sent' ? '済' : (string) $r['send_status'],
-            (int) $r['opened'] ? '○' : '—', (int) $r['clicked'] ? '○' : '—', (int) $r['authed'] ? '○' : '—',
-        ];
-    }
-    audit('logs.training_results_xlsx', 'count=' . count($rows));
-    logs_xlsx_download('訓練結果', ['キャンペーン', '項番', 'メール', '氏名', '会社', '部署', '役職カテゴリ', '送信', '開封', 'クリック', '認証'],
+    $data = training_results_rows($tenantId);
+    audit('logs.training_results_xlsx', 'count=' . count($data));
+    logs_xlsx_download('訓練結果', training_results_headers(),
         $data, 'training_results_' . date('Ymd_His') . '.xlsx');
 }
 
-/* ============================================================
- * 訓練結果ログ(メール一覧) — v1 training_logs.php 相当。
- * events.raw(v1 training_log と同一形式: "Random: ... | Type: ... | Email: ... |
- * Password: ... | IP: ... | Country: ... | ... | UserAgent: ...")をパースし、
- * click(link_click)/auth の1行=1アクセスとして、乱数→対象者情報を結合した
- * 21カラムの明細を返す。キャンペーン別に厳密にフィルタする。
- * ============================================================ */
-
-/** events.raw(パイプ区切りフィールド)を連想配列にパースする。 */
-function training_log_parse_raw(string $raw): array
-{
-    $out = ['email' => '', 'password' => '', 'ip' => '', 'country' => '', 'location' => '',
-            'isp' => '', 'org' => '', 'as' => '', 'hostname' => '', 'useragent' => ''];
-    $map = ['Email' => 'email', 'Password' => 'password', 'IP' => 'ip', 'Country' => 'country',
-            'Location' => 'location', 'ISP' => 'isp', 'Org' => 'org', 'AS' => 'as',
-            'Hostname' => 'hostname', 'UserAgent' => 'useragent'];
-    foreach ($map as $label => $key) {
-        if ($key === 'useragent') {
-            if (preg_match('/UserAgent:\s*(.+)$/s', $raw, $m)) { $out['useragent'] = trim($m[1]); }
-        } elseif (preg_match('/' . $label . ':\s*([^|]*)/', $raw, $m)) {
-            $out[$key] = trim($m[1]);
-        }
-    }
-    // click(apache_access 由来)の raw は v1 形式のラベルを持たず、Apache 生ログそのもの。
-    // その場合 country 等が空になるので、生ログから IP と UA を抜き、WebアクセスLog と
-    // 同じ ip_cache.json(GeoIpCache)を引いて国/ISP/組織/AS/ホスト名を補完する。
-    // auth(text_log 由来。Country ラベルあり)は上のパースで埋まるのでここは素通りする。
-    if ($out['country'] === '' && preg_match('/^(\S+) \S+ \S+ \[[^\]]+\] "/', $raw, $ma)) {
-        $out = training_log_enrich_from_access_log($raw, $ma[1], $out);
-    }
-    return $out;
-}
-
-/**
- * Apache 生ログ由来(=click)の1行から IP/UA を抽出し、GeoIP キャッシュで
- * 国/場所/ISP/組織/AS/ホスト名を補完する。キャッシュに無い IP は空のままにする
- * (機械除外や再API通信はしない。キャッシュは bin/geoip_resolve.php や画面の
- *  GeoIP取得で事前に埋まっている前提)。
- */
-function training_log_enrich_from_access_log(string $raw, string $ip, array $out): array
-{
-    $out['ip'] = $ip;
-    // Apache combined の末尾フィールド "..." が UserAgent。
-    if (preg_match('/"([^"]*)"\s*$/', rtrim($raw), $mu)) {
-        $out['useragent'] = $mu[1] === '-' ? '' : $mu[1];
-    }
-    $cache = weblog_load_ip_cache();
-    $info = $cache[$ip] ?? null;
-    if (is_array($info)) {
-        $out['country']  = (string) ($info['country']  ?? '');
-        $out['location'] = (string) ($info['location'] ?? '');
-        $out['isp']      = (string) ($info['isp']      ?? '');
-        $out['org']      = (string) ($info['org']      ?? '');
-        $out['as']       = (string) ($info['as']       ?? '');
-        $out['hostname'] = (string) ($info['hostname'] ?? '');
-    }
-    return $out;
-}
-
-/**
- * 訓練結果ログの明細行を組み立てる(list/export 共通)。
- * events(click/auth) × campaign_targets × targets を結合し、raw をパースして
- * v1 の21カラム相当の配列にする。キャンペーン別・期間・タイプでフィルタ。
- */
-function training_log_detail_rows(int $tenantId): array
-{
-    $cid = logs_campaign_filter($tenantId);
-    $startDate = (isset($_GET['start_date']) && $_GET['start_date'] !== '') ? (string) $_GET['start_date'] : '';
-    $endDate   = (isset($_GET['end_date'])   && $_GET['end_date']   !== '') ? (string) $_GET['end_date']   : '';
-    $typeFilter = isset($_GET['type']) ? (string) $_GET['type'] : '';
-
-    $where = "e.tenant_id = ? AND e.event_type IN ('click','auth')";
-    $params = [$tenantId];
-    if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
-    if ($startDate !== '') { $where .= ' AND e.occurred_at >= ?'; $params[] = $startDate; }
-    if ($endDate !== '')   { $where .= ' AND e.occurred_at <= ?'; $params[] = $endDate; }
-
-    $events = Db::all(
-        "SELECT e.campaign_id, c.name AS campaign_name, e.tracking_id, e.event_type,
-                e.auth_variant, e.occurred_at, e.raw,
-                t.email AS recipient_email, t.name AS fullname,
-                t.company, t.title AS position, t.position_category
-         FROM events e
-         LEFT JOIN campaigns c ON c.id = e.campaign_id
-         LEFT JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id AND ct.campaign_id = e.campaign_id
-         LEFT JOIN targets t ON t.id = ct.target_id
-         WHERE {$where}
-         ORDER BY e.occurred_at DESC, e.id DESC",
-        $params
-    );
-
-    $rows = [];
-    foreach ($events as $e) {
-        $parsed = training_log_parse_raw((string) ($e['raw'] ?? ''));
-        $type = $e['event_type'] === 'click' ? 'link_click' : (string) ($e['auth_variant'] ?? 'auth');
-        $rows[] = [
-            'timestamp' => (string) $e['occurred_at'],
-            'random' => (string) $e['tracking_id'],
-            'campaign_id' => (int) $e['campaign_id'],
-            'campaign_name' => (string) ($e['campaign_name'] ?? ''),
-            'type' => $type,
-            'recipient_email' => (string) ($e['recipient_email'] ?? ''),
-            'fullname' => (string) ($e['fullname'] ?? ''),
-            // v2 targets に会社メール/略称の専用列はない。会社メール=対象者メール(会社アドレス)を流用、略称は空。
-            'company_email' => (string) ($e['recipient_email'] ?? ''),
-            'company' => (string) ($e['company'] ?? ''),
-            'abbreviation' => '',
-            'position' => (string) ($e['position'] ?? ''),
-            'position_category' => (string) ($e['position_category'] ?? ''),
-            'email' => $parsed['email'],
-            'password' => $parsed['password'],
-            'ip' => $parsed['ip'],
-            'country' => $parsed['country'],
-            'location' => $parsed['location'],
-            'isp' => $parsed['isp'],
-            'org' => $parsed['org'],
-            'as' => $parsed['as'],
-            'hostname' => $parsed['hostname'],
-            'useragent' => $parsed['useragent'],
-        ];
-    }
-
-    // type フィルタは human_total/human_seq 計算(下記)より前に適用する。よって type で
-    // 絞り込むと、開封回数はその type 内(例: link_click だけ)の人間回数になる。
-    // 「クリックと認証を跨いだ通算開封回数」ではない点に注意。
-    if ($typeFilter !== '') {
-        $rows = array_values(array_filter($rows, fn ($r) => $r['type'] === $typeFilter));
-    }
-
-    // システム/自動アクセス(サンドボックス・SWG・Teams 等)を判定して各行に付与する。
-    // click(apache_access)は raw 先頭の IP を、auth は parsed['ip'] を使う。判定は
-    // ip_cache.json の ISP/AS ベース(WARP/iCloud Relay は人間扱い)。
-    foreach ($rows as &$r) {
-        $r['is_system'] = ($r['ip'] !== '') ? weblog_ip_is_system((string) $r['ip']) : false;
-    }
-    unset($r);
-
-    // 乱数重複フラグ(同一乱数が複数行 = 複数回アクセス)。
-    $counts = [];
-    foreach ($rows as $r) {
-        $rand = $r['random'];
-        if ($rand !== '') { $counts[$rand] = ($counts[$rand] ?? 0) + 1; }
-    }
-    // 人間アクセスの通し番号: 同一乱数×人間(is_system=false)の行に、時刻昇順で
-    // 「m回中n回目」を付ける。時間差で複数回開いた人間を可視化する(システム行は数えない)。
-    $humanTotal = [];
-    foreach ($rows as $r) {
-        if (!$r['is_system'] && $r['random'] !== '') {
-            $humanTotal[$r['random']] = ($humanTotal[$r['random']] ?? 0) + 1;
-        }
-    }
-    // $rows は occurred_at 降順。昇順の通し番号にするため乱数ごとに逆から数える。
-    $humanSeen = [];
-    for ($i = count($rows) - 1; $i >= 0; $i--) {
-        $rand = $rows[$i]['random'];
-        if (!$rows[$i]['is_system'] && $rand !== '') {
-            $humanSeen[$rand] = ($humanSeen[$rand] ?? 0) + 1;
-            $rows[$i]['human_seq'] = $humanSeen[$rand];
-            $rows[$i]['human_total'] = $humanTotal[$rand] ?? 0;
-        } else {
-            $rows[$i]['human_seq'] = 0;
-            $rows[$i]['human_total'] = 0;
-        }
-    }
-    foreach ($rows as &$r) {
-        $rand = $r['random'];
-        $r['duplicate_count'] = ($rand !== '' && isset($counts[$rand])) ? $counts[$rand] : 0;
-        $r['duplicate'] = $r['duplicate_count'] > 1;
-    }
-    unset($r);
-
-    // exclude_system=1(既定) はシステム行を除外。0 で全行返す(画面トグル用)。
-    $excludeSystem = !isset($_GET['exclude_system']) || $_GET['exclude_system'] !== '0';
-    if ($excludeSystem) {
-        $rows = array_values(array_filter($rows, fn ($r) => !$r['is_system']));
-    }
-
-    return $rows;
-}
 
 /** 訓練結果ログ(メール一覧)を JSON で返す。キャンペーン別フィルタ。 */
 function logs_handle_training_log_detail(int $tenantId): never
@@ -592,6 +375,47 @@ function logs_handle_training_log_detail(int $tenantId): never
     foreach ($rows as $r) { $byType[$r['type']] = ($byType[$r['type']] ?? 0) + 1; }
     audit('logs.training_log_detail', 'rows=' . count($rows));
     json_out(['success' => true, 'rows' => $rows, 'count' => count($rows), 'by_type' => $byType]);
+}
+
+/**
+ * 訓練結果ログ(明細)の GeoIP を後追い補完する。
+ *
+ * click(apache_access 由来)の raw は国情報を持たず ip_cache.json 頼みだが、
+ * WebアクセスLog 画面の「GeoIP取得」は superadmin 限定かつ access.log 側の IP しか
+ * 対象にしないため、訓練結果ログにだけ現れる IP が未解決のまま残り、明細の
+ * 国/場所/ISP 列が空になる事故が起きていた(2026-08-30)。
+ * この action は明細と同じ条件で行を取り、未解決 IP だけ外部APIで解決して
+ * キャッシュへ保存する。一覧表示のタイムアウトを避けるため外部通信はこの明示操作のみ。
+ * 1リクエスト200件までに抑え、未解決の残数を返す(フロントは残数0まで繰り返す)。
+ */
+function logs_handle_training_log_geoip(int $tenantId): never
+{
+    $rows = training_log_detail_rows($tenantId);
+
+    // 明細行の IP を weblog_enrich_geoip が期待する形(['ip'=>...])に詰め替える。
+    // 同じ IP を何度も API に投げないよう、ユニークな IP だけを渡す。
+    $seen = [];
+    $ipRows = [];
+    foreach ($rows as $r) {
+        $ip = (string) ($r['ip'] ?? '');
+        if ($ip === '' || $ip === 'unknown' || isset($seen[$ip])) { continue; }
+        $seen[$ip] = true;
+        $ipRows[] = ['ip' => $ip];
+    }
+
+    $batch = 200;
+    weblog_enrich_geoip($ipRows, true, $batch);
+
+    // 解決後のキャッシュで、まだ埋まっていない IP の残数を数える。
+    $cache = weblog_load_ip_cache();
+    $remaining = 0;
+    foreach (array_keys($seen) as $ip) {
+        if (!isset($cache[$ip]) || ($cache[$ip]['country'] ?? '') === 'Unknown') { $remaining++; }
+    }
+
+    audit('logs.training_log_geoip', 'ips=' . count($seen) . ',remaining=' . $remaining);
+    json_out(['success' => true, 'geoip_remaining' => $remaining, 'geoip_batch' => $batch,
+              'ip_count' => count($seen)]);
 }
 
 /** 訓練結果ログ(メール一覧)を CSV でダウンロード(v1 と同じ21カラム)。 */
@@ -624,29 +448,14 @@ function logs_handle_training_log_detail_csv(int $tenantId): never
     exit;
 }
 
-/** 訓練結果ログ(明細)を XLSX でダウンロード。 */
+/** 訓練結果ログ(明細)を XLSX でダウンロード。行生成は lib/TrainingLogRows.php と共有。 */
 function logs_handle_training_log_detail_xlsx(int $tenantId): never
 {
     $rows = training_log_detail_rows($tenantId);
-    $headers = ['日時', '乱数', '重複', 'タイプ', '送信先メールアドレス', '表示氏名（姓名）',
-                'メールアドレス（会社）', '会社名', '略称', '本務役職名称', '役職カテゴリ',
-                '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent'];
-    $data = [];
-    foreach ($rows as $r) {
-        $data[] = [
-            (string) ($r['timestamp'] ?? ''), (string) ($r['random'] ?? ''),
-            $r['duplicate'] ? ($r['duplicate_count'] . '回') : '',
-            (string) ($r['type'] ?? ''), (string) ($r['recipient_email'] ?? ''), (string) ($r['fullname'] ?? ''),
-            (string) ($r['company_email'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['abbreviation'] ?? ''),
-            (string) ($r['position'] ?? ''), (string) ($r['position_category'] ?? ''),
-            (string) ($r['email'] ?? ''), (string) ($r['password'] ?? ''),
-            (string) ($r['ip'] ?? ''), (string) ($r['country'] ?? ''), (string) ($r['location'] ?? ''),
-            (string) ($r['isp'] ?? ''), (string) ($r['org'] ?? ''), (string) ($r['as'] ?? ''),
-            (string) ($r['hostname'] ?? ''), (string) ($r['useragent'] ?? ''),
-        ];
-    }
+    $data = training_log_detail_table_rows($rows);
     audit('logs.training_log_detail_xlsx', 'rows=' . count($rows));
-    logs_xlsx_download('訓練結果ログ明細', $headers, $data, 'training_logs_' . date('Ymd_His') . '.xlsx');
+    logs_xlsx_download('訓練結果ログ明細', training_log_detail_headers(), $data,
+        'training_logs_' . date('Ymd_His') . '.xlsx');
 }
 
 /* ============================================================
@@ -795,320 +604,6 @@ function logs_handle_campaign_files_xlsx(int $tenantId): never
         'campaign_' . $d['campaign_id'] . '_files_' . date('Ymd_His') . '.xlsx');
 }
 
-/* ============================================================
- * 返信者(Maildir パース) — v1 mail_replies.php 相当。
- * 訓練メール送信元アカウントの Maildir を直接読み、受信メール(=返信含む)を
- * 一覧・本文表示する。DB 正規化ログではなく実ファイル参照のため superadmin 限定。
- * メールサーバは参照のみ(書き込み・設定変更は一切しない)。
- * ============================================================ */
-
-/** /etc/postfix/virtual_mailbox_maps を読み、user => email のマップを返す。 */
-function mailbox_email_mapping(): array
-{
-    $mapping = [];
-    $vmapFile = '/etc/postfix/virtual_mailbox_maps';
-    if (is_file($vmapFile) && is_readable($vmapFile)) {
-        $lines = file($vmapFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if ($line === '' || $line[0] === '#') { continue; }
-            $parts = preg_split('/\s+/', $line, 2);
-            if (count($parts) >= 2) {
-                $email = $parts[0];
-                $user = str_replace('/Maildir', '', rtrim($parts[1], '/'));
-                $mapping[$user] = $email;
-            }
-        }
-    }
-    return $mapping;
-}
-
-/** /home 配下および /root の Maildir を検出し、[user => ['maildir','email']] を返す。 */
-function discover_maildirs(): array
-{
-    $emailMapping = mailbox_email_mapping();
-    $maildirs = [];
-    foreach (glob('/home/*/Maildir', GLOB_ONLYDIR) ?: [] as $dir) {
-        $user = basename(dirname($dir));
-        // 読めないディレクトリはスキップ(mcp 等)。
-        if (!is_readable($dir . '/new') && !is_readable($dir . '/cur')) { continue; }
-        $email = $emailMapping[$user] ?? ($user . '@cojp.online');
-        $maildirs[$user] = ['maildir' => $dir, 'email' => $email];
-    }
-    if (is_dir('/root/Maildir') && (is_readable('/root/Maildir/new') || is_readable('/root/Maildir/cur'))) {
-        $maildirs['root'] = ['maildir' => '/root/Maildir', 'email' => 'root@cojp.online'];
-    }
-    ksort($maildirs);
-    return $maildirs;
-}
-
-/** MIME エンコードされたヘッダー文字列(=?charset?B/Q?...?=)を UTF-8 にデコードする。 */
-function decode_mime_header(string $string): string
-{
-    $decoded = preg_replace_callback('/=\?([^?]+)\?([BQbq])\?([^?]*)\?=/', function ($m) {
-        $charset = $m[1];
-        $encoding = strtoupper($m[2]);
-        $text = $m[3];
-        if ($encoding === 'B') {
-            $decodedText = base64_decode($text);
-        } elseif ($encoding === 'Q') {
-            $decodedText = quoted_printable_decode(str_replace('_', ' ', $text));
-        } else {
-            $decodedText = $text;
-        }
-        if ($decodedText !== false && strtoupper($charset) !== 'UTF-8') {
-            $converted = @iconv($charset, 'UTF-8//IGNORE', $decodedText);
-            if ($converted !== false) { return $converted; }
-        }
-        return $decodedText !== false ? $decodedText : $text;
-    }, $string);
-    return $decoded !== null ? $decoded : $string;
-}
-
-/** メールファイルからヘッダー(date/from/to/subject/添付有無)を解析する。 */
-function maildir_parse_headers(string $filepath): ?array
-{
-    $content = @file_get_contents($filepath, false, null, 0, 256 * 1024); // 先頭 256KB でヘッダーは十分
-    if ($content === false) { return null; }
-
-    $headerEnd = strpos($content, "\r\n\r\n");
-    if ($headerEnd === false) { $headerEnd = strpos($content, "\n\n"); }
-    if ($headerEnd === false) { return null; }
-    $headerSection = substr($content, 0, $headerEnd);
-
-    $headers = [];
-    $curName = '';
-    $curVal = '';
-    foreach (preg_split('/\r?\n/', $headerSection) as $line) {
-        if (preg_match('/^([A-Za-z0-9-]+):\s*(.*)$/', $line, $mm)) {
-            if ($curName !== '') { $headers[strtolower($curName)] = trim($curVal); }
-            $curName = $mm[1];
-            $curVal = $mm[2];
-        } elseif (preg_match('/^\s+(.*)$/', $line, $mm)) {
-            $curVal .= ' ' . trim($mm[1]);
-        }
-    }
-    if ($curName !== '') { $headers[strtolower($curName)] = trim($curVal); }
-
-    $res = [
-        'date' => '', 'from' => '', 'from_email' => '', 'to' => '',
-        'subject' => '', 'has_attachment' => false, 'filename' => basename($filepath),
-        'unreadable' => false,
-    ];
-    if (isset($headers['date'])) {
-        $ts = strtotime($headers['date']);
-        $res['date'] = $ts !== false ? date('Y-m-d H:i:s', $ts) : $headers['date'];
-    }
-    if (isset($headers['from'])) {
-        $from = decode_mime_header($headers['from']);
-        $res['from'] = $from;
-        if (preg_match('/<([^>]+)>/', $from, $mm)) {
-            $res['from_email'] = $mm[1];
-        } elseif (preg_match('/([^\s<]+@[^\s>]+)/', $from, $mm)) {
-            $res['from_email'] = $mm[1];
-        }
-    }
-    if (isset($headers['to']))      { $res['to'] = decode_mime_header($headers['to']); }
-    if (isset($headers['subject'])) { $res['subject'] = decode_mime_header($headers['subject']); }
-    if (isset($headers['content-type']) && stripos($headers['content-type'], 'multipart/mixed') !== false) {
-        $res['has_attachment'] = true;
-    }
-    if (isset($headers['x-ms-has-attach']) && strtolower(trim($headers['x-ms-has-attach'])) === 'yes') {
-        $res['has_attachment'] = true;
-    }
-    return $res;
-}
-
-/** Maildir の new/cur からメール一覧を取得する。
- *
- * 読めないファイルを黙って捨てない。Postfix virtual(8) は配送時に 0600 で
- * ファイルを作るため、www-data から読めないメールが混ざりうる。以前これを
- * スキップしていたせいで「サーバには届いているのに一覧に出ない」状態になり、
- * 返信の見落としに直結した。読めない場合はプレースホルダ行として残し、
- * 画面側で権限エラーと分かるようにする。
- */
-function maildir_list(string $maildirPath): array
-{
-    $mails = [];
-    foreach (['new', 'cur'] as $dir) {
-        $path = $maildirPath . '/' . $dir;
-        if (!is_dir($path)) { continue; }
-        $files = @scandir($path);
-        if ($files === false) { continue; }
-        foreach ($files as $file) {
-            if ($file === '.' || $file === '..') { continue; }
-            $filepath = $path . '/' . $file;
-            if (!is_file($filepath)) { continue; }
-            $mail = maildir_parse_headers($filepath);
-            if ($mail === null) {
-                $mail = maildir_unreadable_entry($filepath);
-            }
-            $mail['status'] = $dir;
-            $mails[] = $mail;
-        }
-    }
-    return $mails;
-}
-
-/** 読み取れなかったメールを一覧に残すためのプレースホルダを作る。
- *
- * 日時はファイルの更新時刻で代用する (ヘッダーが読めないため)。
- */
-function maildir_unreadable_entry(string $filepath): array
-{
-    $mtime = @filemtime($filepath);
-    $perm = @fileperms($filepath);
-    $mode = $perm !== false ? substr(sprintf('%o', $perm), -4) : '????';
-    return [
-        // 一覧のソートは date の文字列比較なので、正常系と同じ書式に揃える。
-        'date' => $mtime !== false ? date('Y-m-d H:i:s', $mtime) : '',
-        'from' => '(読み取り不可)',
-        'from_email' => '',
-        'to' => '',
-        'subject' => '(権限不足でヘッダーを読めません: mode ' . $mode . ')',
-        'has_attachment' => false,
-        'filename' => basename($filepath),
-        'unreadable' => true,
-    ];
-}
-
-/**
- * 返信者一覧を計算する(list/csv 共通)。$_GET の sender/start_date/end_date/q でフィルタ。
- * 戻り値: ['mails' => [...], 'counts' => [...], 'accounts' => [...]]。
- */
-/**
- * ?campaign_id 指定時、そのキャンペーンの送信元アドレス群(小文字)を返す。
- * campaigns.from_address と campaign_contents.from_address の両方を集める
- * (コンテンツ別に送信元が異なるキャンペーンがあるため)。未指定なら null(=絞らない)。
- * 返信者タブは superadmin 限定・全テナント横断のためテナント検証はしない。
- */
-function reply_maildir_campaign_from_addresses(): ?array
-{
-    if (!isset($_GET['campaign_id']) || $_GET['campaign_id'] === '') { return null; }
-    $cid = (int) $_GET['campaign_id'];
-    if ($cid < 1) { json_error('campaign_id が不正です', 400); }
-    $emails = [];
-    foreach (Db::all('SELECT from_address FROM campaigns WHERE id = ?', [$cid]) as $r) {
-        $a = strtolower(trim((string) ($r['from_address'] ?? '')));
-        if ($a !== '') { $emails[$a] = true; }
-    }
-    foreach (Db::all('SELECT from_address FROM campaign_contents WHERE campaign_id = ?', [$cid]) as $r) {
-        $a = strtolower(trim((string) ($r['from_address'] ?? '')));
-        if ($a !== '') { $emails[$a] = true; }
-    }
-    // 送信元が1つも設定されていない場合は空配列を返す(=どの Maildir にも一致せず0件)。
-    return array_keys($emails);
-}
-
-/**
- * ?campaign_id 指定時、そのキャンペーンの送信開始 start_at('Y-m-d H:i:s')を返す。
- * 返信の下限(これより前=別キャンペーン/期間外の古いメール)を自動で切るために使う。
- * 同じ送信元アドレスを複数キャンペーンが使い回すため、送信元一致だけでは期間外が混ざる。
- * 返信の上限(いつまでの返信を見るか)は画面の終了日フィルタ(end_date)で手動指定する。
- * start_at 未設定なら null(下限なし)。
- */
-function reply_maildir_campaign_start(): ?string
-{
-    if (!isset($_GET['campaign_id']) || $_GET['campaign_id'] === '') { return null; }
-    $cid = (int) $_GET['campaign_id'];
-    if ($cid < 1) { json_error('campaign_id が不正です', 400); }
-    $row = Db::one('SELECT start_at FROM campaigns WHERE id = ?', [$cid]);
-    if ($row === null) { return null; }
-    $start = trim((string) ($row['start_at'] ?? ''));
-    $ts = $start !== '' ? strtotime($start) : false;
-    return $ts !== false ? date('Y-m-d H:i:s', $ts) : null;
-}
-
-/**
- * Maildir のアドレスが、キャンペーン送信元アドレス群のいずれかに該当するか。
- * まず完全一致(大小無視)、ダメならローカルパート(@より前)一致でフォールバックする。
- * 訓練の from_address のドメインと、返信を受け取る実 Maildir のドメインが異なる
- * 配送があるため(例: 送信元 event-support@mail.cojp.online → 返信は
- * event-support@gwin.gr.cojp.online の Maildir に届く)。
- */
-function reply_maildir_email_matches(string $maildirEmail, array $fromEmails): bool
-{
-    $md = strtolower(trim($maildirEmail));
-    if (in_array($md, $fromEmails, true)) { return true; }
-    $localOf = static function (string $e): string {
-        $at = strpos($e, '@');
-        return $at === false ? $e : substr($e, 0, $at);
-    };
-    $mdLocal = $localOf($md);
-    if ($mdLocal === '') { return false; }
-    foreach ($fromEmails as $from) {
-        if ($localOf($from) === $mdLocal) { return true; }
-    }
-    return false;
-}
-
-function reply_maildir_compute(): array
-{
-    $maildirs = discover_maildirs();
-    $sender = isset($_GET['sender']) ? (string) $_GET['sender'] : '';
-    $startTs = (isset($_GET['start_date']) && $_GET['start_date'] !== '') ? strtotime((string) $_GET['start_date']) : null;
-    $endTs   = (isset($_GET['end_date'])   && $_GET['end_date']   !== '') ? strtotime((string) $_GET['end_date'])   : null;
-    $keyword = isset($_GET['q']) && is_string($_GET['q']) ? trim($_GET['q']) : '';
-
-    // campaign_id 指定時は、そのキャンペーンの送信元アドレス(=返信の宛先)に届いた
-    // Maildir だけに絞る。返信は訓練の from_address 宛に届くため、キャンペーンの
-    // from_address(campaigns + campaign_contents 両方)と一致する Maildir アカウントの
-    // 受信メールだけを「そのキャンペーンの返信」として扱う(2026-08-23)。
-    // 返信者タブは superadmin 限定・全テナント横断なのでテナント検証はしない。
-    $campaignFromEmails = reply_maildir_campaign_from_addresses();
-
-    // 返信の下限はキャンペーンの送信開始(start_at)。同じ送信元を複数キャンペーンが
-    // 使い回すため、送信元一致だけでは他キャンペーン/期間外の古いメールが混ざる。
-    // 送信開始より前のメールは別キャンペーン/期間外として落とす。画面の開始日フィルタが
-    // より遅ければそちらを優先(利用者が明示的に絞った範囲を尊重)。上限(いつまでの返信か)は
-    // 画面の終了日フィルタ(end_date)で手動指定する。
-    $campaignStart = reply_maildir_campaign_start();
-    if ($campaignStart !== null) {
-        $csTs = strtotime($campaignStart);
-        if ($csTs !== false) { $startTs = ($startTs === null) ? $csTs : max($startTs, $csTs); }
-    }
-
-    $allMails = [];
-    $counts = [];
-    foreach ($maildirs as $key => $config) {
-        $counts[$key] = 0;
-        if ($sender !== '' && $sender !== $key) { continue; }
-        // campaign_id 指定時、この Maildir がキャンペーン送信元と一致しなければ除外。
-        if ($campaignFromEmails !== null && !reply_maildir_email_matches($config['email'], $campaignFromEmails)) {
-            continue;
-        }
-        $mails = maildir_list($config['maildir']);
-        foreach ($mails as &$mail) {
-            $mail['sender_account'] = $key;
-            $mail['sender_email'] = $config['email'];
-        }
-        unset($mail);
-        if ($startTs !== null || $endTs !== null) {
-            $mails = array_values(array_filter($mails, function ($mail) use ($startTs, $endTs) {
-                $mt = strtotime((string) $mail['date']);
-                if ($mt === false) { return false; }
-                if ($startTs !== null && $mt < $startTs) { return false; }
-                if ($endTs !== null && $mt > $endTs) { return false; }
-                return true;
-            }));
-        }
-        if ($keyword !== '') {
-            $mails = array_values(array_filter($mails, function ($mail) use ($keyword) {
-                return stripos((string) $mail['from'], $keyword) !== false
-                    || stripos((string) $mail['subject'], $keyword) !== false
-                    || stripos((string) $mail['from_email'], $keyword) !== false;
-            }));
-        }
-        $counts[$key] = count($mails);
-        $allMails = array_merge($allMails, $mails);
-    }
-    usort($allMails, fn ($a, $b) => strcmp((string) $b['date'], (string) $a['date']));
-
-    $accounts = [];
-    foreach ($maildirs as $key => $config) { $accounts[$key] = $config['email']; }
-
-    return ['mails' => $allMails, 'counts' => $counts, 'accounts' => $accounts];
-}
 
 /** 返信者一覧: 全(または指定)送信元アカウントの Maildir を横断して一覧する。 */
 function logs_handle_reply_maildir(): never
@@ -1124,13 +619,9 @@ function logs_handle_reply_maildir_csv(): never
 {
     $r = reply_maildir_compute();
     $out = fopen('php://temp', 'r+');
-    fputcsv($out, ['受信日時', '送信元アカウント', '送信元メール', '差出人', '差出人アドレス', '宛先', '件名', '添付']);
-    foreach ($r['mails'] as $m) {
-        fputcsv($out, [
-            (string) ($m['date'] ?? ''), (string) ($m['sender_account'] ?? ''), (string) ($m['sender_email'] ?? ''),
-            (string) ($m['from'] ?? ''), (string) ($m['from_email'] ?? ''), (string) ($m['to'] ?? ''),
-            (string) ($m['subject'] ?? ''), !empty($m['has_attachment']) ? '有' : '',
-        ]);
+    fputcsv($out, reply_maildir_headers());
+    foreach (reply_maildir_table_rows($r['mails']) as $row) {
+        fputcsv($out, $row);
     }
     rewind($out);
     $csv = stream_get_contents($out);
@@ -1145,21 +636,14 @@ function logs_handle_reply_maildir_csv(): never
     exit;
 }
 
-/** 返信者一覧を XLSX でダウンロード。 */
+/** 返信者一覧を XLSX でダウンロード。行生成は lib/ReplyMaildir.php と共有。 */
 function logs_handle_reply_maildir_xlsx(): never
 {
     $r = reply_maildir_compute();
-    $headers = ['受信日時', '送信元アカウント', '送信元メール', '差出人', '差出人アドレス', '宛先', '件名', '添付'];
-    $data = [];
-    foreach ($r['mails'] as $m) {
-        $data[] = [
-            (string) ($m['date'] ?? ''), (string) ($m['sender_account'] ?? ''), (string) ($m['sender_email'] ?? ''),
-            (string) ($m['from'] ?? ''), (string) ($m['from_email'] ?? ''), (string) ($m['to'] ?? ''),
-            (string) ($m['subject'] ?? ''), !empty($m['has_attachment']) ? '有' : '',
-        ];
-    }
+    $data = reply_maildir_table_rows($r['mails']);
     audit('logs.reply_maildir_xlsx', 'total=' . count($r['mails']));
-    logs_xlsx_download('返信者', $headers, $data, 'mail_replies_' . date('Ymd_His') . '.xlsx');
+    logs_xlsx_download('返信者', reply_maildir_headers(), $data,
+        'mail_replies_' . date('Ymd_His') . '.xlsx');
 }
 
 /** multipart から text/plain または text/html パートを再帰的に抽出する。 */
@@ -1726,6 +1210,7 @@ try {
         case 'training_results_csv': logs_handle_training_results_csv($tenantId);
         case 'training_log_detail':     logs_handle_training_log_detail($tenantId);
         case 'training_log_detail_csv': logs_handle_training_log_detail_csv($tenantId);
+        case 'training_log_geoip':      logs_handle_training_log_geoip($tenantId);
         case 'campaign_files':          logs_handle_campaign_files($tenantId);
         case 'campaign_files_csv':      logs_handle_campaign_files_csv($tenantId);
         case 'delivery_xlsx':           logs_handle_delivery_xlsx($tenantId);

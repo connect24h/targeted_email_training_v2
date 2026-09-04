@@ -120,14 +120,14 @@ class SimpleXlsx
         $ssXml .= '</sst>';
         $zip->addFromString('xl/sharedStrings.xml', $ssXml);
 
-        // xl/styles.xml — ヘッダ行太字 + パーセント書式
+        // xl/styles.xml — ヘッダ行(太字+白文字+青背景) + パーセント書式
         $zip->addFromString('xl/styles.xml',
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             . '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
             . '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts>'
             . '<fonts count="2">'
             . '<font><sz val="11"/><name val="Calibri"/></font>'  // fontId=0: 標準
-            . '<font><b/><sz val="11"/><name val="Calibri"/></font>'  // fontId=1: 太字
+            . '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>'  // fontId=1: 太字+白文字(ヘッダ専用。青背景 fillId=2 と対で使う)
             . '</fonts>'
             . '<fills count="3">'
             . '<fill><patternFill patternType="none"/></fill>'
