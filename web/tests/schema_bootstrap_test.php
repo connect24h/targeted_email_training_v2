@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 30, 'fresh DBに30個の業務tableがある');
+check(count($businessTables) === 32, 'fresh DBに32個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -42,6 +42,8 @@ $expectedTables = [
     'edu_materials',
     'edu_delivery_targets',
     'human_risk_scores',
+    'report_mails',
+    'report_mail_matches',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -67,5 +69,41 @@ foreach ($expectedColumns as $table => $columns) {
 
 $foreignKeyErrors = $pdo->query('PRAGMA foreign_key_check')->fetchAll();
 check($foreignKeyErrors === [], 'foreign key違反がない');
+
+$pdo->exec('PRAGMA foreign_keys = ON');
+$pdo->exec("INSERT INTO report_mails
+    (message_id_hash, content_hash, maildir_file, received_at, parse_status, ingest_mode)
+    VALUES ('hash', 'content', 'fixture', '2026-09-06 12:00:00', 'parsed', 'normal')");
+$reportId = (int) $pdo->lastInsertId();
+$insert = $pdo->prepare("INSERT INTO report_mail_matches (report_mail_id, tracking_id, method, status)
+    VALUES (?, '0987654321', 'msgid', 'confirmed')");
+$insert->execute([$reportId]);
+check($pdo->query('SELECT tracking_id FROM report_mail_matches')->fetchColumn() === '0987654321',
+    'tracking_idの先頭ゼロを保持する');
+foreach ([
+    "INSERT INTO report_mails (message_id_hash, content_hash, maildir_file, received_at, parse_status, ingest_mode)
+        VALUES ('hash', 'other', 'fixture2', '2026-09-06 12:01:00', 'parsed', 'normal')",
+    "INSERT INTO report_mail_matches (report_mail_id, tracking_id, method, status)
+        VALUES ($reportId, '0987654321', 'body_url', 'pending')",
+    "INSERT INTO report_mail_matches (report_mail_id, tracking_id, method, status)
+        VALUES (999999, '0000000001', 'msgid', 'pending')",
+] as $sql) {
+    $rejected = false;
+    try {
+        $pdo->exec($sql);
+    } catch (PDOException) {
+        $rejected = true;
+    }
+    check($rejected, '報告メールのUNIQUE/FK制約で不整合を拒否する');
+}
+$pdo->exec("DELETE FROM report_mails WHERE id = $reportId");
+check((int) $pdo->query('SELECT COUNT(*) FROM report_mail_matches')->fetchColumn() === 0,
+    '報告メール削除時に候補をCASCADE削除する');
+foreach (['idx_report_mails_received_at', 'idx_report_mail_matches_tenant_status',
+    'idx_report_mail_matches_tracking_id'] as $index) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?");
+    $stmt->execute([$index]);
+    check((int) $stmt->fetchColumn() === 1, $index . 'が存在する');
+}
 
 echo "ALL TESTS PASSED\n";

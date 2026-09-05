@@ -16,6 +16,7 @@ final class MigrationRunner
         '20260812-suppress-prefill-email',
         '20260816-human-risk-score',
         '20260819-attachment-filename-prefix',
+        '20260906-report-mail-ingest',
     ];
 
     /**
@@ -166,6 +167,10 @@ final class MigrationRunner
         if ($version === '20260816-human-risk-score') {
             // 個人リスクスコアの保存先。既存テーブルには一切触れない。
             $pdo->exec($this->readSchema('schema-risk.sql'));
+            return;
+        }
+        if ($version === '20260906-report-mail-ingest') {
+            $pdo->exec($this->readSchema('schema-report-mail.sql'));
             return;
         }
         if ($version === '20260819-attachment-filename-prefix') {

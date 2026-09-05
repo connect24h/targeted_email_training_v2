@@ -24,6 +24,7 @@ import logging
 import subprocess
 import re
 import json
+import secrets
 from datetime import datetime
 from pathlib import Path
 from email.mime.text import MIMEText
@@ -414,7 +415,7 @@ class TargetedEmailSender:
             self.logger.error(f"添付ファイル処理エラー: {str(e)}")
             return False
     
-    def send_email(self, to_email, from_email, subject, body, attachment_path=None):
+    def send_email(self, to_email, from_email, subject, body, attachment_path=None, tracking_id=None):
         """メール送信（エラー処理強化版）"""
         try:
             # 入力値の検証
@@ -433,7 +434,11 @@ class TargetedEmailSender:
             msg['To'] = to_email
             msg['Subject'] = subject
             msg['Date'] = formatdate(localtime=True)
-            msg['Message-ID'] = make_msgid()
+            if isinstance(tracking_id, str) and re.fullmatch(r'[0-9]{10}', tracking_id):
+                domain = from_email.rsplit('@', 1)[1]
+                msg['Message-ID'] = f'<t{tracking_id}.{secrets.token_hex(16)}@{domain}>'
+            else:
+                msg['Message-ID'] = make_msgid()
             
             # 本文添付
             if not body:
@@ -921,7 +926,8 @@ class TargetedEmailSender:
                 
                 # メール送信
                 try:
-                    if self.send_email(to_email, from_email, subject, body, attachment_path):
+                    if self.send_email(to_email, from_email, subject, body, attachment_path,
+                                       tracking_id=row.get('乱数')):
                         # メールログで送信確認
                         self.logger.info(f"📤 SMTP送信完了、メールログ確認中... {to_email}")
                         if self.check_mail_delivery(to_email, max_wait=15, check_interval=2):

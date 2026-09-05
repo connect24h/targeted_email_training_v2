@@ -57,15 +57,25 @@ $pdo->exec("INSERT INTO groups (tenant_id, name, kind) VALUES (1, '全職員', '
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 12, '未適用migrationが12件ある');
-check($runner->migrate() === 12, '初回はmigrationを12件適用する');
+check(count($runner->pending()) === 13, '未適用migrationが13件ある');
+check($runner->migrate() === 13, '初回はmigrationを13件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
+// 全旧版が適用済みでも、新版だけで報告メール用tableが追加される。
+$pdo->exec('DROP TABLE report_mail_matches');
+$pdo->exec('DROP TABLE report_mails');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20260906-report-mail-ingest'");
+check($runner->pending() === ['20260906-report-mail-ingest'], '報告メール新版だけがpending');
+check($runner->migrate() === 1, '報告メール新版を単独適用できる');
+check($pdo->query('SELECT COUNT(*) FROM report_mails')->fetchColumn() === 0,
+    '既存DBに報告メールtableを新規作成する');
+check($runner->migrate() === 0, '報告メール新版も冪等');
+
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 12,
-    'schema_migrationsへ12件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 13,
+    'schema_migrationsへ13件だけ記録される');
 check(in_array('suppress_prefill_email', array_column(
     $pdo->query('PRAGMA table_info(campaign_contents)')->fetchAll(),
     'name'
@@ -123,8 +133,9 @@ check($currentRunner->pending() === [
     '20260812-suppress-prefill-email',
     '20260816-human-risk-score',
     '20260819-attachment-filename-prefix',
-], '現行DBは11件の後続migrationがpending');
-check($currentRunner->migrate() === 11, '現行DBへ残りのmigrationを適用する');
+    '20260906-report-mail-ingest',
+], '現行DBは12件の後続migrationがpending');
+check($currentRunner->migrate() === 12, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
@@ -152,7 +163,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 10, '既存automation DBへ10件の後続migrationを適用する');
+check($rotationRunner->migrate() === 11, '既存automation DBへ11件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -176,9 +187,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 12, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 12,
-    'version tableを作成して12件記録する');
+check($unversionedRunner->migrate() === 13, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 13,
+    'version tableを作成して13件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -191,7 +202,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 12, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 13, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets
