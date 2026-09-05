@@ -205,4 +205,26 @@ $badBand = (int) Db::one(
 )['c'];
 check($badBand === 0, '帯は low/medium/high のいずれか');
 
+
+
+// WP1-b: 報告とclean creditの単位・終了条件。
+check($good['detail']['clean_campaigns'] === 1 && $good['report_credit'] > 9.9, '報告のみはcleanとreportの両方を与える');
+check($reporter['detail']['clean_campaigns'] === 0, 'クリック+報告はclean対象外');
+hrsEvent($campaignId, $openerId, '5000000001', 'report');
+$openReport = HumanRiskScore::computeForTarget($openerId, 1, HRS_TODAY);
+check($openReport['detail']['clean_campaigns'] === 0 && $openReport['report_credit'] > 5.9, '開封+報告はreport creditのみ');
+hrsEvent($campaignId, $goodId, '5000000006', 'report', 90);
+$duplicateReport = HumanRiskScore::computeForTarget($goodId, 1, HRS_TODAY);
+check($duplicateReport['detail']['report'] === 1 && abs($duplicateReport['report_credit'] - 6.99) < 0.02, '重複報告は最初の時刻の1件だけ加点');
+$running = hrsCampaign();
+Db::run("UPDATE campaigns SET status='running', end_at='2026-08-17 00:00:00' WHERE id=?", [$running]);
+$runningTarget = hrsTarget('running@example.test');
+hrsEvent($running, $runningTarget, '5500000001', 'report');
+$runningScore = HumanRiskScore::computeForTarget($runningTarget, 1, HRS_TODAY);
+check($runningScore['detail']['clean_campaigns'] === 0 && $runningScore['report_credit'] > 5.9, '未終了はcleanなし、report creditは有効');
+Db::run("UPDATE campaigns SET end_at='2026-08-15 23:59:59' WHERE id=?", [$running]);
+check(HumanRiskScore::computeForTarget($runningTarget, 1, HRS_TODAY)['detail']['clean_campaigns'] === 1, '終了日が算出日より前ならclean対象');
+Db::run("UPDATE campaigns SET end_at='2026-08-16 00:00:00' WHERE id=?", [$running]);
+check(HumanRiskScore::computeForTarget($runningTarget, 1, HRS_TODAY)['detail']['clean_campaigns'] === 0, '算出日当日の終了は翌日からclean対象');
+
 echo "ALL TESTS PASSED\n";

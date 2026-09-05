@@ -471,3 +471,18 @@ check(function_exists('logs_handle_reply_maildir_view'), 'reply_maildir_view ハ
 check(function_exists('discover_maildirs'), 'discover_maildirs が定義されている');
 
 echo "ALL TESTS PASSED\n";
+
+// WP1-b: 報告の明細/集計/列順と人間アクセス回数を固定。
+Db::run("INSERT INTO events(tenant_id,campaign_id,tracking_id,event_type,occurred_at,source,raw) VALUES(?,?,?,'report',?,'report_mail',?)",
+    [$tenantId, $cid, $rand, '2026-08-16 10:00:00', '{"subject_head":"IP: 203.0.113.50 | ISP: Microsoft Corporation"}']);
+$_GET = ['campaign_id'=>(string)$cid];
+$withReport = training_log_detail_rows($tenantId);
+$reportRows = array_values(array_filter($withReport, static fn(array $r):bool=>$r['type']==='report'));
+check(count($reportRows)===1 && $reportRows[0]['report']==='2026-08-16 10:00:00', '報告行に受信日時を表示');
+check($reportRows[0]['ip']==='' && $reportRows[0]['human_total']===0, '報告の件名をアクセスログとして解釈せずアクセス回数にも含めない');
+$table = training_log_detail_table_rows($reportRows);
+check(count($table[0])===22 && $table[0][21]==='2026-08-16 10:00:00', '明細の末尾22列目が報告');
+$resultRows = training_results_rows($tenantId);
+check(count($resultRows[0])===12 && $resultRows[0][11]==='○', '対象者集計の末尾12列目に報告あり');
+$_GET = ['campaign_id'=>(string)$cid, 'type'=>'report'];
+check(count(training_log_detail_rows($tenantId))===1, 'reportでタイプを絞り込める');

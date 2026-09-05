@@ -10,6 +10,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/ReportMailIngest.php';
 
 final class EventIngest
 {
@@ -25,22 +26,15 @@ final class EventIngest
                           FROM campaign_targets ct JOIN campaigns c ON c.id = ct.campaign_id') as $r) {
             $map[$r['tracking_id']] = ['campaign_id' => (int) $r['campaign_id'], 'tenant_id' => (int) $r['tenant_id']];
         }
-        if (count($map) === 0) {
-            return ['open' => 0, 'click' => 0, 'auth' => 0];
-        }
-
-        // report(報告)の取込経路は未実装。event_type としては受け入れる用意があり、
-        // レポートの報告率・resilience_ratio とリスクスコアの減点は report が入れば動く。
-        //
-        // 訓練メール本文に報告URLを載せる案は却下した(2026-08-16)。本文に「報告はこちら」と
-        // 書けば、それ自体が訓練であることの証拠になり、見破る能力を測る訓練として成立しない。
-        // 商用製品は Outlook/Gmail のアドインで報告ボタンを提供している。この環境で採るなら
-        // 報告専用アドレスへの転送を Postfix で受ける方式が現実的だが、転送メールから
-        // 元の tracking_id を復元できるかの検証が先に必要。
+        // report のMaildir取込を実装。回収IDと対象者のFrom一致で確定し、
+        // pending は人が確定する。報告URLへのアクセスでは加点しない。
         $counts = ['open' => 0, 'click' => 0, 'auth' => 0];
         $counts['open']  += self::ingestApache($map, 'open',  '/kunren-beacon-(\d{10})\.png/');
         $counts['click'] += self::ingestApache($map, 'click', '/link-(\d{10})\.html/');
         $counts['auth']  += self::ingestAuthLogs($map);
+        $report = ReportMailIngest::run();
+        $counts['report'] = $report['report'];
+        $counts['report_pending'] = $report['report_pending'];
         return $counts;
     }
 

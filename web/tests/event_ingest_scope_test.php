@@ -4,14 +4,7 @@ declare(strict_types=1);
 /**
  * EventIngest の取込対象と除外規則を固定する。
  *
- * 報告(report)の取込経路は未実装。訓練メール本文に報告URLを載せる案は却下した
- * (2026-08-16)。本文に「報告はこちら」と書けば、それ自体が訓練であることの証拠に
- * なり、見破る能力を測る訓練として成立しないため。
- *
- * ただし report を「加点要素」として扱う前提はレポートとリスクスコアに残っており、
- * ボット除外の対象にも含めてある。将来どの方式(専用アドレスへの転送等)で報告を
- * 取るにしても、スキャナに踏まれて「報告した」ことになる害は同じなので、
- * その規則をここで固定する。
+ * 報告はMaildirから取り込む。ボット除外の列挙にもreportを含める。
  *
  * 実装本体の EventIngest::ingestAll() をそのまま呼ぶ。ログ探索先だけを
  * TET2_APACHE_LOG_DIR で差し替える(ロジックをテスト側で書き直さない)。
@@ -25,6 +18,7 @@ require_once __DIR__ . '/../lib/EventIngest.php';
 $logDir = sys_get_temp_dir() . '/tet2-ingest-' . bin2hex(random_bytes(4));
 mkdir($logDir);
 putenv('TET2_APACHE_LOG_DIR=' . $logDir);
+putenv('TET2_REPORT_MAILDIR=' . $logDir . '/missing');
 register_shutdown_function(static function () use ($logDir): void {
     foreach (glob($logDir . '/*') ?: [] as $f) {
         unlink($f);
@@ -74,13 +68,13 @@ check(array_key_exists('open', $counts) && array_key_exists('click', $counts)
     && array_key_exists('auth', $counts), '取込結果は open/click/auth を返す');
 check(($counts['click'] ?? 0) === 1, 'リンクページへのアクセスを click として取り込む');
 
-// --- 報告ページは生成していないので取り込まれない(未実装であることの明示) ---
+// --- Maildirがなければ報告は0件 ---
 ingestReset();
 $counts = ingestWith([ingestLogLine('/kunren-report-9000000001.html', $HUMAN_UA)]);
-check(!isset($counts['report']), '報告の取込経路は未実装(本文リンク方式は却下した)');
-check(Db::one("SELECT 1 FROM events WHERE event_type='report'") === null, 'report イベントは作られない');
+check($counts['report'] === 0 && $counts['report_pending'] === 0, 'Maildirがなければreport=0');
+check(Db::one("SELECT 1 FROM events WHERE event_type='report'") === null, 'Maildir不在ならreportは増えない');
 
-// --- ボット除外は click と report に効く。report は将来どの方式でも加点要素なので残す ---
+// --- ボット除外は click と report に効く。report は加点要素なので除外規則を維持 ---
 ingestReset();
 $counts = ingestWith([
     ingestLogLine('/link-9000000001.html', 'Proofpoint-URLDefense'),

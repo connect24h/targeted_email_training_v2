@@ -418,21 +418,21 @@ function logs_handle_training_log_geoip(int $tenantId): never
               'ip_count' => count($seen)]);
 }
 
-/** 訓練結果ログ(メール一覧)を CSV でダウンロード(v1 と同じ21カラム)。 */
+/** 訓練結果ログ(メール一覧)を CSV でダウンロード(既存21カラム + 報告)。 */
 function logs_handle_training_log_detail_csv(int $tenantId): never
 {
     $rows = training_log_detail_rows($tenantId);
     $out = fopen('php://temp', 'r+');
     fputcsv($out, ['日時', '乱数', '重複', 'タイプ', '送信先メールアドレス', '表示氏名（姓名）',
                    'メールアドレス（会社）', '会社名', '略称', '本務役職名称', '役職カテゴリ',
-                   '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent']);
+                   '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent', '報告']);
     foreach ($rows as $r) {
         // CSVインジェクション対策: 入力Email/Password/UserAgent 等の攻撃者由来値を含むため全列を無害化。
         fputcsv($out, [
             tet2_csv_sanitize($r['timestamp']), tet2_csv_sanitize($r['random']), ($r['duplicate'] ? $r['duplicate_count'] . '回' : ''),
             tet2_csv_sanitize($r['type']), tet2_csv_sanitize($r['recipient_email']), tet2_csv_sanitize($r['fullname']), tet2_csv_sanitize($r['company_email']), tet2_csv_sanitize($r['company']),
             tet2_csv_sanitize($r['abbreviation']), tet2_csv_sanitize($r['position']), tet2_csv_sanitize($r['position_category']), tet2_csv_sanitize($r['email']), tet2_csv_sanitize($r['password']),
-            tet2_csv_sanitize($r['ip']), tet2_csv_sanitize($r['country']), tet2_csv_sanitize($r['location']), tet2_csv_sanitize($r['isp']), tet2_csv_sanitize($r['org']), tet2_csv_sanitize($r['as']), tet2_csv_sanitize($r['hostname']), tet2_csv_sanitize($r['useragent']),
+            tet2_csv_sanitize($r['ip']), tet2_csv_sanitize($r['country']), tet2_csv_sanitize($r['location']), tet2_csv_sanitize($r['isp']), tet2_csv_sanitize($r['org']), tet2_csv_sanitize($r['as']), tet2_csv_sanitize($r['hostname']), tet2_csv_sanitize($r['useragent']), tet2_csv_sanitize($r['report']),
         ]);
     }
     rewind($out);

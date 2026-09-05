@@ -140,19 +140,25 @@ final class HumanRiskScore
         // event_type は明示列挙。click_bot(生成コードのない残骸データ)を混ぜない。
         // テストキャンペーン(c.is_test=1)は運用の動作確認なので除外する。
         $rows = Db::all(
-            "SELECT e.event_type,
+            "SELECT e.event_type, e.tracking_id,
                     MAX(0, julianday(?) - julianday(e.occurred_at)) AS days_ago
              FROM events e
              INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
              INNER JOIN campaigns c ON c.id = ct.campaign_id
              WHERE ct.target_id = ? AND e.tenant_id = ?
                AND c.is_test = 0 AND c.deleted_at IS NULL
-               AND e.event_type IN ('open','click','auth','report')",
+               AND e.event_type IN ('open','click','auth','report')
+             ORDER BY e.occurred_at, e.id",
             [$date . ' 23:59:59', $targetId, $tenantId]
         );
 
+        $reported = [];
         foreach ($rows as $r) {
             $type = (string) $r['event_type'];
+            if ($type === 'report') {
+                if (isset($reported[$r['tracking_id']])) { continue; }
+                $reported[$r['tracking_id']] = true;
+            }
             $decay = self::decay((float) $r['days_ago']);
             $counts[$type]++;
             if ($type === 'report') {
@@ -166,7 +172,7 @@ final class HumanRiskScore
 
         // 訓練を受けて反応しなかった実績を評価する。これを入れないと、
         // 正しく無視した人が未参加者と同じ基準点に並んでしまう。
-        $clean = self::cleanCampaignCount($targetId, $tenantId);
+        $clean = self::cleanCampaignCount($targetId, $tenantId, $date);
         $cleanCredit = min(self::CLEAN_CAMPAIGN_MAX, $clean * self::CLEAN_CAMPAIGN_CREDIT);
 
         $score = self::BASELINE + $phish - $reportCredit - $cleanCredit + $edu;
@@ -185,9 +191,9 @@ final class HumanRiskScore
 
     /**
      * 反応(open/click/auth)が1件も無かったキャンペーンの数。
-     * 「訓練メールが届いたが何もしなかった」= 望ましい対応。
+     * 終了済みのみ評価。reportだけならcleanのまま、報告creditも重ねて与える。
      */
-    private static function cleanCampaignCount(int $targetId, int $tenantId): int
+    private static function cleanCampaignCount(int $targetId, int $tenantId, string $date): int
     {
         $row = Db::one(
             "SELECT COUNT(DISTINCT ct.campaign_id) AS c
@@ -195,12 +201,13 @@ final class HumanRiskScore
              INNER JOIN campaigns c ON c.id = ct.campaign_id
              WHERE ct.target_id = ? AND c.tenant_id = ?
                AND c.is_test = 0 AND c.deleted_at IS NULL
+               AND (c.status = 'done' OR c.end_at < ?)
                AND NOT EXISTS (
                      SELECT 1 FROM events e
                      WHERE e.tracking_id = ct.tracking_id
                        AND e.event_type IN ('open','click','auth')
                    )",
-            [$targetId, $tenantId]
+            [$targetId, $tenantId, $date]
         );
         return $row !== null ? (int) $row['c'] : 0;
     }

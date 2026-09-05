@@ -35,11 +35,11 @@ check(function_exists('logs_campaign_filter'), '共有: logs_campaign_filter が
 
 // ---- 2) ヘッダがログ管理のXLSX出力と一致すること ----
 $trHead = training_results_headers();
-check(count($trHead) === 11, '訓練結果ヘッダ: 11列');
-check($trHead[0] === 'キャンペーン' && $trHead[10] === '認証', '訓練結果ヘッダ: 先頭=キャンペーン / 末尾=認証');
+check(count($trHead) === 12, '訓練結果ヘッダ: 12列');
+check($trHead[0] === 'キャンペーン' && $trHead[10] === '認証', '訓練結果ヘッダ: 先頭=キャンペーン / 既存11列目=認証');
 $tldHead = training_log_detail_headers();
-check(count($tldHead) === 21, '明細ヘッダ: 21列');
-check($tldHead[0] === '日時' && $tldHead[20] === 'UserAgent', '明細ヘッダ: 先頭=日時 / 末尾=UserAgent');
+check(count($tldHead) === 22, '明細ヘッダ: 22列');
+check($tldHead[0] === '日時' && $tldHead[20] === 'UserAgent', '明細ヘッダ: 先頭=日時 / 既存21列目=UserAgent');
 check(in_array('国', $tldHead, true), '明細ヘッダ: 国の列がある');
 
 // ---- 3) 整形関数がヘッダと同じ列数の行を返すこと(ズレ検知) ----
@@ -54,7 +54,7 @@ $sample = [[
 ]];
 $tldTable = training_log_detail_table_rows($sample);
 check(count($tldTable) === 1, '明細整形: 1行入れたら1行返る');
-check(count($tldTable[0]) === count($tldHead), '明細整形: 列数がヘッダと一致(21列)');
+check(count($tldTable[0]) === count($tldHead), '明細整形: 列数がヘッダと一致(22列)');
 check($tldTable[0][2] === '3回', '明細整形: 重複列は「n回」表記');
 check($tldTable[0][14] === 'Japan (JP)', '明細整形: 国が15列目に入る');
 
@@ -194,3 +194,5 @@ check(preg_match("/else \\{\\s*\\\$replyRows = \\[reply_maildir_headers\\(\\)/",
     'レポートExcel: 権限がなくても返信者シートは作る(ヘッダ+理由)');
 
 echo "ALL TESTS PASSED\n";
+
+check($trHead[11] === '報告' && $tldHead[21] === '報告', '報告列を末尾に追加');

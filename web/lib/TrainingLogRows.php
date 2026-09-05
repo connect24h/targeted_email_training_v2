@@ -95,8 +95,8 @@ function training_log_enrich_from_access_log(string $raw, string $ip, array $out
 
 /**
  * 訓練結果ログの明細行を組み立てる(list/export 共通)。
- * events(click/auth) × campaign_targets × targets を結合し、raw をパースして
- * v1 の21カラム相当の配列にする。キャンペーン別・期間・タイプでフィルタ。
+ * events(click/auth/report) × campaign_targets × targets を結合し、raw をパースして
+ * 既存21カラムに報告列を末尾追加した配列にする。キャンペーン別・期間・タイプでフィルタ。
  */
 function training_log_detail_rows(int $tenantId): array
 {
@@ -105,7 +105,7 @@ function training_log_detail_rows(int $tenantId): array
     $endDate   = (isset($_GET['end_date'])   && $_GET['end_date']   !== '') ? (string) $_GET['end_date']   : '';
     $typeFilter = isset($_GET['type']) ? (string) $_GET['type'] : '';
 
-    $where = "e.tenant_id = ? AND e.event_type IN ('click','auth')";
+    $where = "e.tenant_id = ? AND e.event_type IN ('click','auth','report')";
     $params = [$tenantId];
     if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
     if ($startDate !== '') { $where .= ' AND e.occurred_at >= ?'; $params[] = $startDate; }
@@ -127,8 +127,8 @@ function training_log_detail_rows(int $tenantId): array
 
     $rows = [];
     foreach ($events as $e) {
-        $parsed = training_log_parse_raw((string) ($e['raw'] ?? ''));
-        $type = $e['event_type'] === 'click' ? 'link_click' : (string) ($e['auth_variant'] ?? 'auth');
+        $parsed = training_log_parse_raw($e['event_type'] === 'report' ? '' : (string) ($e['raw'] ?? ''));
+        $type = $e['event_type'] === 'click' ? 'link_click' : ($e['event_type'] === 'report' ? 'report' : (string) ($e['auth_variant'] ?? 'auth'));
         $rows[] = [
             'timestamp' => (string) $e['occurred_at'],
             'random' => (string) $e['tracking_id'],
@@ -153,6 +153,7 @@ function training_log_detail_rows(int $tenantId): array
             'as' => $parsed['as'],
             'hostname' => $parsed['hostname'],
             'useragent' => $parsed['useragent'],
+            'report' => $e['event_type'] === 'report' ? (string) $e['occurred_at'] : '',
         ];
     }
 
@@ -175,13 +176,13 @@ function training_log_detail_rows(int $tenantId): array
     $counts = [];
     foreach ($rows as $r) {
         $rand = $r['random'];
-        if ($rand !== '') { $counts[$rand] = ($counts[$rand] ?? 0) + 1; }
+        if ($rand !== '' && $r['type'] !== 'report') { $counts[$rand] = ($counts[$rand] ?? 0) + 1; }
     }
     // 人間アクセスの通し番号: 同一乱数×人間(is_system=false)の行に、時刻昇順で
     // 「m回中n回目」を付ける。時間差で複数回開いた人間を可視化する(システム行は数えない)。
     $humanTotal = [];
     foreach ($rows as $r) {
-        if (!$r['is_system'] && $r['random'] !== '') {
+        if (!$r['is_system'] && $r['random'] !== '' && $r['type'] !== 'report') {
             $humanTotal[$r['random']] = ($humanTotal[$r['random']] ?? 0) + 1;
         }
     }
@@ -189,7 +190,7 @@ function training_log_detail_rows(int $tenantId): array
     $humanSeen = [];
     for ($i = count($rows) - 1; $i >= 0; $i--) {
         $rand = $rows[$i]['random'];
-        if (!$rows[$i]['is_system'] && $rand !== '') {
+        if (!$rows[$i]['is_system'] && $rand !== '' && $rows[$i]['type'] !== 'report') {
             $humanSeen[$rand] = ($humanSeen[$rand] ?? 0) + 1;
             $rows[$i]['human_seq'] = $humanSeen[$rand];
             $rows[$i]['human_total'] = $humanTotal[$rand] ?? 0;
@@ -200,7 +201,7 @@ function training_log_detail_rows(int $tenantId): array
     }
     foreach ($rows as &$r) {
         $rand = $r['random'];
-        $r['duplicate_count'] = ($rand !== '' && isset($counts[$rand])) ? $counts[$rand] : 0;
+        $r['duplicate_count'] = ($r['type'] !== 'report' && $rand !== '' && isset($counts[$rand])) ? $counts[$rand] : 0;
         $r['duplicate'] = $r['duplicate_count'] > 1;
     }
     unset($r);
@@ -233,12 +234,13 @@ function training_results_rows(int $tenantId): array
                 ct.send_status,
                 MAX(CASE WHEN e.event_type='open'  THEN 1 ELSE 0 END) AS opened,
                 MAX(CASE WHEN e.event_type='click' THEN 1 ELSE 0 END) AS clicked,
-                MAX(CASE WHEN e.event_type='auth'  THEN 1 ELSE 0 END) AS authed
+                MAX(CASE WHEN e.event_type='auth'  THEN 1 ELSE 0 END) AS authed,
+                MAX(CASE WHEN e.event_type='report' THEN 1 ELSE 0 END) AS reported
          FROM campaign_targets ct
          INNER JOIN campaigns c ON c.id = ct.campaign_id
          INNER JOIN targets t   ON t.id = ct.target_id
          LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
-               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth')
+               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth','report')
          WHERE {$where}
          GROUP BY ct.id
          ORDER BY ct.campaign_id DESC, ct.koban",
@@ -252,6 +254,7 @@ function training_results_rows(int $tenantId): array
             (string) ($r['position_category'] ?? ''),
             $r['send_status'] === 'sent' ? '済' : (string) $r['send_status'],
             (int) $r['opened'] ? '○' : '—', (int) $r['clicked'] ? '○' : '—', (int) $r['authed'] ? '○' : '—',
+            (int) $r['reported'] ? '○' : '—',
         ];
     }
     return $data;
@@ -260,7 +263,7 @@ function training_results_rows(int $tenantId): array
 /** 訓練結果シートのヘッダ(ログ管理のXLSX出力と同一)。 */
 function training_results_headers(): array
 {
-    return ['キャンペーン', '項番', 'メール', '氏名', '会社', '部署', '役職カテゴリ', '送信', '開封', 'クリック', '認証'];
+    return ['キャンペーン', '項番', 'メール', '氏名', '会社', '部署', '役職カテゴリ', '送信', '開封', 'クリック', '認証', '報告'];
 }
 
 /** 訓練結果ログ(明細)シートのヘッダ(ログ管理のXLSX出力と同一)。 */
@@ -268,7 +271,7 @@ function training_log_detail_headers(): array
 {
     return ['日時', '乱数', '重複', 'タイプ', '送信先メールアドレス', '表示氏名（姓名）',
             'メールアドレス（会社）', '会社名', '略称', '本務役職名称', '役職カテゴリ',
-            '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent'];
+            '入力Email', 'Password/ID', 'IP', '国', '場所', 'ISP', '組織', 'AS', 'ホスト名', 'UserAgent', '報告'];
 }
 
 /**
@@ -292,6 +295,7 @@ function training_log_detail_table_rows(array $rows): array
             (string) ($r['ip'] ?? ''), (string) ($r['country'] ?? ''), (string) ($r['location'] ?? ''),
             (string) ($r['isp'] ?? ''), (string) ($r['org'] ?? ''), (string) ($r['as'] ?? ''),
             (string) ($r['hostname'] ?? ''), (string) ($r['useragent'] ?? ''),
+            (string) ($r['report'] ?? ''),
         ];
     }
     return $data;
