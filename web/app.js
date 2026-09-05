@@ -697,6 +697,7 @@ function logStatusBadge(v) {
   return `<span class="badge ${cls}">${esc(v)}</span>`;
 }
 const logsState = { type: 'delivery', offset: 0, limit: 100 };
+let reportMailRequest = 0;
 
 // ログ管理テーブルの列見出しクリックソート(共通)。表示済みの tbody 行を並べ替える
 // DOM ベース方式で、各タブの cells 実装に依存しない。列のセル値から数値/日時/文字を
@@ -779,6 +780,7 @@ async function loadLogs() {
   if (type === 'campaign_files') return loadCampaignFiles();
   if (type === 'webaccess') return loadWebAccessLog();
   if (type === 'reply_maildir') return loadReplyMaildir();
+  if (type === 'report_mail') return loadReportMail();
   // 既存の DB ログ(ページングつきテーブル)
   const def = LOG_COLUMNS[type];
   $('#logsHead').innerHTML = `<tr>${def.headers.map((h) => `<th>${h}</th>`).join('')}</tr>`;
@@ -798,6 +800,57 @@ async function loadLogs() {
   $('#logsInfo').textContent = `${from}–${logsState.offset + rows.length} 件目（${logsState.limit} 件/ページ）`;
   $('#logsPrevBtn').disabled = logsState.offset === 0;
   $('#logsNextBtn').disabled = rows.length < logsState.limit;
+}
+function reportMailCells(r) {
+  const labels = { pending: '保留', confirmed: '確定', rejected: '却下' };
+  const colors = { pending: 'warning text-dark', confirmed: 'success', rejected: 'secondary' };
+  const canDecide = ['operator', 'tenant_admin', 'superadmin'].includes(State.user?.role);
+  const actions = r.status === 'pending' && canDecide
+    ? `<button class="btn btn-sm btn-outline-success" data-report-decision="confirm" data-id="${esc(r.id)}">確定</button>
+       <button class="btn btn-sm btn-outline-secondary" data-report-decision="reject" data-id="${esc(r.id)}">却下</button>` : '';
+  return [esc(r.received_at), `<span class="badge bg-${esc(colors[r.status] || 'secondary')}">${esc(labels[r.status] || r.status)}</span>`,
+    esc(r.method), esc(r.reason), esc(r.tracking_id), esc(r.campaign_name),
+    `${esc(r.target_name)}<br>${esc(r.target_email)}`, esc(r.from_email), esc(r.subject_head), actions];
+}
+async function loadReportMail() {
+  const request = ++reportMailRequest;
+  const query = { action: 'report_mail', status: $('#reportMailStatus').value, limit: logsState.limit, offset: logsState.offset };
+  if (State.user?.role === 'superadmin' && $('#reportMailUnmatched').checked) query.include_unmatched = '1';
+  const headers = ['受信日時', '状態', '方法', '理由', '追跡 ID', 'キャンペーン', '対象者', '差出人', '件名', '操作'];
+  $('#logsHead').innerHTML = `<tr>${headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr>`;
+  $('#logsBody').innerHTML = '<tr><td colspan="10">読込中…</td></tr>';
+  const unmatched = $('#reportMailUnmatchedTable');
+  unmatched.style.display = 'none'; unmatched.innerHTML = '';
+  $('#logsPrevBtn').disabled = true; $('#logsNextBtn').disabled = true;
+  $('#logsInfo').textContent = '';
+  let data;
+  try { data = await api('api/logs.php', { query }); }
+  catch (e) {
+    if (logsState.type === 'report_mail' && request === reportMailRequest) $('#logsBody').innerHTML = `<tr><td colspan="10" class="text-danger">${esc(e.message)}</td></tr>`;
+    return;
+  }
+  if (logsState.type !== 'report_mail' || request !== reportMailRequest) return;
+  $('#logsBody').innerHTML = data.rows.length
+    ? data.rows.map((r) => `<tr>${reportMailCells(r).map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')
+    : '<tr><td colspan="10">報告メールはありません</td></tr>';
+  $('#logsInfo').textContent = `${data.rows.length ? data.offset + 1 : 0}–${data.offset + data.rows.length} 件目 / ${data.total} 件`;
+  $('#logsPrevBtn').disabled = data.offset === 0;
+  $('#logsNextBtn').disabled = data.offset + data.rows.length >= data.total;
+  if (State.user?.role === 'superadmin' && data.unmatched) {
+    unmatched.style.display = '';
+    unmatched.innerHTML = `<h6>未照合（${esc(data.unmatched.length)}件）</h6><table class="table table-sm"><thead><tr>${['受信日時', '差出人', '件名', 'parse_status', 'parse_error'].map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${data.unmatched.map((r) => `<tr>${['received_at', 'from_email', 'subject_head', 'parse_status', 'parse_error'].map((k) => `<td>${esc(r[k])}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="5">未照合メールはありません</td></tr>'}</tbody></table>`;
+  }
+}
+async function decideReportMail(button) {
+  const decision = button.dataset.reportDecision;
+  if (!['confirm', 'reject'].includes(decision) || !['operator', 'tenant_admin', 'superadmin'].includes(State.user?.role)) return;
+  if (!confirm(decision === 'confirm' ? 'この報告メールを確定しますか？' : 'この報告メールを却下しますか？')) return;
+  button.disabled = true;
+  try {
+    await api('api/logs.php', { method: 'POST', query: { action: `report_mail_${decision}` }, body: { id: Number(button.dataset.id) } });
+    if (logsState.type === 'report_mail') await loadReportMail();
+  } catch (e) { alert(e.message); }
+  finally { button.disabled = false; }
 }
 // 生ログ(mail/access)を pre 表示。キーワードで絞込。最新5000行、ファイルサイズ表示。
 async function loadRawLog(type) {
@@ -1129,6 +1182,7 @@ function downloadReplyMaildirCsv() {
   window.open(`api/logs.php?${qs}`, '_blank');
 }
 function switchLogTab(type) {
+  reportMailRequest++;
   logsState.type = type;
   logsState.offset = 0;
   logsState.webPage = 1;
@@ -1139,12 +1193,13 @@ function switchLogTab(type) {
   const isWeb = (type === 'webaccess');
   const isMd = (type === 'reply_maildir');
   const isCf = (type === 'campaign_files');
+  const isReport = (type === 'report_mail');
   // 追加フィルタ行を出すタブ(campaign_files は CSV ボタンを出すため含める)。
-  const hasFilter = (isRaw || isTr || isTld || isWeb || isMd || isCf);
+  const hasFilter = (isRaw || isTr || isTld || isWeb || isMd || isCf || isReport);
   // 期間(開始/終了)を使うタブ。
   const hasPeriod = (isTld || isWeb || isMd);
   // DB ページャ(offset)を使う既存タブ。
-  const isDbPaged = (type === 'delivery' || type === 'events' || type === 'schedule' || type === 'replies' || type === 'audit');
+  const isDbPaged = (type === 'delivery' || type === 'events' || type === 'schedule' || type === 'replies' || type === 'audit' || isReport);
 
   const show = (sel, on) => { const el = $(sel); if (el) el.style.display = on ? '' : 'none'; };
 
@@ -1154,6 +1209,10 @@ function switchLogTab(type) {
   $('#logsPager').style.display = (isDbPaged || isWeb) ? '' : 'none';
   $('#logsExtraFilter').style.display = hasFilter ? '' : 'none';
 
+  show('#logsCampaignFilter', !isReport);
+  show('#reportMailStatus', isReport);
+  show('#reportMailUnmatchedWrap', isReport && State.user?.role === 'superadmin');
+  show('#reportMailUnmatchedTable', false);
   show('#logsStatusFilter', isTr);
   show('#logsTypeFilter', isTld);
   show('#logsInclSystemWrap', isTld);
@@ -1162,11 +1221,11 @@ function switchLogTab(type) {
   show('#logsEndLabel', hasPeriod);
   show('#logsPathFilter', isWeb);
   show('#logsKeyword', isRaw || isMd || isWeb);
-  show('#logsApplyBtn', hasFilter);
+  show('#logsApplyBtn', hasFilter && !isReport);
   // CSV 出力: 訓練結果/訓練結果ログ明細/WebアクセスLog/返信者Maildir/リンク・ビーコンファイル一覧。
   show('#logsCsvBtn', isTr || isTld || isWeb || isMd || isCf);
   // Excel(XLSX)出力: 生ログ以外の全タブ。
-  show('#logsXlsxBtn', !isRaw);
+  show('#logsXlsxBtn', !isRaw && !isReport);
   // GeoIP取得: WebアクセスLog のみ(一覧はキャッシュのみ表示、未知IPはこのボタンで後追い解決)。
   show('#webGeoipBtn', isWeb);
   show('#tldGeoipBtn', isTld);
@@ -3446,6 +3505,13 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#logsTabs')?.addEventListener('click', (e) => {
     const a = e.target.closest('.nav-link'); if (!a) return;
     e.preventDefault(); switchLogTab(a.dataset.log);
+  });
+  for (const selector of ['#reportMailStatus', '#reportMailUnmatched']) {
+    $(selector)?.addEventListener('change', () => { logsState.offset = 0; loadLogs(); });
+  }
+  $('#logsBody')?.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-report-decision]');
+    if (button) decideReportMail(button);
   });
   $('#logsRefreshBtn')?.addEventListener('click', () => { logsState.offset = 0; loadLogs(); });
   $('#logsCampaignFilter')?.addEventListener('change', () => { logsState.offset = 0; loadLogs(); });

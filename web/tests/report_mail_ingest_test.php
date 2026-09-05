@@ -76,6 +76,15 @@ check(ingest($d,['readable'=>static fn(string $p):bool=>false])['skipped']===1 &
 chmod($d.'/new/1786752000.a',0600); check(ingest($d)['report']===1, '次回再試行');
 $d=setupMail(); deliver($d,mailRaw()); $r=ingest($d,['mode'=>'match_only']);
 check($r['report']===0 && matches()[0]['status']==='pending' && Db::one('SELECT ingest_mode FROM report_mails')['ingest_mode']==='match_only', 'match_onlyはeventsなし');
+$id=(int)matches()[0]['id'];
+$manual=Db::tx(static fn()=>ReportMailIngest::confirmMatch($id,'operator@test'));
+check($manual['tracking_id']==='0000000001' && matches()[0]['decided_by']==='operator@test' && matches()[0]['event_id']!==null, 'confirmMatchはmatch_onlyも確定し判断者を記録');
+try { Db::tx(static fn()=>ReportMailIngest::rejectMatch($id,'operator@test')); check(false,'確定後の却下禁止'); }
+catch (DomainException $e) { check(matches()[0]['status']==='confirmed','確定後の却下を拒否'); }
+$d=setupMail(); deliver($d,mailRaw('other@example.test')); ingest($d);
+$id=(int)matches()[0]['id'];
+Db::tx(static fn()=>ReportMailIngest::rejectMatch($id,'reviewer@test'));
+check(matches()[0]['status']==='rejected' && matches()[0]['decided_at']!==null && Db::one('SELECT id FROM events')===null,'rejectMatchは判断日時を記録しeventsを書かない');
 $d=setupMail(); deliver($d,mailRaw()); deliver($d,mailRaw(extra:"Message-ID: <b@example.test>\r\n"),'1786752001.b','cur');
 deliver($d,mailRaw(),'1786751999.tmp','tmp'); symlink($d.'/tmp/1786751999.tmp',$d.'/new/1786751998.link');
 check(ingest($d,['max_files'=>1])['scanned']===1 && mailCount()===1, 'tmp/symlink除外、max_filesと受信順');

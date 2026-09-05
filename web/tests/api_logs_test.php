@@ -21,6 +21,7 @@ require_once __DIR__ . '/../lib/TrainingLogRows.php';
 // 返信者(Maildir パース)一式も lib/ReplyMaildir.php に移設済み(レポートExcelと共有のため)。
 require_once __DIR__ . '/../lib/ReplyMaildir.php';
 register_shutdown_function(static function () use ($ipCacheTmp) { @unlink($ipCacheTmp); });
+require_once __DIR__ . '/../lib/ReportMailIngest.php';
 load_api('logs');
 
 $tenantId = current_user()['tenant_id'];
@@ -486,3 +487,91 @@ $resultRows = training_results_rows($tenantId);
 check(count($resultRows[0])===12 && $resultRows[0][11]==='○', '対象者集計の末尾12列目に報告あり');
 $_GET = ['campaign_id'=>(string)$cid, 'type'=>'report'];
 check(count(training_log_detail_rows($tenantId))===1, 'reportでタイプを絞り込める');
+
+// WP1-c: 合成DBのみで一覧・手動判断を検証。
+function reportFixture(int $tid, int $cid, string $tracking, string $status = 'pending'): int {
+    $mail = Db::insert("INSERT INTO report_mails(message_id_hash,content_hash,maildir_file,received_at,from_email,subject_head,parse_status,ingest_mode) VALUES(?,?,?,'2026-09-01 10:00:00','sender@test','件名','parsed','match_only')", [uniqid(), 'hash', 'fixture']);
+    return Db::insert("INSERT INTO report_mail_matches(report_mail_id,tracking_id,tenant_id,campaign_id,method,evidence,status) VALUES(?,?,?,?,'body',?,?)", [$mail,$tracking,$tid,$cid,'{"reason":"from_mismatch"}',$status]);
+}
+foreach (['report_mail','report_mail_confirm','report_mail_reject'] as $action) {
+    check(logs_min_role_for_action($action)==='operator', "$action はoperator以上");
+}
+$a = reportFixture($tenantId,$cid,'WP1C1');
+$b = reportFixture($tenantId,$cid,'WP1C2','confirmed');
+$o = reportFixture($otherTid,$ocid,'WP1CO');
+Db::run("INSERT INTO report_mails(message_id_hash,content_hash,maildir_file,received_at,parse_status,ingest_mode) VALUES('unmatched','hash','fixture','2026-09-02','parse_error','normal')");
+$_GET = ['include_unmatched'=>'1'];
+$r = call_handler('logs_handle_report_mail', [], 'operator', [$tenantId]);
+check($r['code']===200 && $r['payload']['total']===2 && count($r['payload']['rows'])===2, '報告一覧は他テナントを件数にも含めない');
+check(!isset($r['payload']['unmatched']) && $r['payload']['rows'][0]['subject_head']==='件名' && $r['payload']['rows'][0]['from_email']==='sender@test', '自テナント件名・差出人を返し未照合は返さない');
+$r = call_handler('logs_handle_report_mail', [], 'superadmin', [null]);
+check($r['payload']['total']===3 && count($r['payload']['unmatched'])===1, 'superadminは全件とparse_error未照合も取得');
+$r = call_handler('logs_handle_report_mail', [], 'superadmin', [$otherTid]);
+check($r['payload']['total']===1, 'superadminのテナント絞込');
+$_GET = ['status'=>'pending','limit'=>'1','offset'=>'1'];
+$r = call_handler('logs_handle_report_mail', [], 'superadmin', [null]);
+check($r['payload']['total']===2 && count($r['payload']['rows'])===1 && $r['payload']['rows'][0]['id']===$a, '状態フィルタ・同時刻ID降順・ページング');
+$_GET = ['tenant_id'=>(string)$otherTid];
+$GLOBALS['__TET2_TEST_ROLE']='operator';
+try { effective_tenant_id(current_user(), (int)$_GET['tenant_id']); check(false,'IDOR'); }
+catch (Tet2TestExit $e) { check($e->httpCode===403,'他テナント指定は403'); }
+$_GET = [];
+$countReports = static fn(): int => (int)Db::one("SELECT COUNT(*) n FROM events WHERE event_type='report'")['n'];
+$n = $countReports();
+$r = call_handler('logs_handle_report_mail_confirm',['id'=>$a],'operator',[$tenantId]);
+check($r['code']===200 && $countReports()===$n+1 && Db::one('SELECT status FROM report_mail_matches WHERE id=?',[$a])['status']==='confirmed','match_onlyも手動確定でreportを作成');
+check($GLOBALS['__TET2_TEST_CSRF_CALLS']===1 && $GLOBALS['__TET2_TEST_AUDIT'][0]===['action'=>'report_mail.confirm','detail'=>"match_id=$a,tracking_id=WP1C1"], '確定はCSRFとauditを呼ぶ');
+$r = call_handler('logs_handle_report_mail_confirm',['id'=>$a],'operator',[$tenantId]);
+check($r['code']===409,'確定済みは409');
+$r = call_handler('logs_handle_report_mail_confirm',['id'=>$o],'operator',[$tenantId]);
+check($r['code']===404,'他テナントmatchは404');
+$again = reportFixture($tenantId,$cid,'WP1C1');
+$r = call_handler('logs_handle_report_mail_confirm',['id'=>$again],'operator',[$tenantId]);
+check($r['code']===200 && $countReports()===$n+1 && Db::one('SELECT event_id FROM report_mail_matches WHERE id=?',[$again])===Db::one('SELECT event_id FROM report_mail_matches WHERE id=?',[$a]),'既存reportを再利用');
+$reject = reportFixture($tenantId,$cid,'WP1CR');
+$r = call_handler('logs_handle_report_mail_reject',['id'=>$reject],'operator',[$tenantId]);
+check($r['code']===200 && $countReports()===$n+1 && Db::one('SELECT status FROM report_mail_matches WHERE id=?',[$reject])['status']==='rejected','却下はeventsを増やさない');
+check($GLOBALS['__TET2_TEST_CSRF_CALLS']===1 && $GLOBALS['__TET2_TEST_AUDIT'][0]['action']==='report_mail.reject','却下もCSRFとaudit');
+$r = call_handler('logs_handle_report_mail_reject',['id'=>$reject],'operator',[$tenantId]);
+check($r['code']===409,'却下済みは409');
+$r = call_handler('logs_handle_report_mail_reject',['id'=>$o],'operator',[$tenantId]);
+check($r['code']===404,'他テナント却下は404');
+$_GET=[];
+
+// 実ディスパッチャも通し、HTTPメソッド・ロール・tenant_id解決を確認する。
+function wp1c_dispatch(string $method, array $query, string $role, array $body = []): array {
+    $_SERVER['REQUEST_METHOD']=$method; $_GET=$query;
+    $GLOBALS['__TET2_TEST_ROLE']=$role; $GLOBALS['__TET2_TEST_BODY']=$body;
+    $source=file_get_contents(__DIR__.'/../api/logs.php');
+    $source=substr($source,strpos($source,"\ntry {"));
+    // 本番のexitに相当するテスト例外だけは500ハンドラを通さず捕捉する。
+    $source=str_replace('} catch (Throwable $e) {', '} catch (Tet2TestExit $e) { throw $e; } catch (Throwable $e) {', $source);
+    try { eval($source); } catch (Tet2TestExit $e) { return ['code'=>$e->httpCode,'payload'=>$e->payload]; }
+    throw new RuntimeException('dispatcher did not respond');
+}
+check(wp1c_dispatch('GET',['action'=>'report_mail','tenant_id'=>(string)$otherTid],'operator')['code']===403,'実dispatcher: 他テナント指定403');
+check(wp1c_dispatch('GET',['action'=>'report_mail'],'viewer')['code']===403,'実dispatcher: viewer一覧403');
+check(wp1c_dispatch('POST',['action'=>'report_mail_confirm'],'viewer',['id'=>$o])['code']===403,'実dispatcher: viewer確定403');
+check(wp1c_dispatch('GET',['action'=>'report_mail_confirm'],'operator')['code']===400,'実dispatcher: GETで確定不可');
+check(wp1c_dispatch('POST',['action'=>'report_mail'],'operator')['code']===400,'実dispatcher: POST一覧不可');
+check(wp1c_dispatch('GET',['action'=>'report_mail','status'=>'invalid'],'operator')['code']===400,'不正statusは400');
+$r=wp1c_dispatch('GET',['action'=>'report_mail','limit'=>'999','offset'=>'-1'],'operator');
+check($r['payload']['limit']===500 && $r['payload']['offset']===0,'limitとoffsetをクランプ');
+$r=wp1c_dispatch('POST',['action'=>'report_mail_confirm'],'superadmin',['id'=>$o]);
+check($r['code']===200,'実dispatcher: superadminは任意テナントを確定');
+// JOIN先が別テナントでも氏名・emailを漏らさない。
+$target=Db::insert("INSERT INTO targets(tenant_id,email,name,status) VALUES(?,'private@other','他テナント氏名','active')",[$otherTid]);
+Db::run("INSERT INTO campaign_targets(campaign_id,target_id,tracking_id) VALUES(?,?,'WP1CJOIN')",[$cid,$target]);
+$join=reportFixture($tenantId,$cid,'WP1CJOIN');
+$r=wp1c_dispatch('GET',['action'=>'report_mail'],'operator');
+$joined=array_values(array_filter($r['payload']['rows'],static fn($row)=>$row['id']===$join))[0];
+check($joined['target_name']===null && $joined['target_email']===null && $joined['campaign_name']==='LOGS_TEST' && $joined['reason']==='from_mismatch','JOIN先の他テナント対象者を非開示、campaignとreasonを取得');
+Db::run('UPDATE targets SET tenant_id=? WHERE id=?',[$tenantId,$target]);
+$r=wp1c_dispatch('GET',['action'=>'report_mail'],'operator');
+$joined=array_values(array_filter($r['payload']['rows'],static fn($row)=>$row['id']===$join))[0];
+check($joined['target_name']==='他テナント氏名' && $joined['target_email']==='private@other','同一テナントの対象者氏名とemailは取得');
+$superOther=reportFixture($otherTid,$ocid,'WP1CSUPER');
+$r=wp1c_dispatch('POST',['action'=>'report_mail_reject','tenant_id'=>(string)$tenantId],'superadmin',['id'=>$superOther]);
+check($r['code']===200,'superadminの判断は選択テナントによらず任意matchに可能');
+$_GET=[];
+unset($_SERVER['REQUEST_METHOD']);

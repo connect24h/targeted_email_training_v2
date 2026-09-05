@@ -369,6 +369,7 @@
           <li class="nav-item"><a class="nav-link" data-log="training_results" href="#">訓練結果</a></li>
           <li class="nav-item"><a class="nav-link" data-log="training_log_detail" href="#">訓練結果ログ(明細)</a></li>
           <li class="nav-item"><a class="nav-link" data-log="campaign_files" href="#">リンク/ビーコンファイル</a></li>
+          <li class="nav-item" data-perm="operator"><a class="nav-link" data-log="report_mail" href="#">報告メール</a></li>
           <li class="nav-item" data-perm="operator"><a class="nav-link" data-log="audit" href="#">操作ログ</a></li>
           <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="raw_mail" href="#">生メールログ</a></li>
           <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="raw_web" href="#">生Webログ</a></li>
@@ -377,6 +378,10 @@
         </ul>
         <!-- 訓練結果/生ログ/WebアクセスLog用の追加フィルタ -->
         <div class="d-flex gap-2 mb-2 flex-wrap align-items-center" id="logsExtraFilter" style="display:none">
+          <select class="form-select form-select-sm" id="reportMailStatus" aria-label="報告メールの状態" style="width:auto;display:none">
+            <option value="">すべて</option><option value="pending">保留</option><option value="confirmed">確定</option><option value="rejected">却下</option>
+          </select>
+          <label id="reportMailUnmatchedWrap" data-perm="superadmin" style="display:none"><input type="checkbox" id="reportMailUnmatched"> 未照合を表示</label>
           <select class="form-select form-select-sm" id="logsStatusFilter" style="width:auto;display:none">
             <option value="">全状況</option><option value="opened">サイト表示のみ</option>
             <option value="clicked">クリックのみ</option><option value="authed">認証のみ</option>
@@ -410,6 +415,7 @@
           <thead id="logsHead"></thead>
           <tbody id="logsBody"></tbody>
         </table></div>
+        <div id="reportMailUnmatchedTable" class="table-responsive" style="display:none"></div>
         <pre id="logsRaw" class="border rounded p-2 bg-light small d-none" style="max-height:60vh;overflow:auto;white-space:pre-wrap"></pre>
         <div class="d-flex justify-content-between align-items-center" id="logsPager">
           <span class="text-muted small" id="logsInfo"></span>
@@ -587,7 +593,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=e016aae4"></script>
+<script src="app.js?v=6e6ab870"></script>
 <script src="assets/campaign-automations.js?v=b847062f"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 <script src="assets/risk-dashboard.js?v=c0c18c62"></script>

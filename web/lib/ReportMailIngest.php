@@ -215,6 +215,49 @@ final class ReportMailIngest
             [$mail['from_email'], $mail['received_at']]);
     }
 
+    /** 呼び出し側でDb::txを開始する。手動判断はingest_modeに優先する。 */
+    public static function confirmMatch(int $matchId, string $decidedBy): array
+    {
+        $match = self::pendingMatch($matchId);
+        $mail = Db::one('SELECT * FROM report_mails WHERE id=?', [$match['report_mail_id']]);
+        [$eventId] = self::reportEvent($match, $mail);
+        Db::run("UPDATE report_mail_matches SET status='confirmed',event_id=?,decided_by=?,decided_at=? WHERE id=? AND status='pending'",
+            [$eventId, $decidedBy, date('Y-m-d H:i:s'), $matchId]);
+        return ['id'=>$matchId, 'tracking_id'=>$match['tracking_id'], 'event_id'=>$eventId];
+    }
+
+    /** 呼び出し側でDb::txを開始する。 */
+    public static function rejectMatch(int $matchId, string $decidedBy): void
+    {
+        self::pendingMatch($matchId);
+        Db::run("UPDATE report_mail_matches SET status='rejected',decided_by=?,decided_at=? WHERE id=? AND status='pending'",
+            [$decidedBy, date('Y-m-d H:i:s'), $matchId]);
+    }
+
+    private static function pendingMatch(int $matchId): array
+    {
+        $match = Db::one('SELECT * FROM report_mail_matches WHERE id=?', [$matchId]);
+        if ($match === null) { throw new DomainException('報告メールが見つかりません', 404); }
+        if ($match['status'] !== 'pending') { throw new DomainException('保留中の報告メールではありません', 409); }
+        return $match;
+    }
+
+    /** 自動・手動とも追跡ID単位の既存reportを再利用する。 */
+    private static function reportEvent(array $candidate, array $mail): array
+    {
+        $inserted = 0;
+        $existing = Db::one("SELECT id FROM events WHERE tracking_id=? AND event_type='report' ORDER BY occurred_at, id LIMIT 1", [$candidate['tracking_id']]);
+        if ($existing === null) {
+            $inserted = Db::run("INSERT INTO events (tenant_id,campaign_id,tracking_id,event_type,occurred_at,source,raw)
+                        VALUES (?,?,?,'report',?,'report_mail',?)",
+                [$candidate['tenant_id'], $candidate['campaign_id'], $candidate['tracking_id'], $mail['received_at'],
+                 json_encode(['message_id'=>$mail['message_id'], 'subject_head'=>$mail['subject_head']], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)]);
+            $existing = Db::one("SELECT id FROM events WHERE tracking_id=? AND event_type='report' ORDER BY occurred_at, id LIMIT 1", [$candidate['tracking_id']]);
+        }
+        $eventId = $existing['id'];
+        return [$eventId, $inserted];
+    }
+
     private static function saveMatch(array $mail, array $candidate, array $meta): array
     {
         $status = $meta['reason'] === 'unknown_tracking_id' ? 'rejected' : 'pending';
@@ -222,15 +265,7 @@ final class ReportMailIngest
         $inserted = 0;
         if ($meta['confirmed'] && $mail['ingest_mode'] === 'normal') {
             $status = 'confirmed';
-            $existing = Db::one("SELECT id FROM events WHERE tracking_id=? AND event_type='report' ORDER BY occurred_at, id LIMIT 1", [$candidate['tracking_id']]);
-            if ($existing === null) {
-                $inserted = Db::run("INSERT INTO events (tenant_id,campaign_id,tracking_id,event_type,occurred_at,source,raw)
-                                    VALUES (?,?,?,'report',?,'report_mail',?)",
-                    [$candidate['tenant_id'], $candidate['campaign_id'], $candidate['tracking_id'], $mail['received_at'],
-                     json_encode(['message_id'=>$mail['message_id'], 'subject_head'=>$mail['subject_head']], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)]);
-                $existing = Db::one("SELECT id FROM events WHERE tracking_id=? AND event_type='report' ORDER BY occurred_at, id LIMIT 1", [$candidate['tracking_id']]);
-            }
-            $eventId = $existing['id'];
+            [$eventId, $inserted] = self::reportEvent($candidate, $mail);
         }
         Db::run('INSERT INTO report_mail_matches (report_mail_id,tracking_id,tenant_id,campaign_id,method,evidence,status,event_id,decided_by,decided_at,created_at)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?)',

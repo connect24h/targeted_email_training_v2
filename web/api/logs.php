@@ -1,5 +1,6 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__."/../lib/SimpleXlsx.php";
+require_once __DIR__."/../lib/ReportMailIngest.php";
 // 訓練結果 / 訓練結果ログ(明細)の行生成。レポートExcel(api/report.php)と共有するため
 // lib/ に切り出してある(2026-08-30)。logs_campaign_filter() もここに含まれる。
 require_once __DIR__."/../lib/TrainingLogRows.php";
@@ -183,7 +184,7 @@ function logs_min_role_for_action(string $action): string
     if (in_array($action, $superadminActions, true)) {
         return 'superadmin';
     }
-    return ($action === 'audit' || $action === 'audit_xlsx') ? 'operator' : 'viewer';
+    return in_array($action, ['audit', 'audit_xlsx', 'report_mail', 'report_mail_confirm', 'report_mail_reject'], true) ? 'operator' : 'viewer';
 }
 
 /**
@@ -1176,10 +1177,76 @@ function logs_handle_audit_xlsx(int $tenantId): never
         $data, 'audit_log_' . date('Ymd_His') . '.xlsx');
 }
 
+/** nullスコープはsuperadminの全件表示専用。 */
+function logs_handle_report_mail(?int $tenantId): never
+{
+    [$limit, $offset] = logs_paging();
+    $status = (string) ($_GET['status'] ?? '');
+    if (!in_array($status, ['', 'confirmed', 'pending', 'rejected'], true)) { json_error('不正な状態', 400); }
+    $where = ['1=1']; $params = [];
+    if ($tenantId !== null) { $where[] = 'm.tenant_id=?'; $params[] = $tenantId; }
+    if ($status !== '') { $where[] = 'm.status=?'; $params[] = $status; }
+    $where = implode(' AND ', $where);
+    $total = (int) Db::one("SELECT COUNT(*) n FROM report_mail_matches m JOIN report_mails rm ON rm.id=m.report_mail_id WHERE $where", $params)['n'];
+    $rows = Db::all("SELECT m.id,m.status,m.method,m.evidence,m.tracking_id,m.campaign_id,
+        c.name AS campaign_name,t.name AS target_name,t.email AS target_email,
+        rm.received_at,rm.from_email,rm.subject_head,m.decided_by,m.decided_at,m.event_id
+        FROM report_mail_matches m JOIN report_mails rm ON rm.id=m.report_mail_id
+        LEFT JOIN campaigns c ON c.id=m.campaign_id AND c.tenant_id=m.tenant_id
+        LEFT JOIN campaign_targets ct ON ct.tracking_id=m.tracking_id AND ct.campaign_id=c.id
+        LEFT JOIN targets t ON t.id=ct.target_id AND t.tenant_id=m.tenant_id
+        WHERE $where ORDER BY rm.received_at DESC,m.id DESC LIMIT ? OFFSET ?", [...$params,$limit,$offset]);
+    foreach ($rows as &$row) {
+        $evidence = json_decode($row['evidence'] ?? '', true);
+        $row['reason'] = is_string($evidence['reason'] ?? null) ? $evidence['reason'] : '';
+        unset($row['evidence']);
+    }
+    unset($row);
+    $result = ['success'=>true,'rows'=>$rows,'total'=>$total,'limit'=>$limit,'offset'=>$offset];
+    if (current_user()['role'] === 'superadmin' && ($_GET['include_unmatched'] ?? '') === '1') {
+        $result['unmatched'] = Db::all('SELECT rm.id,rm.received_at,rm.from_email,rm.subject_head,rm.parse_status,rm.parse_error
+            FROM report_mails rm WHERE NOT EXISTS (SELECT 1 FROM report_mail_matches m WHERE m.report_mail_id=rm.id)
+            ORDER BY rm.received_at DESC,rm.id DESC');
+    }
+    json_out($result);
+}
+
+function logs_handle_report_mail_confirm(?int $tenantId): never
+{
+    tet2_require_csrf();
+    logs_decide_report_mail($tenantId, true);
+}
+
+function logs_handle_report_mail_reject(?int $tenantId): never
+{
+    tet2_require_csrf();
+    logs_decide_report_mail($tenantId, false);
+}
+
+function logs_decide_report_mail(?int $tenantId, bool $confirm): never
+{
+    if (current_user()['role'] === 'superadmin') { $tenantId = null; }
+    $id = (int) (json_body()['id'] ?? 0);
+    try {
+        $result = Db::tx(static function () use ($id, $tenantId, $confirm): array {
+            $match = Db::one('SELECT * FROM report_mail_matches WHERE id=?' . ($tenantId === null ? '' : ' AND tenant_id=?'),
+                $tenantId === null ? [$id] : [$id,$tenantId]);
+            if ($match === null) { throw new DomainException('報告メールが見つかりません', 404); }
+            $actor = (string) current_user()['email'];
+            if ($confirm) { $result = ReportMailIngest::confirmMatch($id, $actor); }
+            else { ReportMailIngest::rejectMatch($id, $actor); $result = ['id'=>$id,'tracking_id'=>$match['tracking_id']]; }
+            audit($confirm ? 'report_mail.confirm' : 'report_mail.reject', 'match_id=' . $id . ',tracking_id=' . $match['tracking_id']);
+            return $result;
+        });
+    } catch (DomainException $e) { json_error($e->getMessage(), $e->getCode()); }
+    json_out(['success'=>true] + $result);
+}
+
 try {
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $action = $_GET['action'] ?? '';
-    if ($method !== 'GET') {
+    $isDecision = in_array($action, ['report_mail_confirm', 'report_mail_reject'], true);
+    if ($method !== ($isDecision ? 'POST' : 'GET')) {
         json_error('不正なアクション', 400);
     }
     // 生ログ・Maildir・WebAccessLog(全テナント混在)は superadmin 限定、操作ログは operator 以上、他は viewer。
@@ -1198,9 +1265,14 @@ try {
     if ($action === 'reply_maildir_xlsx') { logs_handle_reply_maildir_xlsx(); }
     if ($action === 'webaccess_xlsx')     { weblog_handle_xlsx(); }
 
-    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    $isReport = in_array($action, ['report_mail', 'report_mail_confirm', 'report_mail_reject'], true);
+    $tenantId = $isReport && $user['role'] === 'superadmin' && !isset($_GET['tenant_id'])
+        ? null : effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
 
     switch ($action) {
+        case 'report_mail': logs_handle_report_mail($tenantId);
+        case 'report_mail_confirm': logs_handle_report_mail_confirm($tenantId);
+        case 'report_mail_reject': logs_handle_report_mail_reject($tenantId);
         case 'delivery': logs_handle_delivery($tenantId);
         case 'events':   logs_handle_events($tenantId);
         case 'replies':  logs_handle_replies($tenantId);
