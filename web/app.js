@@ -89,6 +89,7 @@ async function login(email, password) {
 }
 async function logout(silent = false) {
   try { if (!silent) await api('api/auth.php', { method: 'POST', query: { action: 'logout' } }); } catch {}
+  riskDashboard?.invalidate();
   State.user = null; State.csrf = null; State.activeTenantId = null;
   $('#appView').classList.add('d-none');
   $('#loginView').classList.remove('d-none');
@@ -144,14 +145,34 @@ async function setupTenantSwitcher() {
     sw.value = State.activeTenantId;
     sw.classList.remove('d-none');
   }
-  sw.onchange = () => { State.activeTenantId = Number(sw.value); renderCurrentView(); };
+  sw.onchange = () => {
+    riskDashboard?.invalidate();
+    State.activeTenantId = Number(sw.value);
+    renderCurrentView();
+  };
 }
 
 /* ========== ルーティング ========== */
+let riskDashboard = null;
+function renderRiskDashboard() {
+  if (!riskDashboard) {
+    riskDashboard = createRiskDashboard({
+      api,
+      root: $('#riskDashboardRoot'),
+      getContext: () => ({
+        tenantId: State.activeTenantId ?? State.user?.tenant_id ?? '',
+        userKey: `${State.user?.id ?? ''}:${State.user?.email ?? ''}`,
+      }),
+      getView: () => State.view,
+    });
+  }
+  return riskDashboard.render();
+}
 const VIEWS = {
   dashboard: renderDashboard,
   campaigns: renderCampaigns,
   reports: renderReports,
+  riskDashboard: renderRiskDashboard,
   groups: renderGroups,
   templates: renderTemplates,
   eduDeliveries: renderEduDeliveries,
@@ -165,6 +186,7 @@ const VIEWS = {
 function navigate(view) {
   // ビュー切替時に一覧自動更新タイマーを止める(campaigns に戻れば renderCampaigns が再設定)。
   if (campaignsRefreshTimer) { clearTimeout(campaignsRefreshTimer); campaignsRefreshTimer = null; }
+  if (State.view === 'riskDashboard' && view !== 'riskDashboard') riskDashboard?.invalidate();
   State.view = view;
   $$('.view-panel').forEach((p) => p.classList.toggle('d-none', p.dataset.panel !== view));
   $$('.app-sidebar .nav-link').forEach((a) => a.classList.toggle('active', a.dataset.view === view));

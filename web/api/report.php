@@ -784,12 +784,10 @@ function report_handle_risk_individuals(): never
     $limit = isset($_GET['limit']) ? max(1, min(500, (int) $_GET['limit'])) : 100;
 
     $band = $_GET['band'] ?? '';
-    $bandWhere = '';
-    $params = [$tenantId, $tenantId];
-    if (in_array($band, ['low', 'medium', 'high'], true)) {
-        $bandWhere = ' AND h.band = ?';
-        $params[] = $band;
+    if (!in_array($band, ['', 'low', 'medium', 'high'], true)) {
+        $band = '';
     }
+    $bandWhere = '';
 
     $latest = Db::one(
         'SELECT MAX(computed_date) AS d FROM human_risk_scores WHERE tenant_id = ?',
@@ -797,17 +795,28 @@ function report_handle_risk_individuals(): never
     );
     $computedDate = $latest !== null ? $latest['d'] : null;
     if ($computedDate === null) {
-        json_out(['success' => true, 'computed_date' => null, 'individuals' => [], 'bands' => []]);
+        json_out([
+            'success' => true,
+            'computed_date' => null,
+            'individuals' => [],
+            'bands' => ['high' => 0, 'medium' => 0, 'low' => 0],
+            'total' => 0,
+            'limit' => $limit,
+        ]);
+    }
+    $params = [$tenantId, $computedDate];
+    if ($band !== '') {
+        $bandWhere = ' AND h.band = ?';
+        $params[] = $band;
     }
 
     $rows = Db::all(
         "SELECT t.id, t.email, t.name, t.company, t.position_category,
                 h.score, h.band, h.phish_component, h.edu_component, h.report_credit, h.detail
          FROM human_risk_scores h
-         INNER JOIN targets t ON t.id = h.target_id
-         WHERE h.tenant_id = ? AND h.computed_date = (
-                 SELECT MAX(computed_date) FROM human_risk_scores WHERE tenant_id = ?
-               )" . $bandWhere . "
+         INNER JOIN targets t ON t.id = h.target_id AND t.tenant_id = h.tenant_id
+         WHERE h.tenant_id = ? AND h.computed_date = ?
+           AND t.status = 'active' AND t.is_test = 0" . $bandWhere . "
          ORDER BY h.score DESC, t.id
          LIMIT " . $limit,
         $params
@@ -818,20 +827,27 @@ function report_handle_risk_individuals(): never
     unset($r);
 
     $bandRows = Db::all(
-        "SELECT band, COUNT(*) AS cnt FROM human_risk_scores
-         WHERE tenant_id = ? AND computed_date = ? GROUP BY band",
+        "SELECT h.band, COUNT(*) AS cnt
+         FROM human_risk_scores h
+         INNER JOIN targets t ON t.id = h.target_id AND t.tenant_id = h.tenant_id
+         WHERE h.tenant_id = ? AND h.computed_date = ?
+           AND t.status = 'active' AND t.is_test = 0
+         GROUP BY h.band",
         [$tenantId, $computedDate]
     );
     $bands = ['high' => 0, 'medium' => 0, 'low' => 0];
     foreach ($bandRows as $b) {
         $bands[(string) $b['band']] = (int) $b['cnt'];
     }
+    $total = $band === '' ? array_sum($bands) : ($bands[$band] ?? 0);
 
     json_out([
         'success' => true,
         'computed_date' => $computedDate,
         'bands' => $bands,
         'individuals' => $rows,
+        'total' => $total,
+        'limit' => $limit,
     ]);
 }
 
@@ -863,8 +879,9 @@ function report_handle_risk_by_company(): never
                 SUM(CASE WHEN h.band = 'medium' THEN 1 ELSE 0 END) AS medium_count,
                 SUM(CASE WHEN h.band = 'low'    THEN 1 ELSE 0 END) AS low_count
          FROM human_risk_scores h
-         INNER JOIN targets t ON t.id = h.target_id
+         INNER JOIN targets t ON t.id = h.target_id AND t.tenant_id = h.tenant_id
          WHERE h.tenant_id = ? AND h.computed_date = ?
+           AND t.status = 'active' AND t.is_test = 0
          GROUP BY company
          ORDER BY avg_score DESC",
         [$tenantId, $computedDate]

@@ -29,6 +29,7 @@ ASSETS=(
   assets/app.css
   assets/campaign-automations.js
   assets/positions.js
+  assets/risk-dashboard.js
 )
 
 asset_hash() {

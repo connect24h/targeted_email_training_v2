@@ -57,6 +57,7 @@
         <li><a class="nav-link" data-view="campaigns"><i class="bi bi-envelope-paper"></i>キャンペーン</a></li>
         <li><a class="nav-link" data-view="campaignAutomations"><i class="bi bi-calendar2-repeat"></i>定期キャンペーン</a></li>
         <li><a class="nav-link" data-view="reports"><i class="bi bi-bar-chart"></i>レポート</a></li>
+        <li><a class="nav-link" data-view="riskDashboard"><i class="bi bi-shield-exclamation"></i>リスク</a></li>
         <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
         <li><a class="nav-link" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
         <li><a class="nav-link" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
@@ -237,6 +238,12 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- Human Risk Score（保存済みスナップショットの参照のみ） -->
+      <section data-panel="riskDashboard" class="view-panel d-none">
+        <h5 class="mb-3"><i class="bi bi-shield-exclamation me-1"></i>リスクダッシュボード</h5>
+        <div id="riskDashboardRoot"></div>
       </section>
 
       <!-- グループ -->
@@ -580,8 +587,9 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=47eb37e8"></script>
+<script src="app.js?v=e016aae4"></script>
 <script src="assets/campaign-automations.js?v=b847062f"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
+<script src="assets/risk-dashboard.js?v=c0c18c62"></script>
 </body>
 </html>
