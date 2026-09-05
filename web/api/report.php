@@ -851,6 +851,192 @@ function report_handle_risk_individuals(): never
     ]);
 }
 
+/** 最新スナップショットの対象集合で失敗を順位付けしてからlimitを適用する。 */
+function report_retrain_rows(int $tenantId, string $date, array $filter): array
+{
+    $bandWhere = $filter['band'] === '' ? '' : ' AND h.band = ?';
+    $params = [$tenantId, $date];
+    if ($bandWhere !== '') {
+        $params[] = $filter['band'];
+    }
+    return Db::all(
+        "WITH candidates AS (
+            SELECT t.id, t.email, t.name, t.company, t.position_category,
+                   h.score, h.band, h.phish_component, h.edu_component, h.report_credit, h.detail
+            FROM human_risk_scores h
+            INNER JOIN targets t ON t.id = h.target_id AND t.tenant_id = h.tenant_id
+            WHERE h.tenant_id = ? AND h.computed_date = ?
+              AND t.status = 'active' AND t.is_test = 0" . $bandWhere . "
+        ), failures AS (
+            SELECT ct.target_id, e.event_type, e.occurred_at, c.id AS campaign_id, c.name AS campaign_name,
+                   (c.attachment_ext IS NOT NULL AND c.attachment_ext <> '') AS is_attachment,
+                   ROW_NUMBER() OVER (PARTITION BY ct.target_id ORDER BY e.occurred_at DESC, e.id DESC) AS rn
+            FROM events e
+            INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id AND ct.campaign_id = e.campaign_id
+            INNER JOIN campaigns c ON c.id = ct.campaign_id AND c.tenant_id = e.tenant_id
+            INNER JOIN candidates p ON p.id = ct.target_id
+            WHERE e.tenant_id = ? AND c.is_test = 0 AND c.deleted_at IS NULL
+              AND e.event_type IN ('click', 'auth') AND e.occurred_at <= ?
+        )
+        SELECT p.*, f.event_type, f.occurred_at, f.campaign_id, f.campaign_name, f.is_attachment,
+               COUNT(*) OVER () AS total_count
+        FROM candidates p LEFT JOIN failures f ON f.target_id = p.id AND f.rn = 1
+        ORDER BY p.score DESC, f.occurred_at DESC, p.id
+        LIMIT " . (int) $filter['limit'],
+        [...$params, $tenantId, $date . ' 23:59:59']
+    );
+}
+
+/** 教育は表示対象者全員を一度に集計する。配信の所属も照合する。 */
+function report_retrain_education(int $tenantId, string $date, array $ids): array
+{
+    if ($ids === []) {
+        return [];
+    }
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $rows = Db::all(
+        "SELECT a.target_id,
+                SUM(CASE WHEN a.status NOT IN ('completed', 'expired') THEN 1 ELSE 0 END) AS assigned_count,
+                SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
+                MAX(CASE WHEN a.status = 'completed' THEN a.completed_at END) AS last_completed_at,
+                SUM(CASE WHEN a.status <> 'completed' AND d.deadline < ? THEN 1 ELSE 0 END) AS overdue_count
+         FROM edu_assignments a
+         INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
+         WHERE a.tenant_id = ? AND a.target_id IN ($placeholders)
+         GROUP BY a.target_id",
+        [$date, $tenantId, ...$ids]
+    );
+    $result = [];
+    foreach ($rows as $row) {
+        $result[(int) $row['target_id']] = [
+            'assigned_count' => (int) $row['assigned_count'],
+            'completed_count' => (int) $row['completed_count'],
+            'last_completed_at' => $row['last_completed_at'],
+            'overdue_count' => (int) $row['overdue_count'],
+        ];
+    }
+    return $result;
+}
+
+function report_retrain_categories(int $tenantId): array
+{
+    $rows = Db::all(
+        'SELECT id, slug, name FROM edu_categories WHERE tenant_id = ? OR tenant_id IS NULL
+         ORDER BY tenant_id IS NULL, id', [$tenantId]
+    );
+    $bySlug = [];
+    foreach ($rows as $row) {
+        $bySlug[$row['slug']] ??= ['id' => (int) $row['id'], 'slug' => $row['slug'], 'name' => $row['name']];
+    }
+    return $bySlug;
+}
+
+function report_retrain_failure_label(?string $kind): string
+{
+    return match ($kind) {
+        'auth' => '認証情報を入力',
+        'click_attachment' => 'クリック（添付型）',
+        'click' => 'クリック',
+        default => '失敗記録なし',
+    };
+}
+
+function report_retrain_reason(?array $failure, ?string $kind, array $edu): string
+{
+    $reason = report_retrain_failure_label($kind);
+    if ($failure !== null) {
+        $reason .= '（' . date('n/j', strtotime($failure['occurred_at'])) . '）';
+    }
+    if ($edu['overdue_count'] > 0) {
+        return $reason . '。教育 ' . $edu['overdue_count'] . ' 件が期限超過';
+    }
+    if ($failure !== null) {
+        return $reason . ($edu['completed_after_failure'] ? '。失敗後の教育受講済み' : '。失敗後の教育未受講');
+    }
+    return $reason . '。教育完了 ' . $edu['completed_count'] . ' 件';
+}
+
+function report_retrain_enrich(array $row, array $education, array $categories): array
+{
+    $failure = $row['event_type'] === null ? null : [
+        'type' => $row['event_type'], 'occurred_at' => $row['occurred_at'],
+        'campaign_id' => (int) $row['campaign_id'], 'campaign_name' => $row['campaign_name'],
+        'is_attachment' => (bool) $row['is_attachment'],
+    ];
+    $kind = $failure === null ? null : ($failure['type'] === 'auth' ? 'auth'
+        : ($failure['is_attachment'] ? 'click_attachment' : 'click'));
+    $recommended = [];
+    foreach (TET2_RETRAIN_CATEGORY_MAP[$kind ?? ''] ?? [] as $slug) {
+        if (isset($categories[$slug])) {
+            $recommended[] = $categories[$slug];
+        }
+    }
+    $edu = $education[$row['id']] ?? [
+        'assigned_count' => 0, 'completed_count' => 0, 'last_completed_at' => null, 'overdue_count' => 0,
+    ];
+    $edu['completed_after_failure'] = $failure !== null && $edu['last_completed_at'] !== null
+        && $edu['last_completed_at'] > $failure['occurred_at'];
+    unset($row['event_type'], $row['occurred_at'], $row['campaign_id'], $row['campaign_name'], $row['is_attachment'], $row['total_count']);
+    $detail = json_decode((string) ($row['detail'] ?? ''), true);
+    $row['detail'] = is_array($detail) ? $detail : [];
+    return [...$row, 'last_failure' => $failure, 'failure_kind' => $kind, 'recommended_categories' => $recommended,
+        'edu' => $edu, 'reason' => report_retrain_reason($failure, $kind, $edu)];
+}
+
+function report_retrain_csv(int $tenantId, array $rows): never
+{
+    $out = fopen('php://temp', 'r+');
+    $header = ['氏名', 'メール', '会社', '役職カテゴリ', 'スコア', '帯', '直近の失敗', '失敗日時',
+        'キャンペーン', '推奨カテゴリ', '教育割当', '教育完了', '期限超過', '理由'];
+    fputcsv($out, array_map('tet2_csv_sanitize', $header), ',', '"', '');
+    foreach ($rows as $row) {
+        $cells = [$row['name'], $row['email'], $row['company'], $row['position_category'], $row['score'],
+            ['high' => '高', 'medium' => '中', 'low' => '低'][$row['band']] ?? $row['band'],
+            report_retrain_failure_label($row['failure_kind']), $row['last_failure']['occurred_at'] ?? '',
+            $row['last_failure']['campaign_name'] ?? '', implode('・', array_column($row['recommended_categories'], 'name')),
+            $row['edu']['assigned_count'], $row['edu']['completed_count'], $row['edu']['overdue_count'], $row['reason']];
+        fputcsv($out, array_map('tet2_csv_sanitize', $cells), ',', '"', '');
+    }
+    rewind($out);
+    $csv = stream_get_contents($out);
+    fclose($out);
+    audit('report.risk_recommendations_csv', 'tenant_id=' . $tenantId . ',rows=' . count($rows));
+    http_response_code(200);
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="retrain_' . $tenantId . '_' . date('Ymd') . '.csv"');
+    header('X-Content-Type-Options: nosniff');
+    echo "\xEF\xBB\xBF" . $csv;
+    exit;
+}
+
+function report_handle_risk_recommendations(): never
+{
+    $user = require_role('viewer');
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    $limit = isset($_GET['limit']) ? max(1, min(500, (int) $_GET['limit'])) : 20;
+    $band = $_GET['band'] ?? '';
+    if (!in_array($band, ['', 'high', 'medium', 'low'], true)) {
+        $band = '';
+    }
+    $format = $_GET['format'] ?? '';
+    if (!in_array($format, ['', 'csv'], true)) {
+        json_error('format が不正です', 400);
+    }
+    $latest = Db::one('SELECT MAX(computed_date) AS d FROM human_risk_scores WHERE tenant_id = ?', [$tenantId]);
+    $date = $latest['d'] ?? null;
+    $rows = $date === null ? [] : report_retrain_rows($tenantId, $date, ['band' => $band, 'limit' => $limit]);
+    $total = (int) ($rows[0]['total_count'] ?? 0);
+    if ($rows !== []) {
+        $education = report_retrain_education($tenantId, $date, array_column($rows, 'id'));
+        $categories = report_retrain_categories($tenantId);
+        $rows = array_map(static fn (array $row) => report_retrain_enrich($row, $education, $categories), $rows);
+    }
+    if ($format === 'csv') {
+        report_retrain_csv($tenantId, $rows);
+    }
+    json_out(['success' => true, 'computed_date' => $date, 'rows' => $rows, 'total' => $total, 'limit' => $limit]);
+}
+
 /**
  * 会社別のリスク帯分布。
  * 経産省ガイドライン Ver3.0 のチェック項目 5-10 の実践例
@@ -1094,6 +1280,9 @@ try {
     }
     if ($action === 'risk_individuals' && $method === 'GET') {
         report_handle_risk_individuals();
+    }
+    if ($action === 'risk_recommendations' && $method === 'GET') {
+        report_handle_risk_recommendations();
     }
     if ($action === 'risk_by_company' && $method === 'GET') {
         report_handle_risk_by_company();

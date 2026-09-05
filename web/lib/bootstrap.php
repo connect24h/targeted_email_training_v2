@@ -14,6 +14,11 @@ require_once __DIR__ . '/Db.php';
  * 定義すると、テストの load_api() が各ファイルを eval する際に再定義エラーになる)。
  */
 const TET2_POSITION_CATEGORIES = ['役員', '管理職', '一般従業員'];
+const TET2_RETRAIN_CATEGORY_MAP = [
+    'auth'             => ['phishing', 'password-management'],
+    'click'            => ['phishing', 'social-engineering'],
+    'click_attachment' => ['malware'],
+];
 
 /**
  * 旧称・表記ゆれを正規値へ寄せる対応表。

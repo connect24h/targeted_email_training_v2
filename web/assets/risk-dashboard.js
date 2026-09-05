@@ -67,7 +67,35 @@
       </tr>`).join('');
     }
 
-    function renderContent(individualData, companyData) {
+    function recommendationRows(rows) {
+      if (!rows.length) {
+        return '<tr><td colspan="7" class="text-center text-muted py-4">条件に一致する対象者はいません</td></tr>';
+      }
+      return rows.map((person) => {
+        const failure = person.last_failure;
+        const label = !failure ? '失敗記録なし' : failure.type === 'auth'
+          ? '認証情報入力' : failure.is_attachment ? 'クリック（添付型）' : 'クリック';
+        const edu = person.edu || {};
+        return `<tr>
+          <td>${escapeHtml(person.name || person.email)}</td>
+          <td>${escapeHtml(person.company || '（未設定）')}</td>
+          <td class="text-nowrap">${escapeHtml(Number(person.score))} ${bandBadge(person.band)}</td>
+          <td>${escapeHtml(label)}<div class="small text-muted">${escapeHtml(failure?.occurred_at?.slice(0, 10) || '')}</div></td>
+          <td>${(person.recommended_categories || []).map((category) => `<span class="badge bg-secondary me-1">${escapeHtml(category.name)}</span>`).join('') || escapeHtml('未定義')}</td>
+          <td class="small">割当 ${escapeHtml(Number(edu.assigned_count || 0))}・完了 ${escapeHtml(Number(edu.completed_count || 0))}・期限超過 ${escapeHtml(Number(edu.overdue_count || 0))}</td>
+          <td>${escapeHtml(person.reason)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function downloadRecommendations() {
+      const query = new URLSearchParams({ action: 'risk_recommendations', format: 'csv', band: selectedBand, limit: '500' });
+      const tenantId = getContext().tenantId;
+      if (tenantId !== '' && tenantId != null) query.set('tenant_id', tenantId);
+      global.open(`api/report.php?${query}`, '_blank');
+    }
+
+    function renderContent(individualData, companyData, recommendationData) {
       const bands = individualData.bands || { high: 0, medium: 0, low: 0 };
       const total = Number(individualData.total || 0);
       const shown = (individualData.individuals || []).length;
@@ -89,6 +117,13 @@
             <thead><tr><th>会社</th><th>人数</th><th>平均スコア</th><th>高</th><th>中</th><th>低</th></tr></thead>
             <tbody id="riskCompaniesBody">${companyRows(companyData.companies || [])}</tbody>
           </table></div></div>
+        <div class="card mb-4"><div class="card-header d-flex justify-content-between align-items-center">
+          <span>再訓練推奨（上位20名・選択したリスク帯）</span>
+          <button id="riskRecommendationsCsv" class="btn btn-sm btn-outline-secondary">CSV</button>
+        </div><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th>氏名</th><th>会社</th><th>スコア・帯</th><th>直近の失敗</th><th>推奨カテゴリ</th><th>教育</th><th>理由</th></tr></thead>
+          <tbody id="riskRecommendationsBody">${recommendationRows(recommendationData.rows || [])}</tbody>
+        </table></div></div>
         <div class="card"><div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
           <span>個人別（高スコア順） <span id="riskPeopleCount" class="small text-muted">${truncation}</span></span>
           <label class="small">リスク帯 <select id="riskBandFilter" class="form-select form-select-sm d-inline-block w-auto ms-1">
@@ -102,6 +137,7 @@
           <tbody id="riskPeopleBody">${peopleRows(individualData.individuals || [])}</tbody>
         </table></div></div>`;
       root.querySelector?.('#riskRetryBtn')?.addEventListener('click', render);
+      root.querySelector?.('#riskRecommendationsCsv')?.addEventListener('click', downloadRecommendations);
       root.querySelector?.('#riskBandFilter')?.addEventListener('change', (event) => {
         selectedBand = event.target.value;
         render();
@@ -115,12 +151,14 @@
       try {
         const query = { action: 'risk_individuals', limit: 100 };
         if (selectedBand) query.band = selectedBand;
-        const [individualData, companyData] = await Promise.all([
+        const [individualData, companyData, recommendationData] = await Promise.all([
           api('api/report.php', { query }),
           api('api/report.php', { query: { action: 'risk_by_company' } }),
+          api('api/report.php', { query: { ...query, action: 'risk_recommendations', limit: 20 } }),
         ]);
         if (!isCurrent(requestGeneration, requestContext)) return;
-        if (individualData.computed_date !== companyData.computed_date) {
+        if (individualData.computed_date !== companyData.computed_date
+          || individualData.computed_date !== recommendationData.computed_date) {
           throw new Error('スナップショットの更新中です。少し待って再試行してください');
         }
         if (!individualData.computed_date) {
@@ -128,7 +166,7 @@
           root.querySelector?.('#riskRetryBtn')?.addEventListener('click', render);
           return;
         }
-        renderContent(individualData, companyData);
+        renderContent(individualData, companyData, recommendationData);
       } catch (error) {
         if (!isCurrent(requestGeneration, requestContext)) return;
         root.innerHTML = `<div id="riskError" class="alert alert-danger">${escapeHtml(error?.message || '読込に失敗しました')} <button id="riskRetryBtn" class="btn btn-sm btn-outline-danger ms-2">再試行</button></div>`;
