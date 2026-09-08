@@ -232,6 +232,7 @@ function edu_d_resolve_targets(array $delivery, int $tenantId): array
             $rows = Db::all(
                 "SELECT DISTINCT ct.target_id AS id
                  FROM events e
+                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
                  INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
                  INNER JOIN targets t ON t.id = ct.target_id
                  WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('auth','click')
@@ -243,6 +244,7 @@ function edu_d_resolve_targets(array $delivery, int $tenantId): array
             $rows = Db::all(
                 "SELECT DISTINCT ct.target_id AS id
                  FROM events e
+                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
                  INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
                  INNER JOIN targets t ON t.id = ct.target_id
                  WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')
@@ -496,7 +498,7 @@ function edu_d_handle_launch(array $actor): never
     // トランザクションで割当採番 + 設問確定。新規割当者の (token) を集め、commit後にメール送信する
     // (SMTP送信をtx内でやると送信遅延/失敗がcommitをブロック・巻き戻すため、必ずtx外で送る)。
     $newTokens = [];
-    $result = Db::tx(function () use ($id, $tenantId, $targetIds, $questionIds, &$newTokens) {
+    $result = Db::tx(function () use ($id, $tenantId, $targetIds, $questionIds, $delivery, &$newTokens) {
         // 設問が未確定(条件抽出)なら edu_delivery_questions に積む
         $existing = Db::one('SELECT 1 FROM edu_delivery_questions WHERE delivery_id = ?', [$id]);
         if ($existing === null) {
@@ -645,19 +647,21 @@ function edu_d_handle_delete(array $actor): never
     $body = json_body();
     $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
     $id = edu_d_id_body($body);
-    $delivery = edu_d_assert_owned($id, $tenantId);
+    edu_d_assert_owned($id, $tenantId);
 
-    // 受講が始まっている配信は削除不可(結果の消失防止)
-    $started = Db::one(
-        "SELECT 1 FROM edu_assignments WHERE delivery_id = ? AND status IN ('started','completed') LIMIT 1",
-        [$id]
+    // 受講開始のUPDATEと競合しても履歴を消さないよう、判定と削除を1文で行う。
+    $deleted = Db::run(
+        "DELETE FROM edu_deliveries WHERE id = ? AND tenant_id = ?
+         AND NOT EXISTS (
+             SELECT 1 FROM edu_assignments
+             WHERE delivery_id = edu_deliveries.id AND status IN ('started','completed')
+         )",
+        [$id, $tenantId]
     );
-    if ($started !== null) {
+    if ($deleted === 0) {
+        edu_d_assert_owned($id, $tenantId);
         json_error('受講が開始された配信は削除できません', 409);
     }
-
-    // FK ON DELETE CASCADE で edu_delivery_questions / edu_assignments(未受講) は連鎖削除
-    Db::run('DELETE FROM edu_deliveries WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
     audit('edu_delivery.delete', 'delivery_id=' . $id);
     json_out(['success' => true]);
 }

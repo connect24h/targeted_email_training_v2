@@ -366,6 +366,22 @@ function campaign_automations_set_status(array $actor, string $status): never
     json_out(['success' => true, 'automation' => campaign_automations_row($id, $tenantId)]);
 }
 
+function campaign_automations_handle_delete(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = campaign_automations_tenant($actor, $body);
+    $id = campaign_automations_int($body, 'id');
+    // 一つのDELETEとFKのCASCADEでrunnerの生成transactionとの整合性を保つ。
+    // 生成済campaignはルールの子ではないため、その送信・訓練履歴も保持する。
+    $deleted = Db::run('DELETE FROM campaign_automations WHERE id=? AND tenant_id=?', [$id, $tenantId]);
+    if ($deleted === 0) {
+        json_error('自動化ルールが見つかりません', 404);
+    }
+    audit('campaign_automation.delete', 'automation_id=' . $id . ',runs_deleted=1,campaigns_retained=1');
+    json_out(['success' => true]);
+}
+
 function campaign_automations_handle_pause(array $actor): never
 {
     campaign_automations_set_status($actor, 'paused');
@@ -438,6 +454,7 @@ try {
     if ($action === 'update' && $method === 'POST') campaign_automations_handle_update($actor);
     if ($action === 'pause' && $method === 'POST') campaign_automations_handle_pause($actor);
     if ($action === 'resume' && $method === 'POST') campaign_automations_handle_resume($actor);
+    if ($action === 'delete' && $method === 'POST') campaign_automations_handle_delete($actor);
     if ($action === 'generate_now' && $method === 'POST') campaign_automations_handle_generate_now($actor);
     json_error('不正なアクションです', 400);
 } catch (Throwable $error) {

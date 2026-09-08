@@ -166,6 +166,7 @@ final class EduAutoEnroll
     {
         $sql = "SELECT DISTINCT ct.target_id AS id
                 FROM events e
+                INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
                 INNER JOIN targets t ON t.id = ct.target_id
                 WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')

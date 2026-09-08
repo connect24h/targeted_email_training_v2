@@ -83,6 +83,27 @@ final class Db
         }
     }
 
+    /**
+     * 読み取り後に大量書き込みする処理向けtransaction。
+     * 最初にwriter予約を取るため、別接続の書き込み後にSQLITE_BUSYとなる
+     * DEFERRED transactionのlock昇格競合を避ける。
+     */
+    public static function txImmediate(callable $fn): mixed
+    {
+        $pdo = self::pdo();
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $result = $fn($pdo);
+            $pdo->commit();
+            return $result;
+        } catch (\Throwable $error) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $error;
+        }
+    }
+
     public static function forTenant(int $tenantId): DbScope
     {
         return new DbScope($tenantId);

@@ -96,7 +96,8 @@ final class HumanRiskScore
         }
 
         $bands = ['low' => 0, 'medium' => 0, 'high' => 0];
-        $scored = Db::tx(function () use ($targets, $tenantId, $date, &$bands): int {
+        // 02:30のreport ingestと重なっても、読取後のwriter昇格でSQLITE_BUSYにしない。
+        $scored = Db::txImmediate(function () use ($targets, $tenantId, $date, &$bands): int {
             $n = 0;
             foreach ($targets as $t) {
                 $s = self::computeForTarget((int) $t['id'], $tenantId, $date);

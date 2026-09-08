@@ -362,6 +362,7 @@
             <button class="btn btn-sm btn-outline-secondary" id="logsRefreshBtn"><i class="bi bi-arrow-clockwise"></i> 更新</button>
           </div>
         </div>
+        <p class="small text-muted">送信ログ・訓練イベントには、削除済みキャンペーンの履歴も含まれます。キャンペーンの削除は送信を停止して一覧から非表示にする操作で、記録を即時消去するものではありません。</p>
         <ul class="nav nav-pills mb-3 flex-wrap" id="logsTabs">
           <li class="nav-item"><a class="nav-link active" data-log="delivery" href="#">送信ログ</a></li>
           <li class="nav-item"><a class="nav-link" data-log="events" href="#">訓練イベント</a></li>
@@ -436,17 +437,15 @@
           <thead><tr><th>#</th><th>タイトル</th><th>種別</th><th>状態</th><th>割当</th><th>完了</th><th>受講率</th><th>平均</th><th>操作</th></tr></thead>
           <tbody id="eduDeliveriesBody"></tbody>
         </table></div>
+        <p class="small text-muted">削除できるのは受講開始前の配信です。受講開始・完了の履歴がある配信は保持されます。</p>
       </section>
 
       <!-- 教材バンク -->
       <section data-panel="eduQuestions" class="view-panel d-none">
         <div class="d-flex justify-content-between align-items-center mb-3">
           <h5 class="mb-0"><i class="bi bi-collection me-1"></i>教材バンク</h5>
-          <div class="d-flex gap-2">
-            <button class="btn btn-outline-primary btn-sm" data-perm="operator" onclick="newEduCategory()"><i class="bi bi-folder-plus me-1"></i>新規カテゴリ</button>
-            <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduQuestion()"><i class="bi bi-plus-lg me-1"></i>新規設問</button>
-          </div>
         </div>
+        <p class="small text-muted">スライド教材と確認テストの設問を管理します。配布先は「教育配信」で設定します。</p>
         <div class="card mb-4">
           <div class="card-header d-flex justify-content-between align-items-center">
             <div><i class="bi bi-easel me-1"></i><strong>eラーニング スライド教材</strong>
@@ -454,11 +453,17 @@
             <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduMaterial()"><i class="bi bi-plus-lg me-1"></i>新規教材</button>
           </div>
           <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
-            <thead><tr><th>教材名</th><th>説明</th><th>スライド</th><th>操作</th></tr></thead>
+            <thead><tr><th>#</th><th>教材名</th><th>説明</th><th>スライド</th><th>操作</th></tr></thead>
             <tbody id="eduMaterialsBody"></tbody>
           </table></div>
         </div>
-        <h6 class="mb-2"><i class="bi bi-patch-question me-1"></i>確認テスト設問</h6>
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+          <h6 class="mb-0"><i class="bi bi-patch-question me-1"></i>確認テスト設問</h6>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary btn-sm" data-perm="operator" onclick="newEduCategory()"><i class="bi bi-folder-plus me-1"></i>新規カテゴリ</button>
+            <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduQuestion()"><i class="bi bi-plus-lg me-1"></i>新規設問</button>
+          </div>
+        </div>
         <ul class="nav nav-pills mb-2 flex-wrap" id="eduCatTabs"></ul>
         <div class="mb-3" id="eduCatToolbar"></div>
         <div class="table-responsive"><table class="table table-hover align-middle">
@@ -472,6 +477,7 @@
         <div class="d-flex justify-content-between align-items-center mb-3">
           <h5 class="mb-0"><i class="bi bi-mortarboard me-1"></i>教育レポート</h5>
         </div>
+        <p class="small text-muted">キャンペーンを削除しても、教育配信と受講履歴は保持され、このレポートに集計されます。</p>
         <div class="row g-3 mb-3" id="eduReportKpi"></div>
         <div class="card mb-3">
           <div class="card-header py-2 small fw-bold d-flex justify-content-between align-items-center">
@@ -593,8 +599,8 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=6e6ab870"></script>
-<script src="assets/campaign-automations.js?v=b847062f"></script>
+<script src="app.js?v=8db81869"></script>
+<script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
 </body>

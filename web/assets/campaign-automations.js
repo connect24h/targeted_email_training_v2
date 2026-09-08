@@ -42,7 +42,8 @@ function automationActions(row, canOperate) {
   const operatorButtons = canOperate ? `
     <button class="btn btn-sm btn-outline-secondary" data-automation-action="edit" data-id="${id}" title="編集"><i class="bi bi-pencil"></i></button>
     <button class="btn btn-sm btn-outline-secondary" data-automation-action="${statusAction}" data-id="${id}">${statusLabel}</button>
-    <button class="btn btn-sm btn-primary" data-automation-action="generate" data-id="${id}"${row.status !== 'active' ? ' disabled' : ''}>draft生成</button>` : '';
+    <button class="btn btn-sm btn-primary" data-automation-action="generate" data-id="${id}"${row.status !== 'active' ? ' disabled' : ''}>draft生成</button>
+    <button class="btn btn-sm btn-outline-danger" data-automation-action="delete" data-id="${id}">削除</button>` : '';
   return `<div class="d-flex flex-wrap gap-1">
     <button class="btn btn-sm btn-outline-info" data-automation-action="preview" data-id="${id}">確認</button>
     ${operatorButtons}
@@ -209,6 +210,13 @@ async function changeAutomationStatus(id, action) {
   await renderCampaignAutomations();
 }
 
+async function deleteAutomation(id) {
+  if (!confirm('この定期キャンペーンのルール・対象グループとの関連・draft生成履歴を削除します。今後の自動生成は停止します。生成済みキャンペーンとその送信予約・送信ログ・訓練イベントは残ります。削除しますか？')) return;
+  await api('api/campaign_automations.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
+  toast('定期キャンペーンのルールを削除しました', 'ok');
+  await renderCampaignAutomations();
+}
+
 async function generateAutomationDraft(id) {
   if (!confirm('次回分のレビュー用draftを生成します。メールは送信されません。続けますか？')) return;
   const result = await api('api/campaign_automations.php', {
@@ -231,6 +239,7 @@ async function handleAutomationAction(event) {
     if (action === 'edit') openAutomationModal(id);
     if (action === 'pause' || action === 'resume') await changeAutomationStatus(id, action);
     if (action === 'generate') await generateAutomationDraft(id);
+    if (action === 'delete') await deleteAutomation(id);
   } catch (error) {
     toast(error.message, 'err');
   }

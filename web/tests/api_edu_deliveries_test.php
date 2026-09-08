@@ -7,6 +7,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/../lib/EduQuestionPicker.php';
+require_once __DIR__ . '/../lib/EduMailer.php';
 
 tet2_test_boot();
 load_api('edu_deliveries');
@@ -202,6 +204,29 @@ check(edu_d_token_expiry(['deadline' => '2026-08-31 18:00:00']) === '2026-08-31 
 check(edu_d_token_expiry(['deadline' => null]) === null, 'ER-5: 締切がなければ無期限');
 check(edu_d_token_expiry(['deadline' => '  ']) === null, 'ER-5: 空白だけの締切は無期限として扱う');
 check(edu_d_token_expiry([]) === null, 'ER-5: deadline 列が無い配信でも落ちない');
+
+// launch の transaction closure でも配信情報を参照でき、割当と期限設定を完了する。
+// SMTP投函だけを無効化し、宛先解決からメール成功件数までは本番と同じ経路を通す。
+Db::run("UPDATE edu_deliveries SET deadline = '2030-01-02 03:04:05' WHERE id = ?", [$ed7Id]);
+putenv('TET2_EDU_MAIL_DISABLE=1');
+try {
+    $r = call_handler('edu_d_handle_launch', ['id' => $ed7Id], 'operator');
+} finally {
+    putenv('TET2_EDU_MAIL_DISABLE');
+}
+check($r['code'] === 200, 'ED-12: 個別配信をlaunchできる');
+check((int) ($r['payload']['assigned'] ?? 0) === 2, 'ED-12: 指定した2名だけを割り当てる');
+check((int) ($r['payload']['mail_sent'] ?? 0) === 2, 'ED-12: 新規割当2名のメール送信成功数を返す');
+$launchedAssignments = Db::all(
+    'SELECT target_id, status, token_expiry FROM edu_assignments WHERE delivery_id = ? ORDER BY target_id',
+    [$ed7Id]
+);
+check(array_column($launchedAssignments, 'target_id') === [$realTargetId, $testTargetId],
+    'ED-12: launch対象が個別指定から増減しない');
+check(array_column($launchedAssignments, 'status') === ['assigned', 'assigned'],
+    'ED-12: 新規割当はassignedで開始する');
+check(array_column($launchedAssignments, 'token_expiry') === ['2030-01-02 03:04:05', '2030-01-02 03:04:05'],
+    'ED-12: 配信deadlineを全受講トークンへ設定する');
 
 // --- triggered_by と target_type の整合性 ---
 // phishing_failure は EduAutoEnroll が対象を自動決定するので risk 限定。

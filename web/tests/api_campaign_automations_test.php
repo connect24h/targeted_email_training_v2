@@ -214,4 +214,64 @@ check($response['code'] === 200, '完了済みruleをpauseできる');
 $response = automationCall('campaign_automations_handle_resume', ['body' => ['id' => $automationId]]);
 check($response['code'] === 409, '上限回数を完了したruleはresumeを拒否する');
 
+check(function_exists('campaign_automations_handle_delete'), '定期ルール削除handlerがある');
+check(campaign_automations_required_role('delete', 'POST') === 'operator', '削除はoperator以上');
+$response = automationCall('campaign_automations_handle_delete', [
+    'body' => ['id' => $automationId],
+    'actor' => ['id' => 2, 'tenant_id' => 2, 'role' => 'operator'],
+]);
+check($response['code'] === 404, '他tenantからルールを削除できない');
+$response = automationCall('campaign_automations_handle_delete', ['body' => ['id' => 0]]);
+check($response['code'] === 400, '削除idを検証する');
+Db::run("UPDATE campaigns SET deleted_at=datetime('now') WHERE id=?", [$sourceId]);
+$staleRule = Db::one('SELECT * FROM campaign_automations WHERE id=?', [$automationId]);
+// 別接続のrunnerがclaimを書き込んでいる間はDELETEを割り込ませない。
+$runnerConnection = new PDO('sqlite:' . getenv('TET2_DB_PATH'), null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$runnerConnection->exec('PRAGMA foreign_keys=ON');
+$runnerConnection->beginTransaction();
+$claim = $runnerConnection->prepare("INSERT INTO campaign_automation_runs (automation_id, occurrence_key, selected_send_at, status) VALUES (?, 'race-test', '2030-01-01 09:00:00', 'claimed')");
+$claim->execute([$automationId]);
+Db::pdo()->exec('PRAGMA busy_timeout=1');
+$locked = false;
+try {
+    automationCall('campaign_automations_handle_delete', ['body' => ['id' => $automationId]]);
+} catch (PDOException $error) {
+    $locked = (int) ($error->errorInfo[1] ?? 0) === 5;
+} finally {
+    $runnerConnection->rollBack();
+    Db::pdo()->exec('PRAGMA busy_timeout=5000');
+}
+check($locked && Db::one('SELECT id FROM campaign_automations WHERE id=?', [$automationId]) !== null, '生成transaction中は削除が部分的に進まない');
+$campaignsBeforeDelete = Db::all('SELECT * FROM campaigns ORDER BY id');
+$schedulesBeforeDelete = Db::all('SELECT * FROM send_schedule ORDER BY id');
+$eventsBeforeDelete = Db::all('SELECT * FROM events ORDER BY id');
+$response = automationCall('campaign_automations_handle_delete', ['body' => ['id' => $automationId]]);
+check($response['code'] === 200, '削除済sourceのルールも削除できる');
+check($GLOBALS['__TET2_TEST_CSRF_CALLS'] === 1, '削除でCSRFを検証する');
+check(Db::one('SELECT id FROM campaign_automations WHERE id=?', [$automationId]) === null, 'ルールを物理削除する');
+check(Db::all('SELECT * FROM campaign_automation_groups WHERE automation_id=?', [$automationId]) === [], '対象group対応を削除する');
+check(Db::all('SELECT * FROM campaign_automation_runs WHERE automation_id=?', [$automationId]) === [], '生成履歴を削除する');
+check(Db::all('SELECT * FROM campaigns ORDER BY id') === $campaignsBeforeDelete, '生成済campaignを全項目保持する');
+check(Db::all('SELECT * FROM send_schedule ORDER BY id') === $schedulesBeforeDelete, '送信scheduleを保持する');
+check(Db::all('SELECT * FROM events ORDER BY id') === $eventsBeforeDelete, '訓練eventを保持する');
+check(($GLOBALS['__TET2_TEST_AUDIT'][0]['action'] ?? '') === 'campaign_automation.delete', '削除を監査記録する');
+$response = automationCall('campaign_automations_handle_delete', ['body' => ['id' => $automationId]]);
+check($response['code'] === 404, '削除済ruleの再削除は404');
+$result = (new CampaignAutomationRunner())->generateOne($automationId, ['tenant_id' => 1]);
+check($result['status'] === 'not_found', '削除済ruleから生成できない');
+$occurrence = (new CampaignAutomationSchedule())->next($staleRule);
+$occurrence['selected_send_at'] = $occurrence['send_window_start_at'];
+$staleRejected = false;
+try {
+    (new ReflectionMethod(CampaignAutomationRunner::class, 'generateAtomic'))->invoke(
+        new CampaignAutomationRunner(), $staleRule,
+        ['occurrence' => $occurrence, 'target_ids' => [1], 'content_no_by_target' => null, 'created_by' => 1]
+    );
+} catch (PDOException $error) {
+    $staleRejected = (int) ($error->errorInfo[1] ?? 0) === 19;
+}
+check($staleRejected, '削除直前にruleを読んだrunnerもFKで生成を拒否される');
+check(Db::all('SELECT * FROM campaigns ORDER BY id') === $campaignsBeforeDelete, '競合後に孤立draftが残らない');
+check(Db::all('PRAGMA foreign_key_check') === [], '削除後も参照整合性を維持する');
+
 echo "ALL TESTS PASSED\n";

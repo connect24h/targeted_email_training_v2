@@ -956,7 +956,17 @@ function campaigns_handle_delete(array $actor): never
         }
     }
 
-    Db::run("UPDATE campaigns SET deleted_at = datetime('now','localtime'), status='cancelled' WHERE id = ? AND tenant_id = ?", [$id, $tenantId]);
+    $pausedRules = Db::tx(function () use ($id, $tenantId): int {
+        Db::run("UPDATE campaigns SET deleted_at = datetime('now','localtime'), status='cancelled' WHERE id = ? AND tenant_id = ?", [$id, $tenantId]);
+        return Db::run(
+            "UPDATE campaign_automations SET status='paused', updated_at=datetime('now','localtime')
+             WHERE source_campaign_id=? AND tenant_id=? AND status='active'",
+            [$id, $tenantId]
+        );
+    });
+    if ($pausedRules > 0) {
+        audit('campaign_automation.source_deleted', 'source_campaign_id=' . $id . ',paused_rules=' . $pausedRules);
+    }
     audit('campaign.delete', 'campaign_id=' . $id . ',soft=1');
     json_out(['success' => true]);
 }

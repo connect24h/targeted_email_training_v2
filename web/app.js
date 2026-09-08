@@ -2455,19 +2455,23 @@ function renderTemplatesScenario(all) {
   const bodies = all.filter((t) => t.kind === 'body');
   // scenario_key を持つペアを集約。
   const keys = [...new Set(all.filter((t) => t.scenario_key && (t.kind === 'subject' || t.kind === 'body')).map((t) => t.scenario_key))];
-  const scenRows = keys.map((key, i) => {
+  const pairedIds = new Set();
+  let rowNumber = 0;
+  const scenRows = keys.map((key) => {
     const s = subjects.find((t) => t.scenario_key === key);
     const b = bodies.find((t) => t.scenario_key === key);
     if (!s || !b) return '';
-    return `<tr style="cursor:pointer" onclick="scenarioViewer('${key}')">
-      <td>${i + 1}</td><td>${esc(s.name)}</td><td class="text-muted small">${esc(b.name)}</td>
+    pairedIds.add(s.id);
+    pairedIds.add(b.id);
+    return `<tr style="cursor:pointer" data-scenario-key="${esc(key)}" onclick="scenarioViewer(this.dataset.scenarioKey)">
+      <td>${++rowNumber}</td><td>${esc(s.name)}</td><td class="text-muted small">${esc(b.name)}</td>
       <td>${Number(s.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
       <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`;
   }).join('');
-  // scenario 無し(汎用)の件名/本文は個別に。
-  const orphans = all.filter((t) => (t.kind === 'subject' || t.kind === 'body') && !t.scenario_key);
+  // ペアが欠けた場合も、元の件名・本文を一覧から失わない。
+  const orphans = all.filter((t) => (t.kind === 'subject' || t.kind === 'body') && !pairedIds.has(t.id));
   const orphanRows = orphans.map((t) => `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
-    <td>—</td><td>${esc(t.name)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
+    <td>${++rowNumber}</td><td>${esc(t.name)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
     <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
     <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`).join('');
   $('#templatesHead').innerHTML = '<tr><th>連番</th><th>件名</th><th>本文</th><th></th><th></th></tr>';
@@ -2831,11 +2835,14 @@ async function renderEduDeliveries() {
       <td><span class="badge bg-${d.status==='running'?'success':d.status==='done'?'secondary':'light text-dark'}">${esc(d.status)}</span></td>
       <td>${d.assigned}</td><td>${d.completed}</td><td>${d.completion_rate}%</td><td>${d.average_score}%</td>
       <td class="text-nowrap">
-        <button class="btn btn-sm btn-outline-primary" onclick="viewEduDelivery(${d.id})"><i class="bi bi-graph-up"></i></button>
+        <button class="btn btn-sm btn-outline-primary" onclick="viewEduDelivery(${d.id})" title="配信レポート"><i class="bi bi-graph-up"></i> レポート</button>
         ${roleAtLeast(State.user.role,'operator') && d.status==='draft'?`
         <button class="btn btn-sm btn-outline-success" onclick="launchEduDelivery(${d.id})" title="配信開始"><i class="bi bi-send"></i></button>`:''}
         ${roleAtLeast(State.user.role,'operator') && d.status==='running'?`
         <button class="btn btn-sm btn-outline-warning" onclick="remindEduDelivery(${d.id})" title="未完了者へ催促メール"><i class="bi bi-envelope-exclamation"></i></button>`:''}
+        ${roleAtLeast(State.user.role,'operator') ? (Number(d.completed) > 0 || Number(d.started_count) > 0
+          ? '<span class="small text-muted ms-1">受講履歴を保持（削除不可）</span>'
+          : `<button class="btn btn-sm btn-outline-danger" onclick="deleteEduDelivery(${d.id})" title="受講開始前の配信を削除"><i class="bi bi-trash"></i> 削除</button>`) : ''}
       </td></tr>`).join('') : emptyRow(9);
 }
 function eduDeliveryForm() {
@@ -2943,6 +2950,18 @@ async function newEduDelivery() {
   });
   $('#eduRiskPreset').click();
 }
+async function deleteEduDelivery(id) {
+  if (!roleAtLeast(State.user.role, 'operator')) return;
+  const delivery = Cache.eduDeliveries?.[id];
+  if (!delivery) return toast('配信が見つかりません。画面を更新してください', 'err');
+  if (Number(delivery.completed) > 0 || Number(delivery.started_count) > 0) return toast('受講履歴を保持するため、受講開始・完了の履歴がある配信は削除できません', 'err');
+  if (!confirm(`教育配信「${delivery.title}」を削除しますか？\n未受講の割当と受講リンクも削除されます。受講開始・完了の履歴がある配信は削除できません。`)) return;
+  try {
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
+    toast('教育配信を削除しました', 'ok');
+    await renderEduDeliveries();
+  } catch (e) { toast(e.message, 'err'); }
+}
 async function launchEduDelivery(id) {
   if (!confirm('この配信を開始し、対象者に受講を割り当てますか？')) return;
   try {
@@ -2978,12 +2997,13 @@ async function viewEduDelivery(id) {
 async function renderEduMaterials() {
   const { materials } = await api('api/edu_materials.php', { query: { action: 'list' } });
   Cache.eduMaterialList = materials || [];
-  const canEdit = (material) => Number(material.is_shared) !== 1 || State.user.role === 'superadmin';
-  $('#eduMaterialsBody').innerHTML = Cache.eduMaterialList.length ? Cache.eduMaterialList.map((material) => `
-    <tr><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
+  const canEdit = (material) => roleAtLeast(State.user.role, 'operator')
+    && (Number(material.is_shared) !== 1 || State.user.role === 'superadmin');
+  $('#eduMaterialsBody').innerHTML = Cache.eduMaterialList.length ? Cache.eduMaterialList.map((material, index) => `
+    <tr><td>${index + 1}</td><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
       <td class="small text-muted">${esc(material.description || '')}</td><td>${material.slide_count}枚</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduMaterial(${material.id})"><i class="bi bi-play-circle"></i> 教材を試行</button>
-        ${canEdit(material) ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(4);
+        ${canEdit(material) ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
 }
 
 let eduMaterialPreviewIndex = 0;
@@ -3094,13 +3114,14 @@ async function renderEduQuestions() {
   // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
   const questionsAsc = (questions || []).slice().sort((a, b) => a.id - b.id);
   const typeName = { single_choice: '単一選択', true_false: '正誤', multiple_choice: '複数選択' };
-  const canEdit = (q) => Number(q.is_shared) !== 1 || State.user.role === 'superadmin';
+  const canEdit = (q) => roleAtLeast(State.user.role, 'operator')
+    && (Number(q.is_shared) !== 1 || State.user.role === 'superadmin');
   $('#eduQuestionsBody').innerHTML = questionsAsc.length ? questionsAsc.map((q, i) => `
     <tr><td>${i + 1}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduQuestion(${q.id})"><i class="bi bi-play-circle"></i> 試行</button>
         ${canEdit(q) ? `
-        <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteEduQuestion(${q.id})"><i class="bi bi-trash"></i></button>`
+        <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})" title="設問を編集"><i class="bi bi-pencil"></i> 編集</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteEduQuestion(${q.id})" title="設問を削除"><i class="bi bi-trash"></i> 削除</button>`
         : '<span class="text-muted small ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
 }
 function setEduCat(id) { eduCatFilter = id; renderEduQuestions(); }

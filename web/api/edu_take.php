@@ -259,6 +259,11 @@ function take_handle_start(): never
             "UPDATE edu_assignments SET status='started', started_at=datetime('now','localtime') WHERE id=? AND status='assigned'",
             [(int) $a['id']]
         );
+        // token解決後に配信削除が先行した場合、消えた割当で受講成功を返さない。
+        $a = take_resolve($token);
+        if ((string) $a['status'] === 'completed') {
+            take_error('この受講は既に完了しています', 409);
+        }
     }
 
     // correct_answer / explanation は秘匿(採点前に答えを渡さない)

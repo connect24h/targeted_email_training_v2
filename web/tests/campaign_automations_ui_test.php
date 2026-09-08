@@ -35,4 +35,9 @@ ui_check(str_contains($script, 'data-content-count'), '元campaignのcontent数�
 ui_check(str_contains($script, 'esc('), 'API由来文字列をescapeする');
 ui_check(str_contains($script, 'confirm('), 'draft生成前に確認する');
 
+$output = [];
+$code = 0;
+exec('node ' . escapeshellarg(__DIR__ . '/campaign_automations_frontend.mjs') . ' 2>&1', $output, $code);
+ui_check($code === 0, '削除UIの動作検証: ' . implode("\n", $output));
+
 echo "ALL TESTS PASSED\n";

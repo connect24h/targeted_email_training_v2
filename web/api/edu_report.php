@@ -172,6 +172,7 @@ function edu_rep_handle_deliveries(array $user): never
     $rows = Db::all(
         "SELECT d.id, d.title, d.delivery_type, d.status, d.pass_score, d.created_at,
                 COUNT(a.id) AS assigned,
+                SUM(CASE WHEN a.status = 'started' THEN 1 ELSE 0 END) AS started_count,
                 SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed,
                 AVG(r.percentage) AS avg_pct
          FROM edu_deliveries d
@@ -193,6 +194,7 @@ function edu_rep_handle_deliveries(array $user): never
             'status' => (string) $r['status'],
             'pass_score' => $r['pass_score'] !== null ? (int) $r['pass_score'] : null,
             'assigned' => $assigned,
+            'started_count' => (int) $r['started_count'],
             'completed' => $completed,
             'completion_rate' => edu_rep_rate($completed, $assigned),
             'average_score' => $r['avg_pct'] !== null ? round((float) $r['avg_pct'], 1) : 0.0,
