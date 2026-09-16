@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/../lib/OfficeDocumentReader.php';
 
 tet2_test_boot();
 check(file_exists(__DIR__ . '/../api/edu_materials.php'), '教材APIがある');
@@ -40,5 +41,26 @@ $r = call_handler('edu_m_handle_update', [
     'title' => '不正更新',
 ], 'operator');
 check($r['code'] === 404, 'EM-4: 他テナント教材を更新できない');
+
+$pptxPath = tempnam(sys_get_temp_dir(), 'tet2-pptx-');
+$pptx = new ZipArchive();
+$pptx->open($pptxPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+$pptx->addFromString('ppt/slides/slide1.xml', '<p:sld xmlns:p="p" xmlns:a="a"><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>取込タイトル</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:txBody><a:p><a:r><a:t>取込本文</a:t></a:r></a:p></p:txBody></p:sp></p:sld>');
+$pptx->close();
+$pptxBytes = (string) file_get_contents($pptxPath);
+unlink($pptxPath);
+$r = call_handler('edu_m_handle_import_pptx', [
+    'filename' => 'training.pptx',
+    'file_base64' => base64_encode($pptxBytes),
+], 'operator');
+check($r['code'] === 200, 'EM-5: PowerPointを教材スライドへ変換できる');
+check(($r['payload']['slides'][0]['title'] ?? '') === '取込タイトル', 'EM-5: PowerPointタイトルを返す');
+check(Db::one("SELECT id FROM edu_materials WHERE title = 'training'") === null, 'EM-5: 確認前には教材を保存しない');
+
+$r = call_handler('edu_m_handle_import_pptx', [
+    'filename' => 'training.ppt',
+    'file_base64' => base64_encode($pptxBytes),
+], 'operator');
+check($r['code'] === 400, 'EM-6: 旧PowerPoint形式を拒否する');
 
 echo "ALL TESTS PASSED\n";

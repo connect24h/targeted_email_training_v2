@@ -1,4 +1,5 @@
 <?php declare(strict_types=1); require __DIR__ . '/../lib/bootstrap.php';
+require_once __DIR__ . '/../lib/OfficeDocumentReader.php';
 
 /** スライド教材管理。本文はplain textとして保存し、受講画面側でescapeして表示する。 */
 
@@ -152,6 +153,33 @@ function edu_m_handle_update(array $actor): never
     json_out(['success' => true, 'material' => edu_m_present(edu_m_find($id, $tenantId))]);
 }
 
+function edu_m_handle_import_pptx(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    effective_tenant_id($actor, edu_m_body_int($body, 'tenant_id'));
+    $filename = is_string($body['filename'] ?? null) ? trim($body['filename']) : '';
+    $encoded = is_string($body['file_base64'] ?? null) ? $body['file_base64'] : '';
+    if ($filename === '' || !preg_match('/\.pptx$/i', $filename) || $encoded === '') {
+        json_error('PowerPoint（.pptx）ファイルを指定してください', 400);
+    }
+    if (strlen($encoded) > 7_000_000) {
+        json_error('PowerPointファイルは5MB以内にしてください', 400);
+    }
+    $bytes = base64_decode($encoded, true);
+    if (!is_string($bytes)) {
+        json_error('PowerPointファイルを読み取れません', 400);
+    }
+    try {
+        $slides = OfficeDocumentReader::readPowerPoint($bytes);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 400);
+    }
+    $suggestedTitle = mb_substr((string) preg_replace('/\.pptx$/i', '', basename($filename)), 0, 200);
+    audit('edu_material.import_pptx', 'slides=' . count($slides));
+    json_out(['success' => true, 'title' => $suggestedTitle, 'slides' => $slides]);
+}
+
 try {
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -164,6 +192,9 @@ try {
     }
     if ($action === 'update' && $method === 'POST') {
         edu_m_handle_update($actor);
+    }
+    if ($action === 'import_pptx' && $method === 'POST') {
+        edu_m_handle_import_pptx($actor);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $error) {

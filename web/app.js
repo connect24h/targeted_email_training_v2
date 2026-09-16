@@ -58,6 +58,23 @@ function toast(msg, kind = 'info') {
 }
 function fmtDate(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
 
+function fileToBase64(file, maxBytes = 5 * 1024 * 1024) {
+  if (!file) return Promise.reject(new Error('ファイルを選択してください'));
+  if (file.size > maxBytes) return Promise.reject(new Error('ファイルは5MB以内にしてください'));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '');
+    reader.onerror = () => reject(new Error('ファイルを読み取れません'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function eduDownloadUrl(action) {
+  const query = new URLSearchParams({ action });
+  if (State.user?.role === 'superadmin' && State.activeTenantId) query.set('tenant_id', State.activeTenantId);
+  return `api/edu_questions.php?${query.toString()}`;
+}
+
 /**
  * 完了まで消えない進行表示。toast は 3.5 秒で消えるため、
  * 生成のように「押してから結果が返るまで」を覆いたい処理はこちらを使う。
@@ -3084,11 +3101,12 @@ function readEduMaterialForm() {
 }
 
 function openEduMaterial(material = null) {
-  showModal(material ? 'スライド教材の差し替え' : '新規スライド教材', eduMaterialForm(material), async () => {
+  const isEdit = Boolean(material?.id);
+  showModal(isEdit ? 'スライド教材の差し替え' : '新規スライド教材', eduMaterialForm(material), async () => {
     const body = readEduMaterialForm();
-    if (material) body.id = material.id;
-    await api('api/edu_materials.php', { method: 'POST', query: { action: material ? 'update' : 'create' }, body });
-    toast(material ? '教材を差し替えました' : '教材を作成しました', 'ok'); renderEduMaterials();
+    if (isEdit) body.id = material.id;
+    await api('api/edu_materials.php', { method: 'POST', query: { action: isEdit ? 'update' : 'create' }, body });
+    toast(isEdit ? '教材を差し替えました' : '教材を作成しました', 'ok'); renderEduMaterials();
   }, { size: 'lg' });
   bindEduMaterialEditor();
 }
@@ -3099,17 +3117,36 @@ function editEduMaterial(id) {
   if (material) openEduMaterial(material);
 }
 
+function importEduMaterialPptx() {
+  const body = `<form id="eduPptxImportForm">
+    <div class="alert alert-info py-2 small">PowerPoint（.pptx）の各スライドからタイトルと本文の文字列を取り込みます。画像・動画・アニメーション・レイアウトは取り込みません。</div>
+    <label class="form-label" for="eduPptxFile">PowerPointファイル（5MB・50枚まで）</label>
+    <input class="form-control" id="eduPptxFile" type="file" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" required>
+  </form>`;
+  showModal('PowerPoint教材を読み込む', body, async () => {
+    const file = $('#eduPptxFile').files[0];
+    if (!file || !/\.pptx$/i.test(file.name)) throw new Error('PowerPoint（.pptx）ファイルを選択してください');
+    const fileBase64 = await fileToBase64(file);
+    const result = await api('api/edu_materials.php', {
+      method: 'POST', query: { action: 'import_pptx' }, body: { filename: file.name, file_base64: fileBase64 }, timeout: 60000,
+    });
+    toast(`${result.slides.length}枚のスライドを読み込みました。内容を確認して保存してください`, 'ok');
+    setTimeout(() => openEduMaterial({ title: result.title, description: 'PowerPointから取り込み', slides: result.slides }), 250);
+  }, { size: 'lg' });
+}
+
 let eduCatFilter = null;
 async function renderEduQuestions() {
   await renderEduMaterials();
   const { categories } = await api('api/edu_categories.php', { query: { action: 'list' } });
   Cache.eduCats = categories || [];
-  if (eduCatFilter === null && categories && categories.length) eduCatFilter = categories[0].id;
-  $('#eduCatTabs').innerHTML = (categories || []).map((c) =>
+  if (eduCatFilter === null) eduCatFilter = 0;
+  $('#eduCatTabs').innerHTML = `<li class="nav-item"><a class="nav-link${eduCatFilter===0?' active':''}" href="#" onclick="setEduCat(0);return false">全カテゴリ</a></li>` + (categories || []).map((c) =>
     `<li class="nav-item"><a class="nav-link${c.id===eduCatFilter?' active':''}" href="#" onclick="setEduCat(${c.id});return false">${esc(c.name)} <span class="badge bg-secondary">${c.question_count}</span></a></li>`).join('');
   renderEduCatToolbar();
-  if (eduCatFilter === null) { $('#eduQuestionsBody').innerHTML = emptyRow(5); return; }
-  const { questions } = await api('api/edu_questions.php', { query: { action: 'list', category_id: eduCatFilter } });
+  const query = { action: 'list' };
+  if (eduCatFilter > 0) query.category_id = eduCatFilter;
+  const { questions } = await api('api/edu_questions.php', { query });
   cacheRows('eduQuestions', questions || []);
   // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
   const questionsAsc = (questions || []).slice().sort((a, b) => a.id - b.id);
@@ -3117,12 +3154,12 @@ async function renderEduQuestions() {
   const canEdit = (q) => roleAtLeast(State.user.role, 'operator')
     && (Number(q.is_shared) !== 1 || State.user.role === 'superadmin');
   $('#eduQuestionsBody').innerHTML = questionsAsc.length ? questionsAsc.map((q, i) => `
-    <tr><td>${i + 1}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
+    <tr><td>${i + 1}</td><td>${esc(q.category_name || '')}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduQuestion(${q.id})"><i class="bi bi-play-circle"></i> 試行</button>
         ${canEdit(q) ? `
         <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})" title="設問を編集"><i class="bi bi-pencil"></i> 編集</button>
         <button class="btn btn-sm btn-outline-danger" onclick="deleteEduQuestion(${q.id})" title="設問を削除"><i class="bi bi-trash"></i> 削除</button>`
-        : '<span class="text-muted small ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
+        : '<span class="text-muted small ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(6);
 }
 function setEduCat(id) { eduCatFilter = id; renderEduQuestions(); }
 
@@ -3171,6 +3208,49 @@ function previewEduQuestion(id) {
     feedback.className = `alert mt-3 mb-0 ${passed ? 'alert-success' : 'alert-danger'}`;
     feedback.textContent = `${passed ? '正解です' : '不正解です'}\n正解: ${correctLabels}${question.explanation ? `\n解説: ${question.explanation}` : ''}`;
   });
+}
+
+async function previewEduQuestionsWithAnswers() {
+  const { questions } = await api('api/edu_questions.php', { query: { action: 'list' } });
+  const typeName = { single_choice: '単一選択', true_false: '正誤', multiple_choice: '複数選択' };
+  const cards = (questions || []).map((question, questionIndex) => {
+    const options = eduPreviewArray(question.options);
+    const correct = new Set(eduPreviewArray(question.correct_answer).map(Number));
+    const optionList = options.map((option, optionIndex) =>
+      `<li class="list-group-item d-flex justify-content-between gap-2"><span>${optionIndex + 1}. ${esc(option)}</span>${correct.has(optionIndex) ? '<span class="badge bg-success">正解</span>' : ''}</li>`).join('');
+    return `<section class="card mb-3"><div class="card-header d-flex justify-content-between gap-2">
+      <strong>${questionIndex + 1}. ${esc(question.title)}</strong><span class="text-muted small text-nowrap">${esc(question.category_name || '')} / ${typeName[question.question_type] || esc(question.question_type)} / 難${question.difficulty}</span>
+      </div><ul class="list-group list-group-flush">${optionList}</ul>
+      <div class="card-footer small"><strong>解説:</strong> ${esc(question.explanation || '（なし）')}</div></section>`;
+  }).join('');
+  showInfoModal('確認テスト 全設問・回答付き一覧', cards || '<p class="text-muted">設問がありません。</p>', { size: 'xl' });
+}
+
+function exportEduQuestionsXlsx() {
+  window.location.href = eduDownloadUrl('export_xlsx');
+}
+
+function downloadEduQuestionsTemplate() {
+  window.location.href = eduDownloadUrl('template_xlsx');
+}
+
+function importEduQuestionsXlsx() {
+  const body = `<form id="eduXlsxImportForm">
+    <div class="alert alert-info py-2 small">テンプレートの列名を変更せず、1行につき1設問を入力してください。不正な行が1つでもある場合は全件を取り込みません。</div>
+    <label class="form-label" for="eduXlsxFile">Excelファイル（.xlsx、5MB・1000設問まで）</label>
+    <input class="form-control" id="eduXlsxFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+  </form>`;
+  showModal('確認テスト設問をExcelから追加', body, async () => {
+    const file = $('#eduXlsxFile').files[0];
+    if (!file || !/\.xlsx$/i.test(file.name)) throw new Error('Excel（.xlsx）ファイルを選択してください');
+    const fileBase64 = await fileToBase64(file);
+    const result = await api('api/edu_questions.php', {
+      method: 'POST', query: { action: 'import_xlsx' }, body: { filename: file.name, file_base64: fileBase64 }, timeout: 60000,
+    });
+    toast(`${result.imported}問を追加しました`, 'ok');
+    eduCatFilter = 0;
+    renderEduQuestions();
+  }, { size: 'lg' });
 }
 
 /* ---- カテゴリ管理 ---- */

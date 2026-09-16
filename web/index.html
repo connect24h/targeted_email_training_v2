@@ -450,7 +450,10 @@
           <div class="card-header d-flex justify-content-between align-items-center">
             <div><i class="bi bi-easel me-1"></i><strong>eラーニング スライド教材</strong>
               <span class="small text-muted ms-2">配信後も教材内容を差し替えできます</span></div>
-            <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduMaterial()"><i class="bi bi-plus-lg me-1"></i>新規教材</button>
+            <div class="d-flex gap-2 flex-wrap">
+              <button class="btn btn-outline-primary btn-sm" data-perm="operator" onclick="importEduMaterialPptx()"><i class="bi bi-file-earmark-slides me-1"></i>PowerPoint読込</button>
+              <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduMaterial()"><i class="bi bi-plus-lg me-1"></i>新規教材</button>
+            </div>
           </div>
           <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
             <thead><tr><th>#</th><th>教材名</th><th>説明</th><th>スライド</th><th>操作</th></tr></thead>
@@ -459,7 +462,11 @@
         </div>
         <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
           <h6 class="mb-0"><i class="bi bi-patch-question me-1"></i>確認テスト設問</h6>
-          <div class="d-flex gap-2">
+          <div class="d-flex gap-2 flex-wrap">
+            <button class="btn btn-outline-secondary btn-sm" onclick="downloadEduQuestionsTemplate()"><i class="bi bi-file-earmark-arrow-down me-1"></i>Excelテンプレート</button>
+            <button class="btn btn-outline-secondary btn-sm" data-perm="operator" onclick="importEduQuestionsXlsx()"><i class="bi bi-file-earmark-arrow-up me-1"></i>Excel読込</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="exportEduQuestionsXlsx()"><i class="bi bi-file-earmark-excel me-1"></i>Excel出力</button>
+            <button class="btn btn-outline-primary btn-sm" onclick="previewEduQuestionsWithAnswers()"><i class="bi bi-card-list me-1"></i>回答付き一覧</button>
             <button class="btn btn-outline-primary btn-sm" data-perm="operator" onclick="newEduCategory()"><i class="bi bi-folder-plus me-1"></i>新規カテゴリ</button>
             <button class="btn btn-primary btn-sm" data-perm="operator" onclick="newEduQuestion()"><i class="bi bi-plus-lg me-1"></i>新規設問</button>
           </div>
@@ -467,7 +474,7 @@
         <ul class="nav nav-pills mb-2 flex-wrap" id="eduCatTabs"></ul>
         <div class="mb-3" id="eduCatToolbar"></div>
         <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead><tr><th>#</th><th>設問</th><th>種別</th><th>難易度</th><th>操作</th></tr></thead>
+          <thead><tr><th>#</th><th>カテゴリ</th><th>設問</th><th>種別</th><th>難易度</th><th>操作</th></tr></thead>
           <tbody id="eduQuestionsBody"></tbody>
         </table></div>
       </section>
@@ -599,7 +606,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=8db81869"></script>
+<script src="app.js?v=950ea610"></script>
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>

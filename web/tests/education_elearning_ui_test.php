@@ -31,6 +31,16 @@ education_ui_check(str_contains($app, '回答を確認'), '試行中の回答を
 education_ui_check(str_contains($app, '受講履歴や採点結果は保存されません'), '試行が履歴を保存しないことを明示する');
 education_ui_check(str_contains($app, "eduMaterialPreviewTitle').textContent")
     && str_contains($app, "eduMaterialPreviewBody').textContent"), '教材本文をtextContentで安全に表示する');
+education_ui_check(str_contains($app, 'importEduMaterialPptx') && str_contains($index, 'PowerPoint読込'),
+    'PowerPoint教材をインポートできる');
+education_ui_check(str_contains($app, 'setEduCat(0)') && str_contains($app, '全カテゴリ'),
+    '全カテゴリの設問を一覧できる');
+education_ui_check(str_contains($app, 'previewEduQuestionsWithAnswers') && str_contains($index, '回答付き一覧'),
+    '確認テストを回答付きで一覧プレビューできる');
+education_ui_check(str_contains($app, 'exportEduQuestionsXlsx') && str_contains($index, 'Excel出力'),
+    '全設問をExcel出力できる');
+education_ui_check(str_contains($app, 'importEduQuestionsXlsx') && str_contains($index, 'Excel読込'),
+    'テンプレートExcelから設問を追加できる');
 
 // 訓練→教育の自動連携(EduAutoEnroll)を画面から有効化できること。
 // triggered_by を送れないと、tet2-edu-enroll.timer は永久に対象0件のままになる。
