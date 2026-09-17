@@ -1,0 +1,27 @@
+From: Reporter <reporter@corp.example>
+To: report@gwin.gr.cojp.online
+Subject: FW: Your account is locked
+Date: Tue, 02 Sep 2026 09:30:00 +0900
+Message-ID: <outer2@corp.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=fwd
+
+--fwd
+Content-Type: text/plain; charset=UTF-8
+
+このメールが不審です。
+--fwd
+Content-Type: message/rfc822
+
+From: "Bank Notice" <notice@bank-secure.test>
+To: victim@corp.example
+Subject: Your account is locked
+Date: Tue, 02 Sep 2026 09:00:00 +0900
+Message-ID: <inner2@bank-secure.test>
+Reply-To: support@other-domain.test
+Authentication-Results: mx.corp.example; spf=softfail smtp.mailfrom=bank-secure.test
+Content-Type: text/html; charset=UTF-8
+
+<p>至急、以下からログインして本人確認を行ってください。</p><a href="http://192.0.2.5/login">https://www.bank-secure.test/login</a>
+
+--fwd--

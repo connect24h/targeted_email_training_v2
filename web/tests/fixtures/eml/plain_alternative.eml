@@ -1,0 +1,20 @@
+From: "Service Desk" <desk@example.test>
+To: user@corp.example
+Subject: =?ISO-2022-JP?B?GyRCIVo9RU1XIVslIiUrJSYlcyVIM05HJyROJCo0aiQkGyhC?=
+Date: Mon, 01 Sep 2026 10:00:00 +0900
+Message-ID: <alt1@example.test>
+Authentication-Results: mx.corp.example; spf=pass smtp.mailfrom=example.test; dkim=pass header.d=example.test; dmarc=pass
+Received: from mx.corp.example (mx.corp.example [203.0.113.10]) by mail.corp.example; Mon, 01 Sep 2026 10:00:01 +0900
+Received: from sender.example.test (sender.example.test [198.51.100.7]) by mx.corp.example; Mon, 01 Sep 2026 10:00:00 +0900
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary=alt
+
+--alt
+Content-Type: text/plain; charset=UTF-8
+
+Please confirm at https://nam01.safelinks.protection.outlook.com/?url=https%3A%2F%2Flogin-example.test%2Fverify%3Fu%3D1&data=abc
+--alt
+Content-Type: text/html; charset=UTF-8
+
+<html><body><p>Please <a href="https://nam01.safelinks.protection.outlook.com/?url=https%3A%2F%2Flogin-example.test%2Fverify%3Fu%3D1&data=abc">https://portal.example.test/login</a> now.</p></body></html>
+--alt--

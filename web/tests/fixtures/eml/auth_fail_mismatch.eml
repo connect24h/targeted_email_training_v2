@@ -1,0 +1,12 @@
+From: "ceo@corp.example" <attacker@free-mail.test>
+Return-Path: <bounce@bulk-sender.test>
+Reply-To: <reply@another.test>
+To: staff@corp.example
+Subject: Urgent wire transfer
+Date: Thu, 04 Sep 2026 08:00:00 +0900
+Message-ID: <auth4@free-mail.test>
+Authentication-Results: mx.corp.example; spf=fail smtp.mailfrom=bulk-sender.test; dkim=none; dmarc=fail
+Received: from unknown (HELO evil) ([198.51.100.99]) by mx.corp.example; Thu, 04 Sep 2026 08:00:01 +0900
+Content-Type: text/plain; charset=UTF-8
+
+I need you to process a payment immediately. Reply with the invoice details.

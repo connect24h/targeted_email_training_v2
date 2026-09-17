@@ -17,6 +17,7 @@ final class MigrationRunner
         '20260816-human-risk-score',
         '20260819-attachment-filename-prefix',
         '20260906-report-mail-ingest',
+        '20260917-suspicious-mail',
     ];
 
     /**
@@ -171,6 +172,11 @@ final class MigrationRunner
         }
         if ($version === '20260906-report-mail-ingest') {
             $pdo->exec($this->readSchema('schema-report-mail.sql'));
+            return;
+        }
+        if ($version === '20260917-suspicious-mail') {
+            // 不審メールの受付・解析・評判キャッシュ。既存テーブルには一切触れない。
+            $pdo->exec($this->readSchema('schema-suspicious-mail.sql'));
             return;
         }
         if ($version === '20260819-attachment-filename-prefix') {

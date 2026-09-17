@@ -1,0 +1,9 @@
+From: "Colleague" <colleague@corp.example>
+To: user@corp.example
+Subject: Meeting notes
+Date: Sat, 06 Sep 2026 12:00:00 +0900
+Message-ID: <benign6@corp.example>
+Authentication-Results: mx.corp.example; spf=pass; dkim=pass; dmarc=pass
+Content-Type: text/plain; charset=UTF-8
+
+Notes from today's meeting are on the wiki: https://wiki.corp.example/notes/2026-09-06

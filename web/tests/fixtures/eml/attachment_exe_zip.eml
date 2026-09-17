@@ -1,0 +1,25 @@
+From: "Accounting" <ap@vendor.test>
+To: user@corp.example
+Subject: Invoice attached
+Date: Wed, 03 Sep 2026 11:00:00 +0900
+Message-ID: <att3@vendor.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=att
+
+--att
+Content-Type: text/plain; charset=UTF-8
+
+Please see the attached invoice and pay by today.
+--att
+Content-Type: application/octet-stream; name="invoice.pdf.exe"
+Content-Disposition: attachment; filename="invoice.pdf.exe"
+Content-Transfer-Encoding: base64
+
+TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+--att
+Content-Type: application/zip; name="docs.zip"
+Content-Disposition: attachment; filename="docs.zip"
+Content-Transfer-Encoding: base64
+
+UEsDBBQAAAAAAJq+MV2GphA2BQAAAAUAAAAKAAAAcmVhZG1lLnR4dGhlbGxvUEsDBBQAAAAAAJq+MV3Wy7K4CAAAAAgAAAAGAAAAcnVuLmpzYWxlcnQoMSlQSwECFAMUAAAAAACavjFdhqYQNgUAAAAFAAAACgAAAAAAAAAAAAAAgAEAAAAAcmVhZG1lLnR4dFBLAQIUAxQAAAAAAJq+MV3Wy7K4CAAAAAgAAAAGAAAAAAAAAAAAAACAAS0AAABydW4uanNQSwUGAAAAAAIAAgBsAAAAWQAAAAAA
+--att--

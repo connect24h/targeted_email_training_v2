@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/ReportMailParser.php';
+require_once __DIR__ . '/SuspiciousMailStore.php';
 
 /** Maildir は読み取り専用。確定には対象者の From 一致が必要。 */
 final class ReportMailIngest
@@ -99,7 +100,7 @@ final class ReportMailIngest
             'date_header'=>$headers['date'] ?? null, 'from_email'=>$headers['from_email'] ?? null,
             'subject_head'=>mb_substr($headers['subject'] ?? '', 0, 120, 'UTF-8'),
             'parse_status'=>$status, 'parse_error'=>$parsed['error'] ?? null,
-            'ingest_mode'=>$mode, 'created_at'=>$now, 'parsed'=>$parsed];
+            'ingest_mode'=>$mode, 'created_at'=>$now, 'parsed'=>$parsed, 'raw'=>$oversize ? null : $raw];
     }
 
     /** サイズ超過メールの本文は保持せず、外側ヘッダだけ保存用に読む。 */
@@ -166,7 +167,8 @@ final class ReportMailIngest
     private static function persist(array $mail): array
     {
         $parsed = $mail['parsed'];
-        unset($mail['parsed']);
+        $raw = $mail['raw'];
+        unset($mail['parsed'], $mail['raw']);
         $cols = implode(', ', array_keys($mail));
         $marks = implode(',', array_fill(0, count($mail), '?'));
         Db::run("INSERT INTO report_mails ($cols) VALUES ($marks)", array_values($mail));
@@ -177,9 +179,11 @@ final class ReportMailIngest
         if ($ids === []) {
             $candidates = self::senderCandidates($mail);
             if (count($candidates) === 1) { self::saveMatch($mail, $candidates[0], ['method'=>'sender', 'reason'=>'sender_unique', 'confirmed'=>false]); $counts['report_pending']++; }
-            // parsed + matchesなし が unmatched を表す。
+            // parsed + matchesなし が unmatched を表す。追跡IDが無い＝訓練メールではないので不審メールとして解析に回す。
+            self::registerSuspicious($mail, $raw);
             return $counts;
         }
+        $training = false;
         foreach ($ids as $id) {
             $candidate = Db::one('SELECT ct.tracking_id, ct.campaign_id, ct.sent_at, c.tenant_id, c.deleted_at,
                                  t.email, t.tenant_id AS target_tenant FROM campaign_targets ct
@@ -191,8 +195,22 @@ final class ReportMailIngest
             $r = self::saveMatch($mail, $candidate ?? ['tracking_id'=>$id], $meta);
             $counts['report'] += $r['report'];
             $counts['report_pending'] += $r['report_pending'];
+            $training = $training || in_array($reason, ['from_match', 'from_mismatch'], true);
         }
+        // 実在する訓練メールの報告（From一致/不一致を問わず）は報告メールタブで扱う。それ以外は不審メールへ。
+        if (!$training) { self::registerSuspicious($mail, $raw); }
         return $counts;
+    }
+
+    /** 不審メールとして解析に回す。ここでの失敗は報告メール取込の成否に影響させない。 */
+    private static function registerSuspicious(array $mail, ?string $raw): void
+    {
+        if ($raw === null) { return; }
+        try {
+            SuspiciousMailStore::fromReportMail($mail, $raw);
+        } catch (Throwable $error) {
+            error_log('ReportMailIngest: suspicious registration failed for report_mail ' . $mail['id'] . ' (' . get_class($error) . ': ' . $error->getMessage() . ')');
+        }
     }
 
     private static function reason(?array $c, ?string $from): string

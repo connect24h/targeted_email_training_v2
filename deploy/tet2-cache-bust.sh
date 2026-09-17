@@ -30,6 +30,7 @@ ASSETS=(
   assets/campaign-automations.js
   assets/positions.js
   assets/risk-dashboard.js
+  assets/suspicious-mails.js
 )
 
 asset_hash() {

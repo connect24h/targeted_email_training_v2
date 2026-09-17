@@ -64,6 +64,7 @@
         <li><a class="nav-link" data-view="targetStats"><i class="bi bi-pie-chart"></i>対象者集計</a></li>
         <li><a class="nav-link" data-view="masters"><i class="bi bi-window"></i>マスタ管理</a></li>
         <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>ログ管理</a></li>
+        <li data-perm="operator"><a class="nav-link" data-view="suspiciousMails"><i class="bi bi-envelope-exclamation"></i>不審メール</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">セキュリティ教育</li>
         <li><a class="nav-link" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
         <li><a class="nav-link" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
@@ -354,6 +355,49 @@
       </section>
 
       <!-- ログ管理 (P8) -->
+      <section data-panel="suspiciousMails" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0"><i class="bi bi-envelope-exclamation me-1"></i>不審メール</h5>
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <input type="email" class="form-control form-control-sm" id="smReporterEmail" placeholder="報告者メール（任意）" style="width:220px" data-perm="operator">
+            <button class="btn btn-primary btn-sm" id="smUploadBtn" data-perm="operator"><i class="bi bi-upload"></i> .eml をアップロード</button>
+            <input type="file" id="smFileInput" accept=".eml,message/rfc822" class="d-none">
+          </div>
+        </div>
+        <div class="alert alert-secondary small py-2">
+          報告用アドレスに転送された訓練メール以外のメールと、ここでアップロードした .eml を解析します。
+          訓練メールの照合結果（確定・却下）は「ログ管理 → 報告メール」で扱います。リンクは表示のみでクリックできません。
+        </div>
+        <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
+          <span id="smStatusCounts"></span>
+          <select class="form-select form-select-sm" id="smStatusFilter" style="width:auto" aria-label="確認状況">
+            <option value="">全状況</option><option value="open">未確認</option><option value="in_progress">確認中</option><option value="resolved">対応済</option>
+          </select>
+          <select class="form-select form-select-sm" id="smCategoryFilter" style="width:auto" aria-label="分類">
+            <option value="">全分類</option><option value="undetermined">未判定</option><option value="threat">脅威</option><option value="spam">迷惑メール</option><option value="safe">安全</option><option value="training">訓練メール</option>
+          </select>
+          <select class="form-select form-select-sm" id="smPriorityFilter" style="width:auto" aria-label="優先度">
+            <option value="">全優先度</option><option value="high">高</option><option value="normal">中</option><option value="low">低</option>
+          </select>
+          <select class="form-select form-select-sm" id="smSourceFilter" style="width:auto" aria-label="受付元">
+            <option value="">全受付元</option><option value="maildir">報告アドレス</option><option value="upload">アップロード</option>
+          </select>
+          <input type="text" class="form-control form-control-sm" id="smKeyword" placeholder="件名・送信者・報告者で絞込" style="width:auto">
+          <button class="btn btn-sm btn-outline-primary" id="smApplyBtn"><i class="bi bi-arrow-clockwise"></i> 更新</button>
+        </div>
+        <div class="table-responsive"><table class="table table-sm table-hover align-middle">
+          <thead><tr><th>受付日時</th><th>受付元</th><th>送信者</th><th>件名</th><th>報告者</th><th>推奨分類</th><th>分類</th><th>確認状況</th><th>優先度</th><th class="text-end">スコア</th></tr></thead>
+          <tbody id="smBody"></tbody>
+        </table></div>
+        <div class="d-flex justify-content-between align-items-center">
+          <span class="text-muted small" id="smInfo"></span>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary" id="smPrevBtn"><i class="bi bi-chevron-left"></i> 前</button>
+            <button class="btn btn-outline-secondary" id="smNextBtn">次 <i class="bi bi-chevron-right"></i></button>
+          </div>
+        </div>
+      </section>
+
       <section data-panel="logs" class="view-panel d-none">
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
           <h5 class="mb-0"><i class="bi bi-journal-text me-1"></i>ログ管理</h5>
@@ -609,6 +653,7 @@
 <script src="app.js?v=950ea610"></script>
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
+<script src="assets/suspicious-mails.js?v=54af2ebb"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
 </body>
 </html>
