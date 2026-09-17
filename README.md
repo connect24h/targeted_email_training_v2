@@ -12,7 +12,7 @@ web/        Web アプリ本体（本番: /var/www/html/tet2）
   lib/        リポジトリ層・PipelineRunner 等
   db/         現行スキーマ、migration runner、seed スクリプト
   assets/     SPA アセット（app.css, vendor/ にBootstrap/Chart.jsローカル配置）
-  tests/      PHP テスト（33ファイル、合成DBを使い tests/run.sh で一括実行）
+  tests/      PHP テスト（合成DBを使い tests/run.sh で一括実行）
   index.html app.js take.php  SPA エントリ + 受講ページ
 bin/        メール送信処理（本番: /opt/training/bin）
   tet2-worker.py       send_schedule ポーリング → 送信起動（systemd常駐）
@@ -68,6 +68,17 @@ runner、DB migration、systemd unitは本番へ配備済みである。2026-08-
 pilotでdraft生成まで確認し、automation timerはenabled・activeである。24時間の
 timer実稼働監視中はpilot ruleをpausedのままとし、draft生成と送信を停止している。
 
+## 教材バンク
+
+教材バンクでは、eラーニング用スライド教材と確認テスト設問を管理できる。
+PowerPoint（`.pptx`）からスライドのタイトルと本文を取り込み、保存前に編集できる。
+確認テストは全カテゴリ一覧、1問ずつの回答確認、正答・解説を含む全設問一覧を利用できる。
+
+設問はExcel（`.xlsx`）のテンプレートをダウンロードして一括追加できる。
+自組織と共有の全設問はExcelへ出力できる。
+ファイル上限、権限、Excel列仕様、未対応要素、検証履歴は
+[`docs/education-material-bank.md`](docs/education-material-bank.md)を参照する。
+
 ## セットアップ（概要）
 
 本リポジトリは本番からの集約であり、そのままの自動デプロイスクリプトは持たない。
@@ -103,6 +114,7 @@ deploy/rollbackの詳しい安全手順は[`deploy/README.md`](deploy/README.md)
 - CSP 対応のため外部CDN非依存（`assets/vendor` にライブラリをローカル配置）
 - CSRF トークン（`X-CSRF-Token`）、`esc()` 徹底、fetch 30秒 timeout
 - SecurityAwarenessのユーザ管理統合: [`docs/security-awareness-user-management.md`](docs/security-awareness-user-management.md)
+- 教材バンクのOffice入出力と確認テスト管理: [`docs/education-material-bank.md`](docs/education-material-bank.md)
 
 ## 関連
 
