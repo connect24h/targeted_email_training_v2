@@ -18,6 +18,9 @@ final class MigrationRunner
         '20260819-attachment-filename-prefix',
         '20260906-report-mail-ingest',
         '20260917-suspicious-mail',
+        '20260923-template-snapshots',
+        '20260923-credential-captures',
+        '20260923-campaign-close',
     ];
 
     /**
@@ -179,6 +182,19 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-suspicious-mail.sql'));
             return;
         }
+        if ($version === '20260923-template-snapshots') {
+            $pdo->exec($this->readSchema('schema-template-snapshots.sql'));
+            return;
+        }
+        if ($version === '20260923-credential-captures') {
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-credential-captures.sql'));
+            return;
+        }
+        if ($version === '20260923-campaign-close') {
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -333,6 +349,9 @@ final class MigrationRunner
                 'beacon_base' => 'TEXT',
                 'content_delivery' => "TEXT NOT NULL DEFAULT 'distribute'",
                 'deleted_at' => 'TEXT DEFAULT NULL',
+                'closed_at' => 'TEXT DEFAULT NULL',
+                'closed_by' => 'INTEGER DEFAULT NULL',
+                'credential_capture_approval_ref' => 'TEXT DEFAULT NULL',
                 'test_redirect_emails' => 'TEXT DEFAULT NULL',
                 'attachment_filename' => 'TEXT',
             ],

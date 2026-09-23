@@ -135,6 +135,9 @@ CREATE TABLE IF NOT EXISTS campaigns (
   beacon_base         TEXT,
   content_delivery    TEXT NOT NULL DEFAULT 'distribute',
   deleted_at          TEXT DEFAULT NULL,
+  closed_at           TEXT DEFAULT NULL,          -- 確定後のクローズ。本文消去と同一transaction
+  closed_by           INTEGER DEFAULT NULL,
+  credential_capture_approval_ref TEXT DEFAULT NULL, -- 顧客承認の参照番号。NULLなら本文収集を拒否
   test_redirect_emails TEXT DEFAULT NULL,
   created_by          INTEGER,
   created_at          TEXT NOT NULL DEFAULT (datetime('now','localtime')),

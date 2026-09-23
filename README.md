@@ -37,6 +37,9 @@ deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 
 ## メール送信フロー
 
+キャンペーンの下書き編集は「基本情報→対象者→シナリオ→日時・送信量→送信環境→最終確認」の6手順で表示する。「すべて表示」で一覧編集に切り替えられ、どちらも同じ下書きを保存する。保存だけでは配信されない。
+下書きの「配信前確認」では対象人数・総通数・TEST転送先ごとの通数と開始できない理由を表示する。
+確認後に設定・対象者・テンプレートが変わった場合、開始操作は409で拒否し、再確認を求める。
 管理画面の開始操作は送信scheduleを公開する前に、次を同期実行する:
 
 1. `PipelineRunner::generateCsv(campaignId)`（PHP CLI）で DB → 送信用CSV生成
@@ -45,11 +48,14 @@ deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 
 `tet2-worker.py`（systemd常駐）は`scheduled/running`キャンペーンのdue batchだけを取得し、
 生成済みデータを再検証して`send_email.py`でSMTP送信する。必須添付の欠落・読取不能・
-追加失敗は本文だけで送信せず、campaignを一時停止する。
+追加失敗は本文だけで送信せず、campaignを一時停止する。worker起動の各通はSMTP送信直前に
+対象者の在籍状態・所属・元メールアドレスをDBで再確認し、不一致なら残りの送信を停止する。
+途中停止時もCSVで送信済みと確認できる行はDBへ同期する。SMTP受付後にCSVへ記録できなかった
+成否不明分は自動再送せず、手動調査が必要。
 
-TESTキャンペーンは本番対象全件をテスト宛先へ転送しない。各contentにつき各テスト宛先へ
-最大1通の検証matrixを作り、元のtracking IDを重複利用しない。全content配信のsplit/slowは
-content行数ではなく重複のない従業員項番で分割する。
+TESTキャンペーンは対象者・コンテンツの全送信行を、指定したテスト宛先へ均等に転送する。
+テスト宛先が空の場合は生成・配信を拒否し、本番宛先へは送らない。全content配信のsplit/slowは
+content行数ではなく重複のない従業員項番で分割する。少量プレビューは別機能として検討中。
 
 緊急停止は data_dir に `stop_sending.flag` を置くとバッチが`cancelled`、campaignが`paused`になる。
 

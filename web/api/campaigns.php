@@ -413,7 +413,7 @@ function campaigns_handle_list(array $actor): never
 {
     $tenantId = effective_tenant_id($actor, campaigns_query_int('tenant_id'));
     $campaigns = Db::all(
-        'SELECT c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test, c.created_at,
+        'SELECT c.id, c.tenant_id, c.name, c.status, c.closed_at, c.start_at, c.end_at, c.is_test, c.created_at,
                 c.content_delivery, COUNT(DISTINCT ct.target_id) AS target_count,
                 (SELECT COUNT(*) FROM campaign_contents cc WHERE cc.campaign_id=c.id) AS content_count
          FROM campaigns c
@@ -923,7 +923,10 @@ function campaigns_handle_set_test(array $actor): never
     $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
     $id = campaigns_int($body, 'id');
     // 削除済み/他テナントはここで404
-    assert_campaign_owned($id, $tenantId);
+    $campaign = assert_campaign_owned($id, $tenantId);
+    if ($campaign['closed_at'] !== null) {
+        json_error('クローズ済みのキャンペーンは分類を変更できません', 409);
+    }
     // 必須(欠落は400)。0/1 に正規化(create 経路と同じ campaigns_optional_bool_int を流用。
     // campaigns_int は <1 を拒否するため is_test=0 が通らず使えない)。
     $isTest = campaigns_optional_bool_int($body, 'is_test');
@@ -931,7 +934,9 @@ function campaigns_handle_set_test(array $actor): never
         json_error('is_test が不正です', 400);
     }
 
-    Db::run('UPDATE campaigns SET is_test = ? WHERE id = ? AND tenant_id = ?', [$isTest, $id, $tenantId]);
+    if (Db::run('UPDATE campaigns SET is_test = ? WHERE id = ? AND tenant_id = ? AND closed_at IS NULL', [$isTest, $id, $tenantId]) !== 1) {
+        json_error('クローズ済みのキャンペーンは分類を変更できません', 409);
+    }
     audit('campaign.set_test', 'campaign_id=' . $id . ',is_test=' . $isTest);
     $updated = campaigns_row($id, $tenantId);
     json_out(['success' => true, 'campaign' => $updated, 'target_count' => (int) $updated['target_count']]);
@@ -957,6 +962,8 @@ function campaigns_handle_delete(array $actor): never
     }
 
     $pausedRules = Db::tx(function () use ($id, $tenantId): int {
+        // 論理削除でも秘密値だけは即時に物理削除する。失敗時は削除全体をrollbackする。
+        Db::run('DELETE FROM credential_captures WHERE campaign_id=? AND tenant_id=?', [$id, $tenantId]);
         Db::run("UPDATE campaigns SET deleted_at = datetime('now','localtime'), status='cancelled' WHERE id = ? AND tenant_id = ?", [$id, $tenantId]);
         return Db::run(
             "UPDATE campaign_automations SET status='paused', updated_at=datetime('now','localtime')
@@ -977,9 +984,13 @@ function campaigns_handle_cancel(array $actor): never
     $body = json_body();
     $tenantId = effective_tenant_id($actor, campaigns_optional_int($body, 'tenant_id'));
     $id = campaigns_int($body, 'id');
-    assert_campaign_owned($id, $tenantId);
-
-    Db::run('UPDATE campaigns SET status = ? WHERE id = ? AND tenant_id = ?', ['cancelled', $id, $tenantId]);
+    $campaign = assert_campaign_owned($id, $tenantId);
+    if ($campaign['closed_at'] !== null) {
+        json_error('クローズ済みのキャンペーンは変更できません', 409);
+    }
+    if (Db::run('UPDATE campaigns SET status = ? WHERE id = ? AND tenant_id = ? AND closed_at IS NULL', ['cancelled', $id, $tenantId]) !== 1) {
+        json_error('クローズ済みのキャンペーンは変更できません', 409);
+    }
     audit('campaign.cancel', 'campaign_id=' . $id);
     json_out(['success' => true, 'campaign' => campaigns_row($id, $tenantId)]);
 }

@@ -1,10 +1,16 @@
 'use strict';
 /* TET v2 フロントエンド SPA。バックエンド API (api/*.php) と連携する。 */
 
-const State = { user: null, csrf: null, tenants: [], activeTenantId: null, view: null };
+const State = { user: null, csrf: null, tenants: [], activeTenantId: null, view: null, campaignWorkspaceId: null, workspaceReview: null };
 /* 一覧取得結果を id→行 でキャッシュ。編集モーダルは属性埋め込みでなくここから引く（XSS/クオート破損回避） */
 const Cache = { targets: {}, groups: {}, users: {}, tenants: {}, reports: {}, failuresCampaign: null };
 function cacheRows(kind, rows) { Cache[kind] = {}; for (const r of rows) Cache[kind][r.id] = r; }
+function clearTenantCache() {
+  credentialRequest++;
+  closeCredentialDialog();
+  for (const key of Object.keys(Cache)) delete Cache[key];
+  Object.assign(Cache, { targets: {}, groups: {}, users: {}, tenants: {}, reports: {}, failuresCampaign: null });
+}
 
 /* ========== API ラッパ ========== */
 async function api(path, { method = 'GET', body = null, query = {}, timeout = 30000 } = {}) {
@@ -108,6 +114,10 @@ async function logout(silent = false) {
   try { if (!silent) await api('api/auth.php', { method: 'POST', query: { action: 'logout' } }); } catch {}
   riskDashboard?.invalidate();
   State.user = null; State.csrf = null; State.activeTenantId = null;
+  credentialRequest++;
+  closeCredentialDialog();
+  contextHelp?.close();
+  $('#helpToggle').setAttribute('aria-expanded', 'false');
   $('#appView').classList.add('d-none');
   $('#loginView').classList.remove('d-none');
   $('#loginPassword').value = '';
@@ -131,7 +141,8 @@ async function afterLogin() {
     el.classList.toggle('d-none', !roleAtLeast(State.user.role, el.dataset.perm));
   });
   await setupTenantSwitcher();
-  navigate('dashboard');
+  State.campaignWorkspaceId = campaignIdFromHash(window.location.hash);
+  navigate(routeFromHash(window.location.hash));
 }
 function roleLabel(r) {
   return { superadmin:'システム管理者', tenant_admin:'組織管理者', operator:'オペレータ', viewer:'閲覧者' }[r] || r;
@@ -163,14 +174,28 @@ async function setupTenantSwitcher() {
     sw.classList.remove('d-none');
   }
   sw.onchange = () => {
+    if ($('#appModal').classList.contains('show') && !window.confirm('編集中の内容が失われる可能性があります。顧客を切り替えますか？')) {
+      sw.value = State.activeTenantId;
+      return;
+    }
+    modalInstance?.hide();
     riskDashboard?.invalidate();
     State.activeTenantId = Number(sw.value);
+    clearTenantCache();
+    reportSelectedId = null;
+    State.workspaceReview = null;
+    if (State.view === 'campaignWorkspace') {
+      State.campaignWorkspaceId = null;
+      navigate('dashboard');
+      return;
+    }
     renderCurrentView();
   };
 }
 
 /* ========== ルーティング ========== */
 let riskDashboard = null;
+let contextHelp = null;
 function renderRiskDashboard() {
   if (!riskDashboard) {
     riskDashboard = createRiskDashboard({
@@ -188,6 +213,7 @@ function renderRiskDashboard() {
 const VIEWS = {
   dashboard: renderDashboard,
   campaigns: renderCampaigns,
+  campaignWorkspace: renderCampaignWorkspace,
   reports: renderReports,
   riskDashboard: renderRiskDashboard,
   groups: renderGroups,
@@ -200,14 +226,37 @@ const VIEWS = {
   users: renderUsers,
   tenants: renderTenants,
 };
+function campaignIdFromHash(hash) {
+  const match = /^#campaignWorkspace\/([1-9]\d*)$/.exec(String(hash || ''));
+  const id = match ? Number(match[1]) : null;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+function routeFromHash(hash) {
+  if (campaignIdFromHash(hash)) return 'campaignWorkspace';
+  const route = String(hash || '').replace(/^#/, '');
+  return Object.prototype.hasOwnProperty.call(VIEWS, route) ? route : 'dashboard';
+}
+function canNavigate(view) {
+  if (!Object.prototype.hasOwnProperty.call(VIEWS, view)) return false;
+  if (view === 'campaignWorkspace') return roleAtLeast(State.user?.role, 'operator') && Number.isSafeInteger(State.campaignWorkspaceId) && State.campaignWorkspaceId > 0;
+  const link = $$('.app-sidebar .nav-link').find((item) => item.dataset.view === view);
+  if (!link) return false;
+  const guard = link.closest('[data-role], [data-perm]');
+  return !guard || roleAtLeast(State.user?.role, guard.dataset.role || guard.dataset.perm);
+}
 function navigate(view) {
+  if (!canNavigate(view)) view = 'dashboard';
+  if (view !== 'logs') { credentialRequest++; closeCredentialDialog(); }
   // ビュー切替時に一覧自動更新タイマーを止める(campaigns に戻れば renderCampaigns が再設定)。
   if (campaignsRefreshTimer) { clearTimeout(campaignsRefreshTimer); campaignsRefreshTimer = null; }
   if (State.view === 'riskDashboard' && view !== 'riskDashboard') riskDashboard?.invalidate();
   State.view = view;
+  const hash = view === 'campaignWorkspace' ? `#campaignWorkspace/${State.campaignWorkspaceId}` : `#${view}`;
+  if (window.location.hash !== hash) window.location.hash = hash;
   $$('.view-panel').forEach((p) => p.classList.toggle('d-none', p.dataset.panel !== view));
   $$('.app-sidebar .nav-link').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
   $('#sidebar').classList.remove('open');
+  if (contextHelp && !$('#contextHelp').classList.contains('d-none')) contextHelp.render(view);
   renderCurrentView();
 }
 function renderCurrentView() { const fn = VIEWS[State.view]; if (fn) fn().catch((e) => toast(e.message, 'err')); }
@@ -217,8 +266,18 @@ let dashChart = null;
 // 本番/テスト フィルタ: prod=本番のみ(既定・日常の確認は本番数値) / test=テストのみ / all=全部。
 let dashTestFilter = 'prod';
 function setDashTestFilter(v) { dashTestFilter = v; renderDashboard(); }
+function dashboardWorkItems(campaigns) {
+  return {
+    drafts: campaigns.filter((c) => c.status === 'draft'),
+    paused: campaigns.filter((c) => c.status === 'paused'),
+    upcoming: campaigns.filter((c) => c.status === 'scheduled')
+      .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || ''))),
+  };
+}
 async function renderDashboard() {
+  const tenantId = State.activeTenantId;
   const { campaigns: allCampaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+  if (State.view !== 'dashboard' || State.activeTenantId !== tenantId) return;
   const filterBar = document.getElementById('dashFilterBar');
   if (filterBar) {
     const btn = (v, label) => `<button class="btn btn-sm ${dashTestFilter === v ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setDashTestFilter('${v}')">${label}</button>`;
@@ -229,6 +288,20 @@ async function renderDashboard() {
     if (dashTestFilter === 'test') return Number(c.is_test);
     return true; // all
   });
+  const work = dashboardWorkItems(campaigns);
+  const workItem = (c, action) => `<li class="ops-work-item"><span class="ops-work-name">${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</span><span class="small text-muted">${action === 'scheduled' ? fmtDate(c.start_at) : action === 'paused' ? '送信停止中' : '内容確認待ち'}</span></li>`;
+  $('#dashWorkItems').innerHTML = `
+    <div class="ops-work-grid">
+      <section class="ops-work-card" aria-label="配信前の確認待ち"><h6>配信前の確認待ち <span class="ops-count">${work.drafts.length}</span></h6>
+        <ul>${work.drafts.slice(0, 5).map((c) => workItem(c, 'draft')).join('') || '<li class="text-muted small">該当なし</li>'}</ul>
+        <button type="button" class="btn btn-sm btn-outline-primary" onclick="navigate('campaigns')">訓練一覧へ</button></section>
+      <section class="ops-work-card" aria-label="送信停止中"><h6>送信停止中 <span class="ops-count">${work.paused.length}</span></h6>
+        <ul>${work.paused.slice(0, 5).map((c) => workItem(c, 'paused')).join('') || '<li class="text-muted small">該当なし</li>'}</ul>
+        <button type="button" class="btn btn-sm btn-outline-primary" onclick="navigate('campaigns')">状態を確認</button></section>
+      <section class="ops-work-card" aria-label="次の配信予定"><h6>次の配信予定 <span class="ops-count">${work.upcoming.length}</span></h6>
+        <ul>${work.upcoming.slice(0, 5).map((c) => workItem(c, 'scheduled')).join('') || '<li class="text-muted small">予定なし</li>'}</ul>
+        <button type="button" class="btn btn-sm btn-outline-primary" onclick="navigate('campaigns')">予定を確認</button></section>
+    </div>`;
   const total = campaigns.length;
   const running = campaigns.filter((c) => c.status === 'running' || c.status === 'scheduled').length;
   const done = campaigns.filter((c) => c.status === 'done').length;
@@ -268,7 +341,9 @@ let campaignTestFilter = 'all';
 function setCampaignTestFilter(v) { campaignTestFilter = v; renderCampaigns(); }
 async function renderCampaigns() {
   renderSendControl();  // 送信制御パネル(ステータス+アラート)を描画・ポーリング開始
+  const tenantId = State.activeTenantId;
   const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+  if (State.view !== 'campaigns' || State.activeTenantId !== tenantId) return;
   // #列は表示上の通し番号(作成順=古い順に固定で1,2,3…)。並び順を変えても番号は変わらない。
   // 古い順(id昇順)でordinalを確定 → id→番号 のマップを作る。
   const campaignsAsc = campaigns.slice().sort((a, b) => a.id - b.id);
@@ -299,7 +374,7 @@ async function renderCampaigns() {
     <tr>
       <td>${numById[c.id]}</td>
       <td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td>
-      <td><span class="badge st-${c.status}">${STATUS_LABEL[c.status] || c.status}</span></td>
+      <td><span class="badge st-${c.status}">${STATUS_LABEL[c.status] || c.status}</span>${c.closed_at ? ' <span class="badge bg-secondary">クローズ</span>' : ''}</td>
       <td>${c.target_count}</td>
       <td class="small text-muted">${fmtDate(c.start_at)}</td>
       <td><div class="d-flex flex-wrap gap-1">
@@ -312,7 +387,7 @@ async function renderCampaigns() {
         ${['scheduled','running','paused','done'].includes(c.status)
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="showCampaignData(${c.id})" title="データ確認"><i class="bi bi-table"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
-          ? `<button class="btn btn-sm btn-success" onclick="launchCampaign(${c.id})"><i class="bi bi-send"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-primary" onclick="launchCampaign(${c.id})" title="配信前確認へ"><i class="bi bi-clipboard-check" aria-hidden="true"></i> 配信前確認</button>` : ''}
         ${['running','scheduled','paused'].includes(c.status)
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="showCampaignProgress(${c.id})" title="送信進捗"><i class="bi bi-bar-chart-line"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && (c.status === 'running' || c.status === 'scheduled')
@@ -323,7 +398,7 @@ async function renderCampaigns() {
           ? `<button class="btn btn-sm btn-outline-success" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-primary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
-        ${roleAtLeast(State.user.role, 'operator')
+        ${roleAtLeast(State.user.role, 'operator') && !c.closed_at
           ? `<button class="btn btn-sm btn-outline-info" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-primary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
@@ -359,14 +434,16 @@ const ALERT_SEVERITY = {
 async function renderSendControl() {
   const el = $('#sendControlPanel');
   if (!el) return;
+  const tenantId = State.activeTenantId;
   let statusData, alertsData;
   try {
     statusData = await api('api/send_control.php', { query: { action: 'status' } });
     alertsData = await api('api/send_control.php', { query: { action: 'alerts' } });
   } catch (e) {
-    el.innerHTML = '';  // 取得失敗時はパネルを出さない（画面を壊さない）
+    if (State.view === 'campaigns' && State.activeTenantId === tenantId) el.innerHTML = '';
     return;
   }
+  if (State.view !== 'campaigns' || State.activeTenantId !== tenantId) return;
   const statuses = statusData.statuses || [];
   const alerts = alertsData.data || [];
   const activeCount = statusData.active_count || 0;
@@ -458,19 +535,66 @@ async function clearSendAlerts() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-async function launchCampaign(id) {
-  if (!confirm('このキャンペーンを開始します。よろしいですか？')) return;
+let campaignWorkspaceUi = null;
+let campaignWorkspaceRequest = 0;
+function launchCampaign(id) {
+  State.campaignWorkspaceId = Number(id);
+  State.workspaceReview = null;
+  navigate('campaignWorkspace');
+}
+async function renderCampaignWorkspace() {
+  const id = State.campaignWorkspaceId;
+  const tenantId = State.activeTenantId;
+  const requestId = ++campaignWorkspaceRequest;
+  if (!campaignWorkspaceUi) {
+    campaignWorkspaceUi = createCampaignWorkspace($('#campaignWorkspaceRoot'), {
+      back: () => navigate('campaigns'),
+      edit: () => editCampaign(State.campaignWorkspaceId),
+      refresh: () => renderCampaignWorkspace(),
+      launch: () => confirmCampaignWorkspaceLaunch(),
+    });
+  }
+  campaignWorkspaceUi.loading();
+  State.workspaceReview = null;
+  try {
+    const reviewData = await api('api/campaign_launch.php', { method: 'POST', query: { action: 'preflight' }, body: { id } });
+    if (requestId !== campaignWorkspaceRequest || State.view !== 'campaignWorkspace' || State.campaignWorkspaceId !== id || State.activeTenantId !== tenantId) return;
+    const review = reviewData.preflight;
+    State.workspaceReview = { id, tenantId, review };
+    campaignWorkspaceUi.render({ review });
+  } catch (error) {
+    if (requestId === campaignWorkspaceRequest && State.view === 'campaignWorkspace' && State.campaignWorkspaceId === id && State.activeTenantId === tenantId) {
+      campaignWorkspaceUi.error(error.message);
+    }
+  }
+}
+async function confirmCampaignWorkspaceLaunch() {
+  const current = State.workspaceReview;
+  if (!current || current.id !== State.campaignWorkspaceId || current.tenantId !== State.activeTenantId || !current.review.can_launch) {
+    toast('配信前確認をやり直してください', 'err');
+    return;
+  }
+  const summary = current.review.summary;
+  const distribution = summary.test_distribution.map((row) => `${row.email}: ${row.count}通`).join('\n');
+  const mode = summary.is_test ? 'TEST（全件転送）' : '本番';
+  const message = `${summary.campaign_name}\n${mode} / 対象 ${summary.target_count}名 / 総通数 ${summary.send_count}通\n${summary.start_at} ～ ${summary.end_at}${distribution ? `\n${distribution}` : ''}\n\n配信を予約しますか？`;
+  if (!confirm(message)) return;
+  campaignWorkspaceUi.setLaunching(true);
   // 大人数のキャンペーンは送信データ生成に時間がかかる(1,876人で約40秒)。
   // 生成中と分かる表示を出し、api の既定30秒では切れるので timeout を延ばす。
   const overlay = showProgress('送信データを生成しています…（対象人数が多いと1分ほどかかります）');
   try {
     const r = await api('api/campaign_launch.php', {
-      method: 'POST', query: { action: 'launch' }, body: { id }, timeout: 180000,
+      method: 'POST', query: { action: 'launch' }, body: { id: current.id, revision: current.review.revision }, timeout: 180000,
     });
-    toast(`開始しました（${r.batches} バッチ予約）`, 'ok'); renderCampaigns();
+    State.workspaceReview = null;
+    toast(`配信を予約しました（${r.batches} バッチ）`, 'ok');
+    navigate('campaigns');
   } catch (e) {
     toast(e.message, 'err');
+    await renderCampaignWorkspace();
   } finally {
+    campaignWorkspaceUi.setLaunching(false);
     overlay.close();
   }
 }
@@ -514,10 +638,10 @@ async function deleteCampaign(id) {
   try { await api('api/campaigns.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
     toast('削除しました（90日間はデータ保持）', 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
 }
-async function editCampaign(id) {
+async function editCampaign(id, initialStep = 0) {
   // 下書きキャンペーンの編集モーダルを開く（既存値をプリフィル）。
   try {
-    await openCampaignModal(id);
+    await openCampaignModal(id, initialStep);
   } catch (e) { toast(e.message || '編集フォームを開けませんでした', 'err'); }
 }
 async function toDraftCampaign(id) {
@@ -715,6 +839,7 @@ function logStatusBadge(v) {
 }
 const logsState = { type: 'delivery', offset: 0, limit: 100 };
 let reportMailRequest = 0;
+let credentialRequest = 0;
 
 // ログ管理テーブルの列見出しクリックソート(共通)。表示済みの tbody 行を並べ替える
 // DOM ベース方式で、各タブの cells 実装に依存しない。列のセル値から数値/日時/文字を
@@ -791,6 +916,7 @@ async function renderLogs() {
 }
 async function loadLogs() {
   const type = logsState.type;
+  if (type === 'credential_captures') return loadCredentialCaptures();
   if (type === 'raw_mail' || type === 'raw_web') return loadRawLog(type);
   if (type === 'training_results') return loadTrainingResults();
   if (type === 'training_log_detail') return loadTrainingLogDetail();
@@ -817,6 +943,74 @@ async function loadLogs() {
   $('#logsInfo').textContent = `${from}–${logsState.offset + rows.length} 件目（${logsState.limit} 件/ページ）`;
   $('#logsPrevBtn').disabled = logsState.offset === 0;
   $('#logsNextBtn').disabled = rows.length < logsState.limit;
+}
+
+function closeCredentialDialog() {
+  const dialog = $('#credentialRevealDialog');
+  if (dialog?.open) dialog.close();
+  const body = $('#credentialRevealText');
+  if (body) body.textContent = '';
+}
+
+async function loadCredentialCaptures() {
+  if (State.user?.role !== 'superadmin') return;
+  const tenantId = String(State.activeTenantId || '');
+  const campaignId = String($('#logsCampaignFilter')?.value || '');
+  const request = ++credentialRequest;
+  const headers = ['ID', '追跡 ID', '入力画面', '日時', '操作'];
+  $('#logsHead').innerHTML = `<tr>${headers.map((label) => `<th>${label}</th>`).join('')}</tr>`;
+  if (!tenantId || !campaignId) {
+    $('#logsBody').innerHTML = '<tr><td colspan="5" class="text-muted py-3">上部でキャンペーンを選択してください。</td></tr>';
+    $('#logsInfo').textContent = '';
+    $('#logsPrevBtn').disabled = true;
+    $('#logsNextBtn').disabled = true;
+    return;
+  }
+  $('#logsBody').innerHTML = '<tr><td colspan="5" class="text-muted py-3">読込中…</td></tr>';
+  let rows;
+  try {
+    const data = await api('api/credential_captures.php', {
+      query: { action: 'list', tenant_id: tenantId, campaign_id: campaignId, offset: logsState.offset },
+    });
+    rows = data.captures || [];
+  } catch (error) {
+    if (request === credentialRequest) $('#logsBody').innerHTML = `<tr><td colspan="5" class="text-danger py-3">${esc(error.message)}</td></tr>`;
+    return;
+  }
+  if (request !== credentialRequest || State.view !== 'logs' || logsState.type !== 'credential_captures'
+      || String(State.activeTenantId || '') !== tenantId || String($('#logsCampaignFilter')?.value || '') !== campaignId) return;
+  $('#logsBody').innerHTML = rows.length ? rows.map((row) => `<tr>
+    <td>${esc(row.id)}</td><td><code>${esc(row.tracking_id)}</code></td>
+    <td>${esc(row.auth_type)}</td><td>${esc(row.created_at)}</td>
+    <td><button type="button" class="btn btn-sm btn-outline-primary" data-capture-id="${esc(row.id)}">本文を表示</button></td>
+  </tr>`).join('') : '<tr><td colspan="5" class="text-muted py-3">このキャンペーンの入力本文はありません。</td></tr>';
+  $('#logsInfo').textContent = `${logsState.offset + (rows.length ? 1 : 0)}–${logsState.offset + rows.length} 件目`;
+  $('#logsPrevBtn').disabled = logsState.offset === 0;
+  $('#logsNextBtn').disabled = rows.length < logsState.limit;
+}
+
+async function revealCredentialCapture(button) {
+  if (State.user?.role !== 'superadmin') return;
+  const tenantId = String(State.activeTenantId || '');
+  const campaignId = String($('#logsCampaignFilter')?.value || '');
+  const request = credentialRequest;
+  if (!tenantId || !campaignId) return;
+  button.disabled = true;
+  try {
+    const data = await api('api/credential_captures.php', {
+      method: 'POST', query: { action: 'reveal' },
+      body: { id: Number(button.dataset.captureId), tenant_id: Number(tenantId), campaign_id: Number(campaignId) },
+    });
+    if (request !== credentialRequest || State.view !== 'logs' || logsState.type !== 'credential_captures'
+        || String(State.activeTenantId || '') !== tenantId || String($('#logsCampaignFilter')?.value || '') !== campaignId) return;
+    const dialog = $('#credentialRevealDialog');
+    $('#credentialRevealText').textContent = JSON.stringify(data.fields, null, 2);
+    dialog.showModal();
+  } catch (error) {
+    toast(error.message || '本文を表示できません', 'err');
+  } finally {
+    button.disabled = false;
+  }
 }
 function reportMailCells(r) {
   const labels = { pending: '保留', confirmed: '確定', rejected: '却下' };
@@ -1200,6 +1394,8 @@ function downloadReplyMaildirCsv() {
 }
 function switchLogTab(type) {
   reportMailRequest++;
+  credentialRequest++;
+  closeCredentialDialog();
   logsState.type = type;
   logsState.offset = 0;
   logsState.webPage = 1;
@@ -1211,12 +1407,13 @@ function switchLogTab(type) {
   const isMd = (type === 'reply_maildir');
   const isCf = (type === 'campaign_files');
   const isReport = (type === 'report_mail');
+  const isCapture = (type === 'credential_captures');
   // 追加フィルタ行を出すタブ(campaign_files は CSV ボタンを出すため含める)。
   const hasFilter = (isRaw || isTr || isTld || isWeb || isMd || isCf || isReport);
   // 期間(開始/終了)を使うタブ。
   const hasPeriod = (isTld || isWeb || isMd);
   // DB ページャ(offset)を使う既存タブ。
-  const isDbPaged = (type === 'delivery' || type === 'events' || type === 'schedule' || type === 'replies' || type === 'audit' || isReport);
+  const isDbPaged = (type === 'delivery' || type === 'events' || type === 'schedule' || type === 'replies' || type === 'audit' || isReport || isCapture);
 
   const show = (sel, on) => { const el = $(sel); if (el) el.style.display = on ? '' : 'none'; };
 
@@ -1242,7 +1439,7 @@ function switchLogTab(type) {
   // CSV 出力: 訓練結果/訓練結果ログ明細/WebアクセスLog/返信者Maildir/リンク・ビーコンファイル一覧。
   show('#logsCsvBtn', isTr || isTld || isWeb || isMd || isCf);
   // Excel(XLSX)出力: 生ログ以外の全タブ。
-  show('#logsXlsxBtn', !isRaw && !isReport);
+  show('#logsXlsxBtn', !isRaw && !isReport && !isCapture);
   // GeoIP取得: WebアクセスLog のみ(一覧はキャッシュのみ表示、未知IPはこのボタンで後追い解決)。
   show('#webGeoipBtn', isWeb);
   show('#tldGeoipBtn', isTld);
@@ -1381,7 +1578,7 @@ async function loadCampaignFile(file, btn) {
   }
 }
 
-async function openCampaignModal(campaignId = null) {
+async function openCampaignModal(campaignId = null, initialStep = 0) {
   const isEdit = campaignId !== null;
   const [tpls, tgts, grps, beacons, campaigns] = await Promise.all([
     api('api/templates.php', { query: { action: 'list' } }),
@@ -1427,7 +1624,10 @@ async function openCampaignModal(campaignId = null) {
   ).join('');
   const body = `
     <form id="campaignForm">
+      <section class="campaign-editor-section" data-campaign-step="basic"><h3 tabindex="-1">基本情報</h3>
       <div class="mb-2"><label class="form-label">キャンペーン名</label><input class="form-control" name="name" required></div>
+      </section>
+      <section class="campaign-editor-section" data-campaign-step="scenario"><h3 tabindex="-1">シナリオ</h3>
       <div class="campaign-content-toolbar border rounded p-2 mb-2 bg-light">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <label class="form-label mb-0">コンテンツ <span class="badge bg-primary" id="contentCountLabel">0 / 100件</span></label>
@@ -1444,6 +1644,8 @@ async function openCampaignModal(campaignId = null) {
         </div>
       </div>
       <div id="contentsList" class="mb-2"></div>
+      </section>
+      <section class="campaign-editor-section" data-campaign-step="delivery"><h3 tabindex="-1">送信環境</h3>
       <div class="row g-2">
         <div class="col-md-12 mb-2"><label class="form-label">送信元アドレス（キャンペーン既定・各コンテンツで上書き可）</label><input class="form-control" name="from_address" type="email" required></div>
       </div>
@@ -1457,6 +1659,8 @@ async function openCampaignModal(campaignId = null) {
           <div class="form-text" id="beaconCheckResult"></div>
         </div>
       </div>
+      </section>
+      <section class="campaign-editor-section" data-campaign-step="schedule"><h3 tabindex="-1">日時・送信量</h3>
       <div class="row g-2">
         <div class="col-md-4 mb-2"><label class="form-label">送信方式</label>
           <select class="form-select" name="send_mode"><option value="normal">通常</option><option value="split">分割</option><option value="slow">なだらか</option></select></div>
@@ -1486,15 +1690,21 @@ async function openCampaignModal(campaignId = null) {
       <div class="mb-2" id="testRedirectWrap" style="display:none">
         <label class="form-label">テスト宛先（リダイレクト先メール・カンマ区切り）</label>
         <textarea class="form-control" name="test_redirect_emails" rows="2" placeholder="test1@example.com, test2@example.com"></textarea>
-        <div class="form-text">テスト送信時、本番の宛先リスト分のメールを、ここに入力したアドレスへ<strong>均等分配</strong>して送ります（例: 1000名分を4アドレスに各250通）。差し込みデータ・追跡は本番のまま。空なら本番の宛先にそのまま送ります。</div>
+        <div class="form-text">全件転送テストです。対象者・コンテンツの全送信行を、指定したアドレスへ<strong>均等分配</strong>します（例: 1000通を4アドレスに各250通）。差し込みデータ・追跡は元の対象者のままです。テスト宛先は必須で、空の場合は配信できません。</div>
       </div>
-      <hr>
+      </section>
+      <section class="campaign-editor-section" data-campaign-step="targets"><h3 tabindex="-1">対象者</h3>
       <div class="mb-2"><label class="form-label">対象グループ</label>
         <select class="form-select" name="group_ids" multiple size="3">${(grps.groups||[]).map((g)=>`<option value="${g.id}">${esc(g.name)}（${Number(g.target_count || 0)}名）</option>`).join('')}</select>
         <div class="form-text">グループを変更すると、前回の個別対象者選択は解除されます。</div></div>
       <div class="mb-2"><label class="form-label">個別対象者（グループへ追加する場合）</label>
         <select class="form-select" name="target_ids" multiple size="4">${(tgts.targets||[]).map((t)=>`<option value="${t.id}">${esc(t.email)}（${esc(t.name||'')}）</option>`).join('')}</select></div>
       <div class="alert alert-info py-2 mb-0" id="campaignTargetSummary">送付予定人数を計算しています...</div>
+      </section>
+      <section class="campaign-editor-section" data-campaign-step="review"><h3 tabindex="-1">最終確認</h3>
+        <p>保存後、配信前確認画面で対象人数・総通数・TEST宛先別の通数を確認してください。</p>
+        <p class="small text-muted mb-0">ここで保存してもメールは送信されません。教育の割当と報告方法は別画面で設定します。</p>
+      </section>
     </form>`;
   // コンテンツ行のHTML（件名/本文/偽ログイン/配信形式/添付拡張子・zip/削除）
   const contentRow = (idx) => `
@@ -1554,7 +1764,9 @@ async function openCampaignModal(campaignId = null) {
       </div>
       </div>
     </div>`;
+  let campaignEditorSteps;
   showModal(isEdit ? 'キャンペーン編集' : '新規キャンペーン', body, async () => {
+    if (!campaignEditorSteps.validateBeforeSave()) throw new Error('入力内容を確認してください');
     const f = $('#campaignForm');
     // コンテンツ収集
     const contents = Array.from(document.querySelectorAll('#contentsList .content-row')).map((row) => {
@@ -1607,8 +1819,10 @@ async function openCampaignModal(campaignId = null) {
       await api('api/campaigns.php', { method: 'POST', query: { action: 'create' }, body: payload });
       toast('作成しました', 'ok');
     }
-    renderCampaigns();
+    if (State.view === 'campaignWorkspace' && State.campaignWorkspaceId === campaignId) renderCampaignWorkspace();
+    else renderCampaigns();
   }, { size: 'xl' });
+  campaignEditorSteps = createCampaignEditorSteps($('#campaignForm'), { initialStep });
   // モーダル表示後: コンテンツリストを初期化（1行）+ 追加/削除ボタン配線
   let contentIdx = 0;
   const listEl = document.getElementById('contentsList');
@@ -1989,7 +2203,7 @@ async function renderReports() {
     const s = c.summary || c;
     const authTargetRate = authTargetRateOf(s.auth_count, s.target_count);
     return `<tr style="cursor:pointer" onclick="showReportDetail(${c.id})">
-      <td>${numById[c.id]}</td><td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td><td>${s.target_count}</td>
+      <td>${numById[c.id]}</td><td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${c.closed_at ? ' <span class="badge bg-secondary">クローズ</span>' : ''}</td><td>${s.target_count}</td>
       <td>${pct(s.sent_rate)}</td>
       <td class="${rateClass(s.click_rate,25,50)}">${countRate(s.click_count, s.click_rate)}</td>
       <td class="${rateClass(authRateOf(s.auth_count, s.click_count) ?? 0,5,20)}">${countRate(s.auth_count, authRateOf(s.auth_count, s.click_count))}</td>
@@ -2026,13 +2240,20 @@ async function showReportDetail(id) {
 }
 // P7: v1同等の詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン)
 async function renderReportDetail(campaignId) {
+  const selected = Cache.reports[campaignId];
+  const closed = Boolean(selected?.closed_at);
+  for (const selector of ['#reportStartDate', '#reportEndDate', '#reportPeriodBtn', '#reportPeriodClearBtn']) {
+    const control = $(selector);
+    if (control) control.disabled = closed;
+  }
+  if (closed) { $('#reportStartDate').value = ''; $('#reportEndDate').value = ''; }
   const query = { action: 'detail', campaign_id: campaignId };
   const sd = $('#reportStartDate')?.value, ed = $('#reportEndDate')?.value;
   if (sd) query.start_date = sd;
   if (ed) query.end_date = ed;
   // テスト送信(is_test)の内訳を見るフィルタ。prod 以外のときだけ送る(prod は確定
   // スナップショットを使うため付けない)。all配信のテストパターン開封をコンテンツ別に見る用途。
-  if (reportTestFilter && reportTestFilter !== 'prod') query.test_filter = reportTestFilter;
+  if (!closed && reportTestFilter && reportTestFilter !== 'prod') query.test_filter = reportTestFilter;
   let d;
   try {
     d = await api('api/report.php', { query });
@@ -2044,9 +2265,11 @@ async function renderReportDetail(campaignId) {
   if (badge) badge.innerHTML = committed
     ? `<span class="badge bg-secondary"><i class="bi bi-lock-fill me-1"></i>確定済み ${d.committed_at ? esc(d.committed_at) : ''}</span>`
     : '';
-  const commitBtn = $('#reportCommitBtn'), uncommitBtn = $('#reportUncommitBtn');
-  if (commitBtn) commitBtn.classList.toggle('d-none', committed);
-  if (uncommitBtn) uncommitBtn.classList.toggle('d-none', !committed);
+  const commitBtn = $('#reportCommitBtn'), uncommitBtn = $('#reportUncommitBtn'), closeBtn = $('#reportCloseBtn');
+  if (commitBtn) commitBtn.classList.toggle('d-none', closed || committed || !roleAtLeast(State.user?.role, 'operator'));
+  if (uncommitBtn) uncommitBtn.classList.toggle('d-none', closed || !committed || !roleAtLeast(State.user?.role, 'tenant_admin'));
+  if (closeBtn) closeBtn.classList.toggle('d-none', closed || !committed || !['done', 'cancelled'].includes(selected?.status) || State.user?.role !== 'superadmin');
+  if (closed && badge) badge.innerHTML += ` <span class="badge bg-dark" title="入力本文は消去済み">クローズ済み ${esc(d.closed_at || '')}</span>`;
   // 会社別(サイト表示=click。beacon と click はほぼ同一事象のため click に統一・2026-08-24)
   $('#reportByCompany').innerHTML = (d.by_company || []).length
     ? d.by_company.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.company)}</td><td>${r.count}</td>
@@ -2155,6 +2378,16 @@ async function uncommitReport() {
     await api('api/report.php', { method: 'POST', query: { action: 'uncommit' }, body: { campaign_id: id } });
     toast('確定を解除しました', 'ok');
     renderReportDetail(id);
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function closeReport() {
+  const id = reportCommitCampaignId;
+  if (!id || State.user?.role !== 'superadmin') return;
+  if (!confirm('キャンペーンをクローズしますか？\n確定済み統計を保持し、保存済みの入力本文・パスワードを消去します。この操作は取り消せません。')) return;
+  try {
+    await api('api/report.php', { method: 'POST', query: { action: 'close' }, body: { campaign_id: id } });
+    toast('クローズしました。入力本文は消去されました', 'ok');
+    await renderReports();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function renderFailures(campaignId) {
@@ -2457,11 +2690,35 @@ const TPL_FORM_KINDS = [['subject','件名'],['body','本文'],['phish_login','�
 const KIND_LABELS = { subject:'件名', body:'本文', phish_login:'偽ログイン', debrief:'ネタバラシ', elearning:'eラーニング' };
 const AUTH_FLAG_NAME = { '0':'通常（汎用）', '1':'Box', '2':'Microsoft365', '3':'Digital Arts', '4':'Microsoft 365（メールのみ）' };
 let tplKindFilter = 'scenario';
+let tplTemplates = [];
+let tplTemplatesTenantId = null;
+let tplTemplatesRequest = 0;
+function templatesMatchingSearch(templates, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return templates;
+  const matchesName = (template) => String(template.name || '').toLowerCase().includes(needle);
+  const matchingScenarioKeys = new Set(templates
+    .filter((template) => ['subject', 'body'].includes(template.kind) && template.scenario_key && matchesName(template))
+    .map((template) => template.scenario_key));
+  return templates.filter((template) => matchesName(template) ||
+    (['subject', 'body'].includes(template.kind) && matchingScenarioKeys.has(template.scenario_key)));
+}
 async function renderTemplates() {
+  const tenantId = State.activeTenantId;
+  const requestId = ++tplTemplatesRequest;
+  tplTemplatesTenantId = null;
+  $('#templatesBody').innerHTML = '<tr><td colspan="5" class="text-muted">読み込み中...</td></tr>';
+  const { templates } = await api('api/templates.php', { query: { action: 'list' } });
+  if (State.view !== 'templates' || State.activeTenantId !== tenantId || requestId !== tplTemplatesRequest) return;
+  tplTemplates = templates || [];
+  tplTemplatesTenantId = tenantId;
+  renderTemplateRows();
+}
+function renderTemplateRows() {
   $('#tplKindTabs').innerHTML = TPL_KINDS.map(([k, l]) =>
     `<li class="nav-item"><a class="nav-link${k===tplKindFilter?' active':''}" href="#" onclick="setTplKind('${k}');return false">${l}</a></li>`).join('');
-  const { templates } = await api('api/templates.php', { query: { action: 'list' } });
-  const all = templates || [];
+  if (tplTemplatesTenantId !== State.activeTenantId) return;
+  const all = templatesMatchingSearch(tplTemplates, $('#tplSearch').value);
   if (tplKindFilter === 'scenario') return renderTemplatesScenario(all);
   if (tplKindFilter === 'phish_login') return renderTemplatesPhish(all);
   return renderTemplatesSimple(all, tplKindFilter);
@@ -2520,7 +2777,7 @@ function renderTemplatesSimple(all, kind) {
   $('#templatesBody').innerHTML = rows || emptyRow(5);
 }
 function labelKind(k) { return KIND_LABELS[k] || k; }
-function setTplKind(k) { tplKindFilter = k; renderTemplates(); }
+function setTplKind(k) { tplKindFilter = k; renderTemplateRows(); }
 // 本文の差し込みプレースホルダ定義(send_email.py の replace_placeholders と対応)。
 const TPL_PLACEHOLDERS = [
   { ph: '#$1$#', label: 'リンク/URL', sample: 'https://example.com/link-XXXX.html' },
@@ -3578,6 +3835,29 @@ function emptyRow(cols) { return `<tr><td colspan="${cols}" class="text-center t
 
 /* ========== 起動 ========== */
 document.addEventListener('DOMContentLoaded', () => {
+  window.addEventListener('hashchange', () => {
+    if (!State.user) return;
+    const view = routeFromHash(window.location.hash);
+    const campaignId = campaignIdFromHash(window.location.hash);
+    if (view !== State.view || (view === 'campaignWorkspace' && campaignId !== State.campaignWorkspaceId)) {
+      State.campaignWorkspaceId = campaignId;
+      navigate(view);
+    }
+  });
+  contextHelp = createContextHelp($('#contextHelp'), () => State.view);
+  $('#helpToggle').addEventListener('click', () => {
+    const opened = !$('#contextHelp').classList.contains('d-none');
+    if (opened) contextHelp.close(); else contextHelp.open();
+    $('#helpToggle').setAttribute('aria-expanded', String(!opened));
+  });
+  $('#helpClose').addEventListener('click', () => {
+    contextHelp.close();
+    $('#helpToggle').setAttribute('aria-expanded', 'false');
+    $('#helpToggle').focus();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('#contextHelp').classList.contains('d-none')) $('#helpClose').click();
+  });
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('#loginBtn'), spin = $('#loginSpin'), err = $('#loginError');
@@ -3603,6 +3883,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#reportExportBtn')?.addEventListener('click', exportReportXlsx);
   $('#reportCommitBtn')?.addEventListener('click', commitReport);
   $('#reportUncommitBtn')?.addEventListener('click', uncommitReport);
+  $('#reportCloseBtn')?.addEventListener('click', closeReport);
   $('#logsTabs')?.addEventListener('click', (e) => {
     const a = e.target.closest('.nav-link'); if (!a) return;
     e.preventDefault(); switchLogTab(a.dataset.log);
@@ -3613,7 +3894,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#logsBody')?.addEventListener('click', (e) => {
     const button = e.target.closest('[data-report-decision]');
     if (button) decideReportMail(button);
+    const captureButton = e.target.closest('[data-capture-id]');
+    if (captureButton) revealCredentialCapture(captureButton);
   });
+  $('#credentialRevealDialog')?.addEventListener('close', closeCredentialDialog);
+  $('#credentialRevealDialog')?.addEventListener('cancel', closeCredentialDialog);
+  $('#credentialRevealDialog button')?.addEventListener('click', closeCredentialDialog);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) closeCredentialDialog(); });
+  window.addEventListener('pagehide', closeCredentialDialog);
   $('#logsRefreshBtn')?.addEventListener('click', () => { logsState.offset = 0; loadLogs(); });
   $('#logsCampaignFilter')?.addEventListener('change', () => { logsState.offset = 0; loadLogs(); });
   $('#logsPrevBtn')?.addEventListener('click', () => {
@@ -3697,6 +3985,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#newGroupBtn').addEventListener('click', newGroup);
   $('#newScenarioBtn').addEventListener('click', newScenario);
 $('#newTemplateBtn').addEventListener('click', newTemplate);
+  $('#tplSearch').addEventListener('input', () => {
+    if (State.view === 'templates') renderTemplateRows();
+  });
   $('#tplExportBtn')?.addEventListener('click', exportTemplatesCsv);
   $('#tplImportAddBtn')?.addEventListener('click', () => importTemplatesCsv('add'));
   $('#tplImportUpsertBtn')?.addEventListener('click', () => importTemplatesCsv('upsert'));

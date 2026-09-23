@@ -20,6 +20,11 @@ function deleteRuleFixture(int $sourceId, int $tenantId = 1): int
 }
 
 $sourceId = deleteSourceFixture();
+$otherCaptureCampaignId = deleteSourceFixture();
+Db::run("INSERT INTO credential_captures (tenant_id, campaign_id, tracking_id, auth_type, nonce, ciphertext)
+    VALUES (1, ?, '1111111111', 'box', 'synthetic-nonce', 'synthetic-ciphertext')", [$sourceId]);
+Db::run("INSERT INTO credential_captures (tenant_id, campaign_id, tracking_id, auth_type, nonce, ciphertext)
+    VALUES (1, ?, '2222222222', 'box', 'synthetic-nonce', 'synthetic-ciphertext')", [$otherCaptureCampaignId]);
 $ruleId = deleteRuleFixture($sourceId);
 $otherSourceId = deleteSourceFixture();
 $otherRuleId = deleteRuleFixture($otherSourceId);
@@ -30,6 +35,10 @@ $runs = Db::all('SELECT * FROM campaign_automation_runs ORDER BY id');
 $draft = Db::one('SELECT * FROM campaigns WHERE id=?', [$draftId]);
 $response = call_handler('campaigns_handle_delete', ['id' => $sourceId]);
 check($response['code'] === 200, '元campaign削除が成功する');
+check(Db::one('SELECT id FROM credential_captures WHERE campaign_id=?', [$sourceId]) === null,
+    'campaign論理削除と同じtransactionで入力本文を消去する');
+check(Db::one('SELECT id FROM credential_captures WHERE campaign_id=?', [$otherCaptureCampaignId]) !== null,
+    '他campaignの入力本文は保持する');
 check(Db::one('SELECT status FROM campaign_automations WHERE id=?', [$ruleId])['status'] === 'paused', '元campaignの定期ruleを停止する');
 check(Db::one('SELECT status FROM campaign_automations WHERE id=?', [$otherRuleId])['status'] === 'active', '他sourceのruleは変更しない');
 check(Db::one('SELECT status FROM campaign_automations WHERE id=?', [$otherTenantRuleId])['status'] === 'active', '他tenantのruleは変更しない');
@@ -57,6 +66,8 @@ try {
 }
 $rollbackId = deleteSourceFixture();
 deleteRuleFixture($rollbackId);
+Db::run("INSERT INTO credential_captures (tenant_id, campaign_id, tracking_id, auth_type, nonce, ciphertext)
+    VALUES (1, ?, '3333333333', 'box', 'synthetic-nonce', 'synthetic-ciphertext')", [$rollbackId]);
 Db::run("CREATE TEMP TRIGGER reject_rule_pause BEFORE UPDATE ON campaign_automations BEGIN SELECT RAISE(ABORT, 'test rollback'); END");
 $failed = false;
 try {
@@ -67,4 +78,6 @@ try {
     Db::run('DROP TRIGGER reject_rule_pause');
 }
 check($failed && Db::one('SELECT deleted_at FROM campaigns WHERE id=?', [$rollbackId])['deleted_at'] === null, 'rule停止失敗時はcampaign論理削除もrollbackする');
+check(Db::one('SELECT id FROM credential_captures WHERE campaign_id=?', [$rollbackId]) !== null,
+    'campaign削除失敗時は暗号文の消去もrollbackする');
 echo "ALL TESTS PASSED\n";

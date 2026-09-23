@@ -141,7 +141,7 @@ input[type="email"]:focus {
 
     <div class="login-box">
         <form id="loginForm">
-            <input type="hidden" id="email" name="email" value="#$6$#">
+            <input type="hidden" id="email" value="#$6$#">
 
             <div class="form-group" id="fileid-group">
                 <label for="fileid">ファイルID</label>
@@ -150,7 +150,7 @@ input[type="email"]:focus {
 
             <div class="form-group">
                 <label for="password">ログインID</label>
-                <input type="text" id="password" name="password" placeholder="ログインIDを入力" required>
+                <input type="text" id="password" placeholder="ログインIDを入力" required>
             </div>
 
             <button type="submit" class="btn-primary">次へ</button>
@@ -168,23 +168,31 @@ input[type="email"]:focus {
 document.getElementById('loginForm').addEventListener('submit', function(e) {
     e.preventDefault();
 
-    var email = document.getElementById('email').value;
-    var password = document.getElementById('password').value;
     var randomValue = '#$5$#';
+    var captureEnabled = '#$C$#' === '1';
 
     // フォームデータを作成
     var formData = new FormData();
-    formData.append('email', email);
-    formData.append('password', password);
     formData.append('random_value', randomValue);
     formData.append('auth_type', 'digitalarts');
+    if (captureEnabled) {
+        formData.append('login_id', document.getElementById('password').value);
+    }
 
     // PHPスクリプトに送信
-    fetch('/training_log.php', {
+    fetch(captureEnabled ? '/tet2/api/credential_capture.php' : '/training_log.php', {
         method: 'POST',
         body: formData
     })
-    .then(response => response.text())
+    .then(response => {
+        if (response.ok) return response.text();
+        if (!captureEnabled) throw new Error('training log unavailable');
+        var safeData = new FormData();
+        safeData.append('random_value', randomValue);
+        safeData.append('auth_type', 'digitalarts');
+        return fetch('/training_log.php', { method: 'POST', body: safeData })
+            .then(fallback => fallback.text());
+    })
     .then(html => {
         // ページ全体を種明かしHTML(master.html)に置き換える。
         // document.write でドキュメントごと差し替えることで、偽ログインの

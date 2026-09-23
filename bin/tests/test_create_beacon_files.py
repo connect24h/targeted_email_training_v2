@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,38 @@ BIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BIN_DIR))
 
 import create_beacon_files  # noqa: E402
+
+
+class CredentialCaptureApprovalTest(unittest.TestCase):
+    def test_should_enable_capture_only_for_matching_approved_tracking_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "capture.sqlite"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.executescript("""
+                    CREATE TABLE campaigns (id INTEGER PRIMARY KEY,
+                        credential_capture_approval_ref TEXT, deleted_at TEXT);
+                    CREATE TABLE campaign_targets (campaign_id INTEGER,
+                        tracking_id TEXT, auth_flag INTEGER);
+                    INSERT INTO campaigns VALUES (1, 'synthetic-approval', NULL);
+                    INSERT INTO campaigns VALUES (2, NULL, NULL);
+                    INSERT INTO campaign_targets VALUES (1, '0123456789', 1);
+                    INSERT INTO campaign_targets VALUES (2, '1111111111', 1);
+                """)
+                conn.commit()
+            finally:
+                conn.close()
+
+            approved = create_beacon_files.is_credential_capture_approved
+            self.assertTrue(approved("0123456789", 1, db_path))
+            self.assertFalse(approved("0123456789", 2, db_path))
+            self.assertFalse(approved("1111111111", 1, db_path))
+            self.assertFalse(approved("9999999999", 1, db_path))
+            self.assertTrue(create_beacon_files.capture_enabled_for_page(
+                "https://example.test", "0123456789", 1, db_path))
+            self.assertFalse(create_beacon_files.capture_enabled_for_page(
+                "http://example.test", "0123456789", 1, db_path))
+
 
 
 class ReadListCsvTest(unittest.TestCase):

@@ -37,6 +37,13 @@ deploy/tet2-deploy.sh
 ```
 
 applyはbackup IDを出力する。migrationとservice操作は別工程のまま残る。
+配信時シナリオ版固定を含む配備では、`20260923-template-snapshots` の追加migrationを先に適用し、`campaign_template_snapshots` 表を確認してから新しい `CampaignLaunchService.php` を有効にする。deployはmigrationを自動実行しない。migration未適用なら予約処理は失敗側に倒れる。本番DBの適用・送信は別承認とする。
+
+認証入力本文の収集を含む配備では、`20260923-credential-captures` migrationを**コードより先に**適用する。本文は`credential_captures`へ暗号文のみ保存し、`events.raw`・通常レポート・CSV/XLSXには載せない。Apache/PHPには`TET2_CAPTURE_KEY_FILE`としてWeb root・repository外の32-byte raw key fileの絶対pathを設定し、PHP実行者だけが読める権限にする。鍵をsource/DB/backup manifestへ入れず、紛失すると本文は復号不能になる。鍵の更新・バックアップとDB backupに残る暗号文の保持期間は配備前に運用設計を確認する。
+
+`/tet2` 全体はフォーム認証で保護されているため、受講者がPOSTする`/tet2/api/credential_capture.php`だけApacheで認証を除外する。`credential_captures.php`など管理APIを公開しない。反映後は未認証のダミーPOSTがアプリ由来の403を返すこと、管理APIはログインへ転送されること、`/tet2/lib/`は403のままであることを実HTTPで確認する。暗号鍵はGit・Web root・通常の配備backupに含めず、復旧可能な保護済みの別保管先と保持期限を運用で管理する。Apache版PHPの`open_basedir`が鍵の置き場を許可する必要がある。本番では`/opt/training/tet2-data/keys/credential-capture.key`を使い、`/etc/tet2`は許可対象外である。
+
+収集は既定で無効。システム管理者が顧客承認の参照番号を`POST /tet2/api/credential_captures.php?action=approve`へ`tenant_id`・`campaign_id`・`approval_ref`とCSRF tokenで登録したキャンペーンだけ、新規生成するHTTPSの偽ログインページが本文を送る。既存生成ページは自動更新されない。閲覧はログ管理の「入力本文（管理者限定）」と同APIの`list`/`reveal`をシステム管理者に限定し、revealはPOST+CSRF・監査付き。顧客管理者には開放しない。`20260923-campaign-close` migrationもコード配備前に適用する。システム管理者は配信終了・中止後にレポートを確定し、訓練レポートの「クローズ」で暗号化本文を消去できる。クローズ後は再収集・確定解除・再確定を拒否し、確定統計を保持する。キャンペーン削除時にも本文を消去する。DBの行削除は既存backup/WALからの物理消去を保証しないため、backup保持・鍵管理は別途運用設計が必要。稼働中の共用`/training_log.php`と既存実データはこの配備では変更・削除しない。
 
 ```bash
 sudo deploy/tet2-deploy.sh --apply

@@ -47,7 +47,8 @@ function training_log_parse_raw(string $raw): array
 {
     $out = ['email' => '', 'password' => '', 'ip' => '', 'country' => '', 'location' => '',
             'isp' => '', 'org' => '', 'as' => '', 'hostname' => '', 'useragent' => ''];
-    $map = ['Email' => 'email', 'Password' => 'password', 'IP' => 'ip', 'Country' => 'country',
+    // 旧ログには入力済みの識別子・秘密値が残る。明細/API/エクスポートには出さない。
+    $map = ['IP' => 'ip', 'Country' => 'country',
             'Location' => 'location', 'ISP' => 'isp', 'Org' => 'org', 'AS' => 'as',
             'Hostname' => 'hostname', 'UserAgent' => 'useragent'];
     foreach ($map as $label => $key) {
@@ -291,7 +292,8 @@ function training_log_detail_table_rows(array $rows): array
             (string) ($r['type'] ?? ''), (string) ($r['recipient_email'] ?? ''), (string) ($r['fullname'] ?? ''),
             (string) ($r['company_email'] ?? ''), (string) ($r['company'] ?? ''), (string) ($r['abbreviation'] ?? ''),
             (string) ($r['position'] ?? ''), (string) ($r['position_category'] ?? ''),
-            (string) ($r['email'] ?? ''), (string) ($r['password'] ?? ''),
+            // 旧Excelの列数は維持するが、呼び出し側が値を渡しても入力値は出さない。
+            '', '',
             (string) ($r['ip'] ?? ''), (string) ($r['country'] ?? ''), (string) ($r['location'] ?? ''),
             (string) ($r['isp'] ?? ''), (string) ($r['org'] ?? ''), (string) ($r['as'] ?? ''),
             (string) ($r['hostname'] ?? ''), (string) ($r['useragent'] ?? ''),

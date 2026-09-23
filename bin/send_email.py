@@ -25,6 +25,7 @@ import subprocess
 import re
 import json
 import secrets
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from email.mime.text import MIMEText
@@ -41,6 +42,7 @@ STOP_FILE = "/opt/training/bin/data/stop_sending.flag"
 ALERT_FILE = "/opt/training/bin/data/send_alerts.json"
 STATUS_FILE = "/opt/training/bin/data/send_status.json"
 ATTACHMENT_ROOT = Path("/opt/training/bin/Attachment")
+TET2_DB_PATH = "/opt/training/tet2-db/tet2.sqlite"
 
 
 def _has_csv_value(value):
@@ -73,6 +75,58 @@ def required_attachment_error(row, attachment_root=ATTACHMENT_ROOT):
         return "必須添付のパスが空です"
     error = attachment_file_error(attachment_value, attachment_root)
     return f"必須{error}" if error is not None else None
+
+
+class RecipientEligibilityError(RuntimeError):
+    pass
+
+
+class RecipientEligibilityGuard:
+    """TET2 worker送信時だけ、各recipientの現行在籍状態をSMTP直前に確認する。"""
+
+    def __init__(self, campaign_id, data_dir, db_path=TET2_DB_PATH):
+        self.campaign_id = campaign_id
+        self.data_dir = os.path.normpath(data_dir)
+        uri = f"{Path(db_path).absolute().as_uri()}?mode=ro"
+        self.conn = sqlite3.connect(uri, uri=True, timeout=5)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA query_only=ON")
+
+    def close(self):
+        self.conn.close()
+
+    def assert_can_send(self, csv_row):
+        tracking_id = csv_row.get("乱数列")
+        original_email = csv_row.get("メールアドレス（会社）")
+        if not _has_csv_value(tracking_id) or not _has_csv_value(original_email):
+            raise RecipientEligibilityError("送信行の追跡IDまたは元の宛先がありません")
+        try:
+            record = self.conn.execute(
+                """SELECT c.status AS campaign_status, c.tenant_id AS campaign_tenant,
+                          c.data_dir, ct.send_status, t.tenant_id AS target_tenant,
+                          t.status AS target_status, t.email AS target_email
+                   FROM campaign_targets ct
+                   JOIN campaigns c ON c.id=ct.campaign_id
+                   JOIN targets t ON t.id=ct.target_id
+                   WHERE ct.campaign_id=? AND ct.tracking_id=?""",
+                (self.campaign_id, str(tracking_id).strip()),
+            ).fetchone()
+        except sqlite3.Error as error:
+            raise RecipientEligibilityError("対象者の再確認に失敗しました") from error
+        if record is None:
+            raise RecipientEligibilityError("送信行に対応する対象者が見つかりません")
+        if record["campaign_status"] not in ("scheduled", "running"):
+            raise RecipientEligibilityError("キャンペーンが送信可能な状態ではありません")
+        if os.path.normpath(record["data_dir"] or "") != self.data_dir:
+            raise RecipientEligibilityError("キャンペーンの送信データ保存先が変わりました")
+        if record["campaign_tenant"] != record["target_tenant"]:
+            raise RecipientEligibilityError("別組織の対象者が含まれます")
+        if record["target_status"] != "active":
+            raise RecipientEligibilityError("停止・退職した対象者が含まれます")
+        if record["send_status"] not in ("pending", "failed", "deferred"):
+            raise RecipientEligibilityError("対象者の送信状態が変更されました")
+        if record["target_email"] != str(original_email).strip():
+            raise RecipientEligibilityError("対象者のメールアドレスが変更されました")
 
 
 class FlushingStreamHandler(logging.StreamHandler):
@@ -415,7 +469,8 @@ class TargetedEmailSender:
             self.logger.error(f"添付ファイル処理エラー: {str(e)}")
             return False
     
-    def send_email(self, to_email, from_email, subject, body, attachment_path=None, tracking_id=None):
+    def send_email(self, to_email, from_email, subject, body, attachment_path=None, tracking_id=None,
+                   eligibility_row=None):
         """メール送信（エラー処理強化版）"""
         try:
             # 入力値の検証
@@ -465,6 +520,11 @@ class TargetedEmailSender:
                     
                     # メール送信
                     text = msg.as_string()
+                    if eligibility_row is not None:
+                        guard = getattr(self, "recipient_guard", None)
+                        if guard is None:
+                            raise RecipientEligibilityError("送信直前確認が設定されていません")
+                        guard.assert_can_send(eligibility_row)
                     refused = server.sendmail(from_email, [to_email], text)
                     
                     # 送信拒否チェック
@@ -492,6 +552,8 @@ class TargetedEmailSender:
                 self.logger.error(f"SMTPサーバー接続タイムアウト ({to_email})")
                 return False
                 
+        except RecipientEligibilityError:
+            raise
         except ValueError as e:
             self.logger.error(f"メール送信パラメータエラー: {str(e)}")
             return False
@@ -923,11 +985,20 @@ class TargetedEmailSender:
                     self.logger.error(f"SMTPサーバー接続エラー: {str(e)}")
                     self.logger.error("メール送信を中止します")
                     break
+
+                # TEST転送でも元の対象者を照合する。配信準備後に退職・停止・組織変更が
+                # 起きた場合は、残りの行を送らずworkerに非0終了を返してキャンペーンを止める。
+                guard = getattr(self, "recipient_guard", None)
+                if guard is not None:
+                    guard.assert_can_send(row)
                 
                 # メール送信
                 try:
+                    send_options = {"tracking_id": row.get('乱数')}
+                    if guard is not None:
+                        send_options["eligibility_row"] = row
                     if self.send_email(to_email, from_email, subject, body, attachment_path,
-                                       tracking_id=row.get('乱数')):
+                                       **send_options):
                         # メールログで送信確認
                         self.logger.info(f"📤 SMTP送信完了、メールログ確認中... {to_email}")
                         if self.check_mail_delivery(to_email, max_wait=15, check_interval=2):
@@ -1013,6 +1084,8 @@ class TargetedEmailSender:
                         error_count += 1
                         self.logger.error(f"❌ 送信失敗: {to_email}")
                         self.write_alert('SEND_FAILED', f'メール送信に失敗しました', to_email, '')
+                except RecipientEligibilityError:
+                    raise
                 except Exception as e:
                     error_count += 1
                     self.logger.error(f"❌ 送信例外エラー ({to_email}): {str(e)}")
@@ -1026,6 +1099,10 @@ class TargetedEmailSender:
             except KeyboardInterrupt:
                 self.logger.warning("ユーザーによる中断が検出されました")
                 break
+            except RecipientEligibilityError as e:
+                self.logger.error(f"送信直前の対象者確認に失敗: {e}")
+                self.update_status("stopped", processed_count, valid_count, success_count, error_count, "")
+                raise
             except Exception as e:
                 self.logger.error(f"行 {index + 1} 予期しないエラー: {str(e)}")
                 error_count += 1
@@ -1160,6 +1237,8 @@ def main():
                        help='開始項番を指定して開始')
     parser.add_argument('--end-koban', '-e', type=int, default=None,
                        help='終了項番を指定（この項番を含む）')
+    parser.add_argument('--campaign-id', type=int, default=None,
+                       help='TET2 worker起動時の対象者再確認に使うキャンペーンID')
     parser.add_argument('--auto-pause', action='store_true',
                        help='連続遅延時に自動一時停止する')
     parser.add_argument('--pause-threshold', type=int, default=10,
@@ -1193,6 +1272,11 @@ def main():
                 print(f"  再開推奨行: {status['resume_row'] + 1}", flush=True)
             print("=" * 50, flush=True)
         return
+
+    if args.campaign_id is not None:
+        if args.campaign_id < 1:
+            parser.error('--campaign-id は1以上で指定してください')
+        sender.recipient_guard = RecipientEligibilityGuard(args.campaign_id, args.data_dir)
 
     # 二重起動チェック（python3プロセスのみ検出、sudo/bashラッパーを除外）
     try:
@@ -1230,19 +1314,23 @@ def main():
     if args.adaptive_interval:
         print(f"📊 適応型送信間隔: 有効 (最大={args.max_interval}秒)", flush=True)
 
-    sender.run(
-        interval=args.interval,
-        start_row=args.start_row,
-        start_koban=args.start_koban,
-        end_koban=args.end_koban,
-        resume=args.resume,
-        auto_pause=args.auto_pause,
-        pause_threshold=args.pause_threshold,
-        pause_duration=args.pause_duration,
-        max_retries=args.max_retries,
-        adaptive_interval=args.adaptive_interval,
-        max_interval=args.max_interval
-    )
+    try:
+        sender.run(
+            interval=args.interval,
+            start_row=args.start_row,
+            start_koban=args.start_koban,
+            end_koban=args.end_koban,
+            resume=args.resume,
+            auto_pause=args.auto_pause,
+            pause_threshold=args.pause_threshold,
+            pause_duration=args.pause_duration,
+            max_retries=args.max_retries,
+            adaptive_interval=args.adaptive_interval,
+            max_interval=args.max_interval
+        )
+    finally:
+        if hasattr(sender, "recipient_guard"):
+            sender.recipient_guard.close()
 
 if __name__ == "__main__":
     main()

@@ -23,6 +23,37 @@ from qr_doc_gen import generate_qr_document
 import sqlite3
 
 
+def is_credential_capture_approved(tracking_id, auth_flag, db_path='/opt/training/tet2-db/tet2.sqlite'):
+    """顧客承認が記録された現行キャンペーンの、同じ認証画面だけ本文収集を有効にする。"""
+    if not re.fullmatch(r'[0-9]{10}', str(tracking_id)) or not os.path.isfile(db_path):
+        return False
+    try:
+        flag = int(auth_flag)
+        if flag not in (1, 2, 3, 4):
+            return False
+        conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+        try:
+            row = conn.execute(
+                'SELECT 1 FROM campaign_targets ct '
+                'JOIN campaigns c ON c.id=ct.campaign_id '
+                'WHERE ct.tracking_id=? AND ct.auth_flag=? AND c.deleted_at IS NULL '
+                "AND c.credential_capture_approval_ref IS NOT NULL "
+                "AND trim(c.credential_capture_approval_ref)<>'' LIMIT 1",
+                (str(tracking_id), flag),
+            ).fetchone()
+        finally:
+            conn.close()
+        return row is not None
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        return False
+
+
+def capture_enabled_for_page(beacon_base, tracking_id, auth_flag, db_path='/opt/training/tet2-db/tet2.sqlite'):
+    return beacon_base.lower().startswith('https://') and is_credential_capture_approved(
+        tracking_id, auth_flag, db_path
+    )
+
+
 def resolve_tenant_reveal(tracking_id):
     """tracking_id(=乱数列)から所属テナントの reveal.html パスを返す。無ければ None。
 
@@ -439,6 +470,9 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
         # #$6$#(to_email)は master*.html 内で value="#$6$#" のHTML属性値に埋め込まれるため、
         #  格納型XSS対策として quote=True でエスケープする（差し込む値のみ／テンプレート本体は触らない）。
         html_content = master_html_content.replace('#$5$#', random_value)
+        # HTTP配信・承認未記録・旧schemaでは入力本文を送信しない。新規生成物だけに効く。
+        capture_enabled = capture_enabled_for_page(beacon_base, random_value, auth_flag)
+        html_content = html_content.replace('#$C$#', '1' if capture_enabled else '0')
         # 『メール空欄』指定時は認証画面の email 事前入力を消す(value="")。それ以外は従来通り
         # 送信先メールを quote=True でエスケープして value 属性に差し込む(格納型XSS対策)。
         prefill_email = build_auth_email_value(to_email, suppress_prefill_email)

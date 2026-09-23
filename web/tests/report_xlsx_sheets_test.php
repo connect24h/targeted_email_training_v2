@@ -56,6 +56,7 @@ $tldTable = training_log_detail_table_rows($sample);
 check(count($tldTable) === 1, '明細整形: 1行入れたら1行返る');
 check(count($tldTable[0]) === count($tldHead), '明細整形: 列数がヘッダと一致(22列)');
 check($tldTable[0][2] === '3回', '明細整形: 重複列は「n回」表記');
+check($tldTable[0][11] === '' && $tldTable[0][12] === '', '明細整形: 旧入力値をExcelへ出さない');
 check($tldTable[0][14] === 'Japan (JP)', '明細整形: 国が15列目に入る');
 
 // ---- 4) api/report.php が7シートを正しい順序で addSheet していること ----

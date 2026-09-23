@@ -38,9 +38,20 @@ grep -qx 'old-index' "$web_dest/index.html"
 test "$(stat -c '%a:%U:%G' "$web_dest/index.html")" = '600:root:root'
 test ! -e "$backup_root"
 
+"$deploy_script" "${common_args[@]}" > "$test_root/all-scope-plan"
+for relative in assets/context-help.js assets/campaign-workspace.js assets/campaign-editor-steps.js api/credential_capture.php api/credential_captures.php db/schema-credential-captures.sql db/schema-template-snapshots.sql lib/CredentialVault.php lib/CampaignPreflight.php lib/CampaignLaunchService.php; do
+  grep -q $'web\t'"$relative"$'\t' "$test_root/all-scope-plan"
+done
 "$deploy_script" --scope=campaign-safety "${common_args[@]}" > "$test_root/campaign-scope-plan"
 grep -q $'web\tapi/campaign_launch.php\t' "$test_root/campaign-scope-plan"
+grep -q $'web\tlib/CampaignPreflight.php\t' "$test_root/campaign-scope-plan"
+grep -q $'web\tlib/CampaignLaunchService.php\t' "$test_root/campaign-scope-plan"
+grep -q $'web\tdb/schema-template-snapshots.sql\t' "$test_root/campaign-scope-plan"
 grep -q $'bin\t__BeaconMst.png\t' "$test_root/campaign-scope-plan"
+source "$repo_root/deploy/tet2-files.sh"
+TET2_DEPLOY_SCOPE=campaign-safety
+tet2_scope_includes web lib/CampaignPreflight.php
+tet2_scope_includes web lib/CampaignLaunchService.php
 if grep -q $'web\tindex.html\t' "$test_root/campaign-scope-plan"; then
   echo 'campaign-safety scopeに範囲外fileが含まれています' >&2
   exit 1

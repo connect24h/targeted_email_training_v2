@@ -138,8 +138,30 @@ function report_handle_summary(): never
         json_error('campaign_id は必須です', 400);
     }
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
-    assert_campaign_owned($campaignId, $tenantId);
-    json_out(['success' => true, 'summary' => report_summary_from_counts(report_summary_row($campaignId, $tenantId))]);
+    $campaign = assert_campaign_owned($campaignId, $tenantId);
+    $row = report_summary_row($campaignId, $tenantId);
+    $summary = $campaign['closed_at'] !== null
+        ? report_closed_summary(report_snapshot_of($campaignId, $tenantId), $row)
+        : report_summary_from_counts($row);
+    json_out(['success' => true, 'summary' => $summary]);
+}
+
+/** クローズ後は確定時点のサマリーを返す。旧版snapshotには詳細集計から補完する。 */
+function report_closed_summary(?array $snapshot, array $liveRow): array
+{
+    $data = $snapshot === null ? null : json_decode((string) $snapshot['payload'], true);
+    if (!is_array($data)) { throw new RuntimeException('クローズ済みレポートの確定値がありません'); }
+    if (isset($data['campaign_summary']) && is_array($data['campaign_summary'])) {
+        return $data['campaign_summary'];
+    }
+    $detail = $data['summary'] ?? [];
+    return report_summary_from_counts([
+        'target_count' => (int) ($detail['count'] ?? 0),
+        'sent_count' => (int) ($liveRow['sent_count'] ?? 0),
+        'open_count' => (int) ($detail['beacon_opened'] ?? 0),
+        'click_count' => (int) ($detail['link_clicked'] ?? 0),
+        'auth_count' => (int) ($detail['auth_count'] ?? 0),
+    ]);
 }
 
 function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
@@ -153,13 +175,15 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
         $testWhere = ' AND c.is_test = 1';
     }
     return Db::all(
-        "SELECT c.id, c.tenant_id, c.name, c.status, c.start_at, c.end_at, c.is_test, c.created_at,
+        "SELECT c.id, c.tenant_id, c.name, c.status, c.closed_at, c.start_at, c.end_at, c.is_test, c.created_at,
+                rs.payload AS report_snapshot_payload,
                 COALESCE(ct.target_count, 0) AS target_count,
                 COALESCE(ct.sent_count, 0) AS sent_count,
                 COALESCE(ev.open_count, 0) AS open_count,
                 COALESCE(ev.click_count, 0) AS click_count,
                 COALESCE(ev.auth_count, 0) AS auth_count
          FROM campaigns c
+         LEFT JOIN campaign_report_snapshots rs ON rs.campaign_id=c.id AND rs.tenant_id=c.tenant_id AND c.closed_at IS NOT NULL
          LEFT JOIN (
              SELECT ct.campaign_id,
                     COUNT(*) AS target_count,
@@ -197,12 +221,15 @@ function report_handle_campaigns(): never
     if (!in_array($tf, ['prod', 'test', 'all'], true)) { $tf = 'prod'; }
     $campaigns = [];
     foreach (report_campaign_rows($tenantId, $tf) as $row) {
-        $summary = report_summary_from_counts($row);
+        $summary = $row['closed_at'] !== null
+            ? report_closed_summary(['payload' => $row['report_snapshot_payload']], $row)
+            : report_summary_from_counts($row);
         $campaigns[] = array_merge([
             'id' => (int) $row['id'],
             'tenant_id' => (int) $row['tenant_id'],
             'name' => (string) $row['name'],
             'status' => (string) $row['status'],
+            'closed_at' => $row['closed_at'],
             'start_at' => $row['start_at'],
             'end_at' => $row['end_at'],
             'is_test' => (int) $row['is_test'],
@@ -496,6 +523,10 @@ function report_snapshot_of(int $campaignId, int $tenantId): ?array
 function report_export_resolve_detail(int $campaignId, int $tenantId): array
 {
     [$periodClause, $periodParams] = report_detail_period();
+    $campaign = Db::one('SELECT closed_at FROM campaigns WHERE id=? AND tenant_id=?', [$campaignId, $tenantId]);
+    if ($campaign !== null && $campaign['closed_at'] !== null && $periodClause !== '') {
+        json_error('クローズ済みレポートは期間を変更できません', 409);
+    }
     if ($periodClause !== '') {
         return report_compute_detail($campaignId, $tenantId, $periodClause, $periodParams);
     }
@@ -528,7 +559,7 @@ function report_handle_detail(): never
         json_error('campaign_id は必須です', 400);
     }
     $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
-    assert_campaign_owned($campaignId, $tenantId);
+    $campaign = assert_campaign_owned($campaignId, $tenantId);
 
     // test_filter: prod(既定,本番のみ) / test(テストのみ) / all(全部)。
     // all配信をテストパターンで送った場合、テスト対象者の開封をビーコン(コンテンツ)別に
@@ -541,6 +572,9 @@ function report_handle_detail(): never
     // スナップショットは本番(prod)定義で確定するため、test/all の探索表示もリアルタイム集計を使う。
     $hasPeriod = (isset($_GET['start_date']) && $_GET['start_date'] !== '')
         || (isset($_GET['end_date']) && $_GET['end_date'] !== '');
+    if ($campaign['closed_at'] !== null && ($hasPeriod || $testFilter !== 'prod')) {
+        json_error('クローズ済みレポートは確定値のみ表示できます', 409);
+    }
     if (!$hasPeriod && $testFilter === 'prod') {
         $snap = report_snapshot_of($campaignId, $tenantId);
         if ($snap !== null) {
@@ -549,6 +583,8 @@ function report_handle_detail(): never
                 report_detail_postprocess($data, $campaignId);
                 $data['success'] = true;
                 $data['is_committed'] = true;
+                $data['is_closed'] = $campaign['closed_at'] !== null;
+                $data['closed_at'] = $campaign['closed_at'];
                 $data['committed_at'] = $snap['committed_at'];
                 json_out($data);
             }
@@ -559,6 +595,7 @@ function report_handle_detail(): never
     $data = report_compute_detail($campaignId, $tenantId, $periodClause, $periodParams, $testFilter);
     $data['success'] = true;
     $data['is_committed'] = false;
+    $data['is_closed'] = false;
     json_out($data);
 }
 
@@ -723,34 +760,48 @@ function report_handle_commit(): never
         json_error('campaign_id は必須です', 400);
     }
     $tenantId = effective_tenant_id($user, isset($body['tenant_id']) ? (int) $body['tenant_id'] : null);
-    assert_campaign_owned($campaignId, $tenantId);
-
+    $campaign = assert_campaign_owned($campaignId, $tenantId);
     $force = !empty($body['force']);
-    $existing = report_snapshot_of($campaignId, $tenantId);
-    if ($existing !== null && !$force) {
+    if ($campaign['closed_at'] !== null) {
+        json_error('クローズ済みのキャンペーンは再確定できません', 409);
+    }
+    if (report_snapshot_of($campaignId, $tenantId) !== null && !$force) {
         json_error('このレポートは既に確定済みです（値は固定されています）', 409);
     }
-
     // 全期間(期間フィルタなし)の集計を確定値とする。
     $payload = report_compute_detail($campaignId, $tenantId, '', []);
+    $payload['campaign_summary'] = report_summary_from_counts(report_summary_row($campaignId, $tenantId));
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
     if ($json === false) {
         json_error('スナップショットの生成に失敗しました', 500);
     }
-
-    if ($existing !== null) {
-        Db::run(
-            'UPDATE campaign_report_snapshots
-             SET payload = ?, committed_at = datetime(\'now\',\'localtime\'), committed_by = ?
-             WHERE campaign_id = ? AND tenant_id = ?',
-            [$json, $user['id'], $campaignId, $tenantId]
-        );
-    } else {
-        Db::run(
-            'INSERT INTO campaign_report_snapshots (campaign_id, tenant_id, payload, committed_by)
-             VALUES (?, ?, ?, ?)',
-            [$campaignId, $tenantId, $json, $user['id']]
-        );
+    try {
+        Db::txImmediate(static function () use ($campaignId, $tenantId, $force, $json, $user): void {
+            $campaign = Db::one('SELECT closed_at FROM campaigns WHERE id=? AND tenant_id=? AND deleted_at IS NULL', [$campaignId, $tenantId]);
+            if ($campaign === null || $campaign['closed_at'] !== null) {
+                throw new DomainException('クローズ済みのキャンペーンは再確定できません');
+            }
+            $existing = report_snapshot_of($campaignId, $tenantId);
+            if ($existing !== null && !$force) {
+                throw new DomainException('このレポートは既に確定済みです（値は固定されています）');
+            }
+            if ($existing !== null) {
+                Db::run(
+                    'UPDATE campaign_report_snapshots
+                     SET payload = ?, committed_at = datetime(\'now\',\'localtime\'), committed_by = ?
+                     WHERE campaign_id = ? AND tenant_id = ?',
+                    [$json, $user['id'], $campaignId, $tenantId]
+                );
+            } else {
+                Db::run(
+                    'INSERT INTO campaign_report_snapshots (campaign_id, tenant_id, payload, committed_by)
+                     VALUES (?, ?, ?, ?)',
+                    [$campaignId, $tenantId, $json, $user['id']]
+                );
+            }
+        });
+    } catch (DomainException $error) {
+        json_error($error->getMessage(), 409);
     }
     audit('report.commit', 'campaign_id=' . $campaignId . ($force ? ',force=1' : ''));
     json_out(['success' => true, 'is_committed' => true]);
@@ -768,9 +819,67 @@ function report_handle_uncommit(): never
     }
     $tenantId = effective_tenant_id($user, isset($body['tenant_id']) ? (int) $body['tenant_id'] : null);
     assert_campaign_owned($campaignId, $tenantId);
-    Db::run('DELETE FROM campaign_report_snapshots WHERE campaign_id = ? AND tenant_id = ?', [$campaignId, $tenantId]);
+    try {
+        Db::txImmediate(static function () use ($campaignId, $tenantId): void {
+            $campaign = Db::one('SELECT closed_at FROM campaigns WHERE id=? AND tenant_id=? AND deleted_at IS NULL', [$campaignId, $tenantId]);
+            if ($campaign === null || $campaign['closed_at'] !== null) {
+                throw new DomainException('クローズ済みのキャンペーンは確定解除できません');
+            }
+            Db::run('DELETE FROM campaign_report_snapshots WHERE campaign_id = ? AND tenant_id = ?', [$campaignId, $tenantId]);
+        });
+    } catch (DomainException $error) {
+        json_error($error->getMessage(), 409);
+    }
     audit('report.uncommit', 'campaign_id=' . $campaignId);
     json_out(['success' => true, 'is_committed' => false]);
+}
+
+/** 確定済みキャンペーンを閉じ、入力本文だけを原子的に消去する。統計は保持する。 */
+function report_handle_close(): never
+{
+    $user = require_role('superadmin');
+    tet2_require_csrf();
+    $body = report_json_body();
+    $campaignId = isset($body['campaign_id']) ? (int) $body['campaign_id'] : report_query_int('campaign_id');
+    if ($campaignId === null || $campaignId < 1) {
+        json_error('campaign_id は必須です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($body['tenant_id']) ? (int) $body['tenant_id'] : null);
+    assert_campaign_owned($campaignId, $tenantId);
+    try {
+        $result = Db::txImmediate(static function () use ($campaignId, $tenantId, $user): array {
+            $campaign = Db::one('SELECT status, closed_at FROM campaigns WHERE id=? AND tenant_id=? AND deleted_at IS NULL', [$campaignId, $tenantId]);
+            if ($campaign === null || $campaign['closed_at'] !== null) {
+                throw new DomainException('キャンペーンは既にクローズ済みです');
+            }
+            if (!in_array((string) $campaign['status'], ['done', 'cancelled'], true)) {
+                throw new DomainException('配信終了または中止済みのキャンペーンのみクローズできます');
+            }
+            $pending = Db::one("SELECT 1 FROM send_schedule WHERE campaign_id=? AND status NOT IN ('done','failed','cancelled') LIMIT 1", [$campaignId]);
+            if ($pending !== null) {
+                throw new DomainException('未処理の送信予定が残っています');
+            }
+            $snapshot = report_snapshot_of($campaignId, $tenantId);
+            $payload = $snapshot === null ? null : json_decode((string) $snapshot['payload'], true);
+            if (!is_array($payload) || !isset($payload['summary']) || !is_array($payload['summary'])) {
+                throw new DomainException('レポート確定後にクローズしてください');
+            }
+            if (!isset($payload['campaign_summary'])) {
+                // 旧版の確定snapshotには一覧用サマリーがない。本文消去前に一度だけ補完する。
+                $payload['campaign_summary'] = report_closed_summary($snapshot, report_summary_row($campaignId, $tenantId));
+                Db::run('UPDATE campaign_report_snapshots SET payload=? WHERE campaign_id=? AND tenant_id=?',
+                    [json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), $campaignId, $tenantId]);
+            }
+            Db::run("UPDATE campaigns SET closed_at=datetime('now','localtime'), closed_by=? WHERE id=? AND tenant_id=? AND closed_at IS NULL", [$user['id'], $campaignId, $tenantId]);
+            $purged = Db::run('DELETE FROM credential_captures WHERE campaign_id=? AND tenant_id=?', [$campaignId, $tenantId]);
+            $closed = Db::one('SELECT closed_at FROM campaigns WHERE id=? AND tenant_id=?', [$campaignId, $tenantId]);
+            return ['closed_at' => $closed['closed_at'], 'purged_captures' => $purged];
+        });
+    } catch (DomainException $error) {
+        json_error($error->getMessage(), 409);
+    }
+    audit('campaign.close', 'campaign_id=' . $campaignId . ',purged_captures=' . $result['purged_captures']);
+    json_out(['success' => true, 'is_closed' => true, 'closed_at' => $result['closed_at'], 'purged_captures' => $result['purged_captures']]);
 }
 
 /**
@@ -1292,6 +1401,9 @@ try {
     }
     if ($action === 'uncommit' && $method === 'POST') {
         report_handle_uncommit();
+    }
+    if ($action === 'close' && $method === 'POST') {
+        report_handle_close();
     }
     if ($action === 'export_xlsx' && $method === 'GET') {
         report_handle_export_xlsx();

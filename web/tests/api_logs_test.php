@@ -131,8 +131,8 @@ Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, oc
 
 // raw パース関数の単体。
 $parsed = training_log_parse_raw($authRaw);
-check($parsed['email'] === 'input@ex.com', 'training_log_parse_raw: 入力Email');
-check($parsed['password'] === 'pw123', 'training_log_parse_raw: Password');
+check($parsed['email'] === '', 'training_log_parse_raw: 過去の入力Emailを再表示しない');
+check($parsed['password'] === '', 'training_log_parse_raw: 過去の入力値を再表示しない');
 check($parsed['ip'] === '203.0.113.5', 'training_log_parse_raw: IP');
 check($parsed['country'] === 'Japan (JP)', 'training_log_parse_raw: 国');
 check($parsed['isp'] === 'TestISP', 'training_log_parse_raw: ISP');
@@ -166,7 +166,7 @@ check(count($rows) === 3, '訓練結果ログ明細: auth1 + click2 = 3行');
 $authRow = null;
 foreach ($rows as $rr) { if ($rr['type'] === 'box') { $authRow = $rr; break; } }
 check($authRow !== null, '明細: box(認証)行が存在');
-check($authRow['email'] === 'input@ex.com' && $authRow['ip'] === '203.0.113.5', '明細: 認証行に入力Email/IP');
+check($authRow['email'] === '' && $authRow['password'] === '' && $authRow['ip'] === '203.0.113.5', '明細: 認証行の入力値は非表示でIPは維持');
 check($authRow['fullname'] === '訓練 太郎' && $authRow['company'] === 'テスト社', '明細: 乱数→対象者情報(氏名/会社)を結合');
 check($authRow['duplicate'] === true && $authRow['duplicate_count'] === 3, '明細: 同一乱数3件で重複フラグ');
 

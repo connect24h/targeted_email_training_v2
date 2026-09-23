@@ -18,6 +18,21 @@ TET2_BIN_FILES=(
   training_config.py
 )
 
+# 新規実装をcommit前に合成環境へリハーサルする際も、既知の必須依存だけは落とさない。
+# 任意の未追跡ファイルを自動配備対象に広げない。
+TET2_WEB_EXTRA_FILES=(
+  assets/context-help.js
+  assets/campaign-workspace.js
+  assets/campaign-editor-steps.js
+  api/credential_capture.php
+  api/credential_captures.php
+  db/schema-credential-captures.sql
+  db/schema-template-snapshots.sql
+  lib/CredentialVault.php
+  lib/CampaignPreflight.php
+  lib/CampaignLaunchService.php
+)
+
 tet2_deploy_mode() {
   local category=$1
   local relative=$2
@@ -40,7 +55,9 @@ tet2_scope_includes() {
     all) return 0 ;;
     campaign-safety)
       case "$category/$relative" in
-        web/api/campaign_launch.php|web/lib/CampaignLauncher.php|web/lib/PipelineRunner.php|web/lib/Scheduler.php|\
+        web/api/campaign_launch.php|web/db/migrate.php|web/db/MigrationRunner.php|\
+        web/db/schema-template-snapshots.sql|web/lib/CampaignLauncher.php|web/lib/CampaignPreflight.php|\
+        web/lib/CampaignLaunchService.php|web/lib/PipelineRunner.php|web/lib/Scheduler.php|\
         bin/__BeaconMst.png|bin/create_beacon_files.py|bin/send_email.py|bin/tet2-worker.py) return 0 ;;
         *) return 1 ;;
       esac
@@ -87,6 +104,18 @@ tet2_write_mappings() {
   done < <(git -C "$TET2_REPO_ROOT" ls-files -z -- web)
 
   local relative
+  for relative in "${TET2_WEB_EXTRA_FILES[@]}"; do
+    tet2_scope_includes web "$relative" || continue
+    if git -C "$TET2_REPO_ROOT" ls-files --error-unmatch -- "web/$relative" >/dev/null 2>&1; then
+      continue
+    fi
+    if [[ ! -f $TET2_REPO_ROOT/web/$relative ]]; then
+      echo "必須Webファイルが見つかりません: $relative" >&2
+      return 1
+    fi
+    printf '%s\tweb\t%s\t%s\n' \
+      "$TET2_REPO_ROOT/web/$relative" "$relative" "$TET2_WEB_DEST/$relative" >> "$output"
+  done
   for relative in "${TET2_BIN_FILES[@]}"; do
     tet2_scope_includes bin "$relative" || continue
     printf '%s\tbin\t%s\t%s\n' \

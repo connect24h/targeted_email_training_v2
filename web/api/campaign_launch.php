@@ -7,6 +7,7 @@
 declare(strict_types=1);
 require __DIR__ . '/../lib/bootstrap.php';
 require_once __DIR__ . '/../lib/CampaignLauncher.php';
+require_once __DIR__ . '/../lib/CampaignLaunchService.php';
 
 try {
     $actor  = require_role('operator');
@@ -26,37 +27,18 @@ try {
     $tenantId = effective_tenant_id($actor, isset($body['tenant_id']) && is_int($body['tenant_id']) ? $body['tenant_id'] : null);
     $campaign = assert_campaign_owned($campaignId, $tenantId);
 
+    if ($action === 'preflight') {
+        $review = CampaignPreflight::inspect($campaignId, $tenantId);
+        audit('campaign.preflight', 'campaign_id=' . $campaignId . ',ready=' . (int) $review['can_launch']);
+        json_out(['success' => true, 'preflight' => $review]);
+    }
+
     if ($action === 'launch') {
-        if (!in_array($campaign['status'], ['draft', 'scheduled'], true)) {
-            json_error('このキャンペーンは開始できません（status=' . $campaign['status'] . '）', 409);
-        }
-        // 送信日時が未設定だと Scheduler が例外→500 になるため、事前に分かりやすく弾く。
-        // 複製直後は start_at/end_at が空(過去日時の引き継ぎを避ける設計)なので、ここで promotion を促す。
-        if (trim((string) ($campaign['start_at'] ?? '')) === '' || trim((string) ($campaign['end_at'] ?? '')) === '') {
-            json_error('送信日時（開始・終了）が未設定です。「修正」から開始日時・終了日時を設定してください', 400);
-        }
-        // テスト送信でない本番キャンペーンは、ここでは追加の承認を要する運用も可能（今回は is_test を尊重）。
-        // 前処理をこの launch 時点で1回だけ実行する(CSV・ビーコン・リンク・添付を生成)。
-        // 開始日時が来たら worker は送信のみ行う。前処理失敗はここで即座にユーザーへ返す(早期発見)。
-        // launch 後に対象者/テンプレを変えた場合は、下書きに戻して再launchで作り直す(手動反映)。
-        [$genOk, $genErr, $count] = CampaignLauncher::prepare(
-            $campaignId,
-            (string) ($campaign['data_dir'] ?? '')
-        );
-        if (!$genOk) {
-            if ($genErr === '対象者がいません') {
-                json_error($genErr, 400);
-            }
-            json_error('送信データの生成に失敗しました: ' . $genErr, 500);
-        }
-        // scheduleをworkerから見える状態へ変える前に、前回の停止フラグを解除する。
-        $flag = rtrim((string) $campaign['data_dir'], '/') . '/stop_sending.flag';
-        if ($flag !== '/stop_sending.flag' && is_file($flag) && !unlink($flag)) {
-            json_error('停止フラグを解除できないため開始を中止しました', 500);
-        }
-        Db::run("UPDATE campaigns SET status='scheduled' WHERE id=?", [$campaignId]);
-        audit('campaign.launch', 'campaign_id=' . $campaignId . ',batches=' . $count);
-        json_out(['success' => true, 'batches' => $count, 'status' => 'scheduled']);
+        $revision = isset($body['revision']) && is_string($body['revision']) ? $body['revision'] : '';
+        $result = CampaignLaunchService::launch($campaignId, $tenantId, $revision);
+        if (!$result['ok']) json_error($result['error'], $result['status']);
+        audit('campaign.launch', 'campaign_id=' . $campaignId . ',batches=' . $result['batches']);
+        json_out(['success' => true, 'batches' => $result['batches'], 'status' => 'scheduled']);
     }
 
     if ($action === 'stop') {

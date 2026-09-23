@@ -124,6 +124,54 @@ class WorkerClaimTest(unittest.TestCase):
         self.assertEqual(draft_status, "queued")
 
 
+class WorkerPartialFailureTest(unittest.TestCase):
+    def test_should_sync_accepted_rows_before_pausing_failed_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "list.csv").write_text(
+                "乱数列,送信フラグ,メールアドレス（会社）\n"
+                "0000000001,1,first@example.test\n"
+                "0000000002,0,second@example.test\n",
+                encoding="utf-8",
+            )
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.executescript(
+                    """
+                    CREATE TABLE campaigns (id INTEGER PRIMARY KEY, status TEXT);
+                    CREATE TABLE send_schedule (
+                        id INTEGER PRIMARY KEY, campaign_id INTEGER, status TEXT,
+                        attempts INTEGER DEFAULT 0
+                    );
+                    CREATE TABLE campaign_targets (
+                        campaign_id INTEGER, tracking_id TEXT, send_status TEXT, sent_at TEXT
+                    );
+                    CREATE TABLE delivery_log (
+                        campaign_id INTEGER, tracking_id TEXT, to_email TEXT,
+                        result TEXT, smtp_message TEXT
+                    );
+                    INSERT INTO campaigns VALUES (82, 'running');
+                    INSERT INTO send_schedule VALUES (32, 82, 'running', 0);
+                    INSERT INTO campaign_targets VALUES
+                        (82, '0000000001', 'pending', NULL),
+                        (82, '0000000002', 'pending', NULL);
+                    """
+                )
+                batch = conn.execute("SELECT * FROM send_schedule WHERE id=32").fetchone()
+                tet2_worker.finish_batch(conn, {
+                    "proc": mock.Mock(returncode=1), "batch": batch, "cid": 82,
+                    "data_dir": temp_dir, "batch_no": 1,
+                })
+                rows = conn.execute(
+                    "SELECT tracking_id, send_status FROM campaign_targets ORDER BY tracking_id"
+                ).fetchall()
+                self.assertEqual([row["send_status"] for row in rows], ["sent", "pending"])
+                self.assertEqual(conn.execute("SELECT status FROM campaigns WHERE id=82").fetchone()[0], "paused")
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM delivery_log").fetchone()[0], 1)
+            finally:
+                conn.close()
+
+
 class WorkerPipeDeadlockTest(unittest.TestCase):
     """送信プロセスの stdout をパイプで受けるとバッファ満杯で止まる回帰の防止。
 
@@ -175,6 +223,7 @@ class WorkerPipeDeadlockTest(unittest.TestCase):
                 return None
 
         def fake_popen(args, **kwargs):
+            captured["args"] = args
             captured["kwargs"] = kwargs
             return FakeProc()
 
@@ -188,6 +237,7 @@ class WorkerPipeDeadlockTest(unittest.TestCase):
         self.assertEqual(captured["kwargs"].get("stdout"), tet2_worker.subprocess.DEVNULL)
         # stderr はパイプではなくファイルハンドルへ(バッファ上限が無く詰まらない)
         self.assertIsNot(captured["kwargs"].get("stderr"), tet2_worker.subprocess.PIPE)
+        self.assertEqual(captured["args"][captured["args"].index("--campaign-id") + 1], "1")
 
 
 class BusinessWindowHolidayTest(unittest.TestCase):

@@ -190,6 +190,7 @@ def start_batch(conn, batch):
         "--interval", interval,
         "--start-koban", str(batch["koban_from"]),
         "--end-koban", str(batch["koban_to"]),
+        "--campaign-id", str(cid),
         "--auto-pause",
     ]
     log(f"送信開始 campaign={cid} batch={batch['batch_no']} koban {batch['koban_from']}-{batch['koban_to']}")
@@ -259,6 +260,13 @@ def finish_batch(conn, job):
                 stderr = f.read()
         except Exception:  # noqa: BLE001
             pass
+        # 途中停止時も、CSVにSMTP受理済みフラグが残った行は先にDBへ反映する。
+        # 反映不能でも自動再送せず、キャンペーンは必ず一時停止する。
+        try:
+            _sync_send_status(conn, cid, data_dir)
+            _log_delivery(conn, cid, data_dir)
+        except Exception as error:  # noqa: BLE001
+            log(f"送信済み行の同期に失敗 campaign={cid}: {error}")
         _fail(conn, batch, f"send_email 失敗(rc={rc}): {stderr.decode('utf-8', 'ignore')[:300]}")
         return
 

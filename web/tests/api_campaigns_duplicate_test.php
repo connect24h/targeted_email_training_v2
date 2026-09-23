@@ -64,13 +64,15 @@ function duplicateActor(): array
 echo "=== campaigns duplicate API ===\n";
 
 $sourceId = apiDuplicateSource($subjectId, $bodyId, $phishId);
+Db::run('UPDATE campaigns SET credential_capture_approval_ref=? WHERE id=?', ['synthetic-source-approval', $sourceId]);
 $response = call_handler('campaigns_handle_duplicate', ['id' => $sourceId], 'operator', [duplicateActor()]);
 check($response['code'] === 200, '既存duplicate APIのstatus codeを維持する');
 $draftId = (int) ($response['payload']['campaign']['id'] ?? 0);
 check($draftId > 0 && $draftId !== $sourceId, '複製先IDを返す');
-$draft = Db::one('SELECT status, start_at, end_at, data_dir FROM campaigns WHERE id = ?', [$draftId]);
+$draft = Db::one('SELECT status, start_at, end_at, data_dir, credential_capture_approval_ref FROM campaigns WHERE id = ?', [$draftId]);
 check($draft !== null && $draft['status'] === 'draft', '複製先はdraft');
 check($draft['start_at'] === null && $draft['end_at'] === null, '配信日時は未設定');
+check($draft['credential_capture_approval_ref'] === null, '複製先へ顧客承認を引き継がない');
 check(str_ends_with((string) $draft['data_dir'], '/campaign_' . $draftId), '複製先専用data_dirを返す');
 $rows = Db::all('SELECT tracking_id, send_status, from_address FROM campaign_targets WHERE campaign_id = ?', [$draftId]);
 check(count($rows) === 2, '元キャンペーンの対象者数を維持する');

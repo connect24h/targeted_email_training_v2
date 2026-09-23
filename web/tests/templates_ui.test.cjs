@@ -37,3 +37,23 @@ test('scenario list numbers every visible row and preserves unpaired templates',
   assert.ok(!nodes['#templatesBody'].innerHTML.includes(hostileKey));
   assert.ok(nodes['#templatesBody'].innerHTML.includes('scenarioViewer(this.dataset.scenarioKey)'));
 });
+
+test('scenario search keeps the subject and body paired when either name matches', () => {
+  const script = fs.readFileSync(`${__dirname}/../app.js`, 'utf8');
+  const start = script.indexOf('function templatesMatchingSearch(');
+  const end = script.indexOf('async function renderTemplates(', start);
+  const context = vm.createContext({});
+  vm.runInContext(script.slice(start, end), context);
+  const templates = [
+    { id: 1, kind: 'subject', name: '採用通知', scenario_key: 'recruit' },
+    { id: 2, kind: 'body', name: '採用本文', scenario_key: 'recruit' },
+    { id: 3, kind: 'subject', name: '経費精算', scenario_key: 'expense' },
+    { id: 4, kind: 'body', name: '経費本文', scenario_key: 'expense' },
+    { id: 5, kind: 'phish_login', name: 'Microsoft 365認証' },
+  ];
+  assert.deepEqual(Array.from(context.templatesMatchingSearch(templates, '  採用本文  '), (t) => t.id), [1, 2]);
+  assert.deepEqual(Array.from(context.templatesMatchingSearch(templates, '採用通知'), (t) => t.id), [1, 2]);
+  assert.deepEqual(Array.from(context.templatesMatchingSearch(templates, 'microsoft'), (t) => t.id), [5]);
+  assert.equal(context.templatesMatchingSearch(templates, '存在しない').length, 0);
+  assert.equal(templates.length, 5, '原リストを変更しない');
+});

@@ -6,7 +6,7 @@
   <title>TET v2 — 標的型メール訓練システム</title>
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=7196335a" rel="stylesheet">
+  <link href="assets/app.css?v=6205bfdd" rel="stylesheet">
 </head>
 <body>
 
@@ -45,6 +45,7 @@
     </div>
     <div class="d-flex align-items-center gap-2">
       <select id="tenantSwitcher" class="form-select form-select-sm d-none" style="width:auto"></select>
+      <button type="button" class="btn btn-sm btn-outline-light" id="helpToggle" aria-controls="contextHelp" aria-expanded="false"><i class="bi bi-question-circle me-1"></i>HELP</button>
       <span class="text-light small d-none d-sm-inline" id="userLabel"></span>
       <button class="btn btn-sm btn-outline-light" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
     </div>
@@ -53,22 +54,27 @@
   <div class="app-body">
     <aside class="app-sidebar" id="sidebar">
       <ul class="nav flex-column">
-        <li><a class="nav-link" data-view="dashboard"><i class="bi bi-speedometer2"></i>ダッシュボード</a></li>
-        <li><a class="nav-link" data-view="campaigns"><i class="bi bi-envelope-paper"></i>キャンペーン</a></li>
+        <li><a class="nav-link" data-view="dashboard"><i class="bi bi-speedometer2"></i>運用ホーム</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">訓練</li>
+        <li><a class="nav-link" data-view="campaigns"><i class="bi bi-envelope-paper"></i>単発キャンペーン</a></li>
         <li><a class="nav-link" data-view="campaignAutomations"><i class="bi bi-calendar2-repeat"></i>定期キャンペーン</a></li>
-        <li><a class="nav-link" data-view="reports"><i class="bi bi-bar-chart"></i>レポート</a></li>
-        <li><a class="nav-link" data-view="riskDashboard"><i class="bi bi-shield-exclamation"></i>リスク</a></li>
-        <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
         <li><a class="nav-link" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
-        <li><a class="nav-link" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
-        <li><a class="nav-link" data-view="targetStats"><i class="bi bi-pie-chart"></i>対象者集計</a></li>
-        <li><a class="nav-link" data-view="masters"><i class="bi bi-window"></i>マスタ管理</a></li>
-        <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>ログ管理</a></li>
-        <li data-perm="operator"><a class="nav-link" data-view="suspiciousMails"><i class="bi bi-envelope-exclamation"></i>不審メール</a></li>
-        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">セキュリティ教育</li>
+        <li><a class="nav-link" data-view="masters"><i class="bi bi-window"></i>到達画面</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">教育</li>
         <li><a class="nav-link" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
         <li><a class="nav-link" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
         <li><a class="nav-link" data-view="eduReport"><i class="bi bi-mortarboard"></i>教育レポート</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">報告受付</li>
+        <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>訓練報告・ログ</a></li>
+        <li data-perm="operator"><a class="nav-link" data-view="suspiciousMails"><i class="bi bi-envelope-exclamation"></i>不審メール</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">対象者・組織</li>
+        <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
+        <li><a class="nav-link" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">成果・レポート</li>
+        <li><a class="nav-link" data-view="reports"><i class="bi bi-bar-chart"></i>訓練レポート</a></li>
+        <li><a class="nav-link" data-view="riskDashboard"><i class="bi bi-shield-exclamation"></i>支援優先度</a></li>
+        <li><a class="nav-link" data-view="targetStats"><i class="bi bi-pie-chart"></i>対象者集計</a></li>
+        <li class="sidebar-section text-muted small px-3 mt-3 mb-1">設定</li>
         <li><a class="nav-link" data-view="users"><i class="bi bi-person-badge"></i>ユーザ管理</a></li>
         <li data-role="superadmin"><a class="nav-link" data-view="tenants"><i class="bi bi-building"></i>テナント管理</a></li>
       </ul>
@@ -80,12 +86,14 @@
       <!-- ダッシュボード -->
       <section data-panel="dashboard" class="view-panel">
         <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-speedometer2 me-1"></i>ダッシュボード</h5>
+          <h5 class="mb-0"><i class="bi bi-speedometer2 me-1"></i>運用ホーム</h5>
           <div id="dashFilterBar"></div>
         </div>
+        <h6 class="mb-2">要対応と予定</h6>
+        <div id="dashWorkItems" class="mb-4" aria-live="polite"></div>
         <div class="row g-3 mb-4" id="kpiRow"></div>
         <div class="card">
-          <div class="card-header">キャンペーン別 反応状況</div>
+          <div class="card-header">キャンペーン別 対象者数（延べ人数）</div>
           <div class="card-body"><canvas id="dashChart" height="90"></canvas></div>
         </div>
       </section>
@@ -104,6 +112,11 @@
           <thead id="campaignsHead"><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr></thead>
           <tbody id="campaignsBody"></tbody>
         </table></div>
+      </section>
+
+      <!-- キャンペーン配信前確認 -->
+      <section data-panel="campaignWorkspace" class="view-panel d-none">
+        <div id="campaignWorkspaceRoot" aria-live="polite"></div>
       </section>
 
       <!-- 定期キャンペーン -->
@@ -191,6 +204,7 @@
                     <button class="btn btn-sm btn-outline-secondary" id="reportPeriodClearBtn">クリア</button>
                     <button class="btn btn-sm btn-success" data-perm="operator" id="reportCommitBtn"><i class="bi bi-lock"></i> 確定</button>
                     <button class="btn btn-sm btn-outline-danger d-none" data-perm="tenant_admin" id="reportUncommitBtn"><i class="bi bi-unlock"></i> 確定解除</button>
+                    <button class="btn btn-sm btn-outline-danger d-none" data-perm="superadmin" id="reportCloseBtn" title="確定統計を保持し、保存済み入力本文を消去します"><i class="bi bi-archive"></i> クローズ</button>
                   </div>
                 </div>
                 <div class="card-body">
@@ -270,6 +284,10 @@
             <button class="btn btn-primary btn-sm" data-perm="operator" id="newScenarioBtn"><i class="bi bi-plus-lg"></i> 新規シナリオ（件名＋本文）</button>
             <button class="btn btn-outline-primary btn-sm" data-perm="operator" id="newTemplateBtn"><i class="bi bi-plus-lg"></i> 新規（単体）</button>
           </div>
+        </div>
+        <div class="mb-3" style="max-width: 32rem">
+          <label class="form-label" for="tplSearch">シナリオ・テンプレートを検索</label>
+          <input class="form-control" id="tplSearch" type="search" autocomplete="off" aria-controls="templatesBody" placeholder="シナリオ名・テンプレート名で検索">
         </div>
         <ul class="nav nav-pills mb-3" id="tplKindTabs"></ul>
         <div class="table-responsive"><table class="table table-hover align-middle">
@@ -413,6 +431,7 @@
           <li class="nav-item"><a class="nav-link" data-log="schedule" href="#">スケジュール</a></li>
           <li class="nav-item"><a class="nav-link" data-log="training_results" href="#">訓練結果</a></li>
           <li class="nav-item"><a class="nav-link" data-log="training_log_detail" href="#">訓練結果ログ(明細)</a></li>
+          <li class="nav-item" data-perm="superadmin"><a class="nav-link" data-log="credential_captures" href="#">入力本文（管理者限定）</a></li>
           <li class="nav-item"><a class="nav-link" data-log="campaign_files" href="#">リンク/ビーコンファイル</a></li>
           <li class="nav-item" data-perm="operator"><a class="nav-link" data-log="report_mail" href="#">報告メール</a></li>
           <li class="nav-item" data-perm="operator"><a class="nav-link" data-log="audit" href="#">操作ログ</a></li>
@@ -469,6 +488,15 @@
             <button class="btn btn-outline-secondary" id="logsNextBtn">次 <i class="bi bi-chevron-right"></i></button>
           </div>
         </div>
+        <dialog id="credentialRevealDialog" class="credential-dialog" aria-labelledby="credentialRevealTitle">
+          <div class="credential-dialog-header">
+            <span class="credential-dialog-kicker">閲覧時だけ開封</span>
+            <h2 id="credentialRevealTitle">訓練で入力された本文</h2>
+            <p>システム管理者限定。閲覧操作は監査されます。画面を閉じると表示内容を消去します。</p>
+          </div>
+          <pre id="credentialRevealText" class="credential-dialog-body"></pre>
+          <form method="dialog" class="credential-dialog-footer"><button type="submit" class="btn btn-primary">閉じる</button></form>
+        </dialog>
       </section>
 
       <!-- 教育配信 -->
@@ -620,6 +648,15 @@
   </div>
 </div>
 
+<aside id="contextHelp" class="context-help d-none" aria-label="この画面のHELP">
+  <div class="context-help-header"><strong>HELP</strong><button type="button" class="btn-close" id="helpClose" aria-label="HELPを閉じる"></button></div>
+  <label class="form-label small" for="helpSearch">記事を検索</label>
+  <input id="helpSearch" class="form-control form-control-sm mb-3" type="search" data-help-search placeholder="用語・操作で検索">
+  <div class="small text-muted mb-2">この画面に関連する記事を先に表示します。</div>
+  <nav data-help-list aria-label="HELP記事一覧"></nav>
+  <article class="context-help-article"><h6 data-help-title></h6><div data-help-body></div></article>
+</aside>
+
 <!-- 汎用モーダル -->
 <div class="modal fade" id="appModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-scrollable"><div class="modal-content">
@@ -650,7 +687,10 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=950ea610"></script>
+<script src="app.js?v=9edb15ca"></script>
+<script src="assets/campaign-workspace.js?v=5a18190c"></script>
+<script src="assets/campaign-editor-steps.js?v=ffb3eb27"></script>
+<script src="assets/context-help.js?v=f0af67ac"></script>
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 <script src="assets/suspicious-mails.js?v=54af2ebb"></script>
