@@ -64,6 +64,7 @@
         <li><a class="nav-link" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
         <li><a class="nav-link" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
         <li><a class="nav-link" data-view="eduReport"><i class="bi bi-mortarboard"></i>教育レポート</a></li>
+        <li><a class="nav-link" data-view="surveys"><i class="bi bi-ui-checks"></i>アンケート</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">報告受付</li>
         <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>訓練報告・ログ</a></li>
         <li data-perm="operator"><a class="nav-link" data-view="suspiciousMails"><i class="bi bi-envelope-exclamation"></i>不審メール</a></li>
@@ -373,6 +374,31 @@
       </section>
 
       <!-- ログ管理 (P8) -->
+      <section data-panel="surveys" class="view-panel d-none" id="surveysPanel">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h5 class="mb-0"><i class="bi bi-ui-checks me-1"></i>アンケート</h5>
+          <div class="d-flex gap-2 align-items-center flex-wrap" data-perm="operator">
+            <select class="form-select form-select-sm" id="svTemplateSelect" style="width:auto" aria-label="雛形"></select>
+            <button class="btn btn-outline-primary btn-sm" id="svFromTemplateBtn"><i class="bi bi-files"></i> 雛形から作成</button>
+            <button class="btn btn-primary btn-sm" id="svNewBtn"><i class="bi bi-plus"></i> 新規作成</button>
+          </div>
+        </div>
+        <div id="svMailNotice" class="alert alert-secondary small py-2"></div>
+        <div class="table-responsive mb-4">
+          <table class="table table-sm align-middle">
+            <thead><tr><th>題名</th><th>状態</th><th>回答者</th><th class="text-end">設問</th><th class="text-end">配信</th><th>更新</th><th>操作</th></tr></thead>
+            <tbody id="svBody"></tbody>
+          </table>
+        </div>
+        <h6>配信</h6>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead><tr><th>配信名</th><th>状態</th><th>締切</th><th class="text-end">回答 / 対象</th><th>案内</th><th>操作</th></tr></thead>
+            <tbody id="svDeliveryBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section data-panel="suspiciousMails" class="view-panel d-none">
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
           <h5 class="mb-0"><i class="bi bi-envelope-exclamation me-1"></i>不審メール</h5>
@@ -694,6 +720,7 @@
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 <script src="assets/suspicious-mails.js?v=54af2ebb"></script>
+<script src="assets/surveys.js?v=80becb08"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
 </body>
 </html>

@@ -34,6 +34,7 @@ ASSETS=(
   assets/context-help.js
   assets/campaign-workspace.js
   assets/campaign-editor-steps.js
+  assets/surveys.js
 )
 
 asset_hash() {

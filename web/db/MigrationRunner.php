@@ -21,6 +21,7 @@ final class MigrationRunner
         '20260923-template-snapshots',
         '20260923-credential-captures',
         '20260923-campaign-close',
+        '20260925-surveys',
     ];
 
     /**
@@ -193,6 +194,11 @@ final class MigrationRunner
         }
         if ($version === '20260923-campaign-close') {
             $this->ensureAdditiveColumns($pdo);
+            return;
+        }
+        if ($version === '20260925-surveys') {
+            // アンケート(U7)。既存テーブルには一切触れない。
+            $pdo->exec($this->readSchema('schema-survey.sql'));
             return;
         }
         if ($version === '20260819-attachment-filename-prefix') {

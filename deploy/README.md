@@ -45,6 +45,10 @@ applyはbackup IDを出力する。migrationとservice操作は別工程のま�
 
 収集は既定で無効。システム管理者が顧客承認の参照番号を`POST /tet2/api/credential_captures.php?action=approve`へ`tenant_id`・`campaign_id`・`approval_ref`とCSRF tokenで登録したキャンペーンだけ、新規生成するHTTPSの偽ログインページが本文を送る。既存生成ページは自動更新されない。閲覧はログ管理の「入力本文（管理者限定）」と同APIの`list`/`reveal`をシステム管理者に限定し、revealはPOST+CSRF・監査付き。顧客管理者には開放しない。`20260923-campaign-close` migrationもコード配備前に適用する。システム管理者は配信終了・中止後にレポートを確定し、訓練レポートの「クローズ」で暗号化本文を消去できる。クローズ後は再収集・確定解除・再確定を拒否し、確定統計を保持する。キャンペーン削除時にも本文を消去する。DBの行削除は既存backup/WALからの物理消去を保証しないため、backup保持・鍵管理は別途運用設計が必要。稼働中の共用`/training_log.php`と既存実データはこの配備では変更・削除しない。
 
+アンケート（U7）を含む配備では、`20260925-surveys` migrationを**コードより先に**適用する。既存テーブルには触れず、`survey*` の6表だけを追加する。回答画面`survey.php`と回答API`api/survey_take.php`は、受講画面`take.php`・`api/edu_take.php`と同じく認証なしで受講者が開くため、受講者ポータル（`TET2_EDU_BASE_URL`の既定）でこの2つだけを公開し、管理API`api/surveys.php`は公開しない。Apache設定はリポジトリ外なので、現行の`take.php`の公開方法を確認してから同じ形で追加する（本番設定の変更は別承認）。反映後、ポータルで無効トークンの`survey.php`が「回答用のリンクが正しくありません」を返し、`api/surveys.php`がログインへ転送されることを実HTTPで確認する。
+
+アンケートのメール送信（案内と締切前の催促）は既定で無効。`TET2_SURVEY_MAIL_ENABLED=1`をApache/PHPとCLIの環境に設定したときだけ送る。未設定なら管理APIは409を返し、`web/db/survey_reminder.php`は何も送らずに終わる。催促用のsystemd timerは用意していない。送信の有効化とtimerの作成は、実在の従業員へメールが届くため利用者の明示の承認を得てから行う。無効のままでも、配信一覧の「回答用 URL（CSV）」を社内メールで配布すれば運用できる。
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```

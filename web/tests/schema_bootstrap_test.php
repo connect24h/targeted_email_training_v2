@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 37, 'fresh DBに37個の業務tableがある');
+check(count($businessTables) === 43, 'fresh DBに43個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -49,6 +49,12 @@ $expectedTables = [
     'suspicious_mails',
     'suspicious_mail_history',
     'reputation_cache',
+    'surveys',
+    'survey_questions',
+    'survey_deliveries',
+    'survey_assignments',
+    'survey_responses',
+    'survey_answers',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
