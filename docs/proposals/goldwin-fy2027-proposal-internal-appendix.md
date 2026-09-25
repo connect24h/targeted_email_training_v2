@@ -1,7 +1,7 @@
 # 【社内用・顧客非開示】ゴールドウイン様 2027 年度提案 実装状況対応表
 
 作成: 2026-09-16。
-最終更新: 2026-09-17。
+最終更新: 2026-09-24。
 
 提案書 `goldwin-fy2027-proposal.md` の8機能をTET2の実装状況と開発計画（`../market-research-and-feature-plan-2026-09.md`）に紐付ける。
 
@@ -15,6 +15,7 @@
 | ⑥ | アンケート | **未実装**。`edu_deliveries` に採点なしの配信タイプを追加し、設問を自由記述・単一選択対応にすれば既存ポータルで実現できる見込み | — | 新規。フェーズ 2 に併載（見積 1〜2 週） |
 | ⑦ | 不審メール受付・調査 | 部分実装。報告用アドレス`report@gwin.gr.cojp.online`と`ReportMailIngest`（5分毎）は本番導入済み。管理画面で取込一覧、状態filter、保留行の確定・却下を操作できる。`TET2_REPORT_INGEST_MODE=match_only`のため自動ではeventsを書かない。報告者への自動feedbackと実攻撃メールの安全性調査は未実装 | [`report-mail-rollout-2026-09.md`](../report-mail-rollout-2026-09.md)、`ReportMailIngest`、`api/logs.php` | `normal`モード切替は実メーラー3種の回収率確認後。feedbackはロードマップP2。実攻撃メールの調査機能は新規（見積2〜3週） |
 | ⑧ | マイページ（個人ログイン・セルフ成績確認） | **未実装**。フェーズ 4 候補 H（顧客閲覧ポータル）は管理者向け viewer 想定で、従業員個人向けは別設計（個人認証、本人分のみのスコープ、sat と別ホスト） | — | 新規。OWASP 診断・実 HTTP 検証・`/e2e` `/security-audit` をリリース条件にする（見積 4 週以上） |
+| — | 認証情報の入力本文の収集（承認制） | 実装済み（2026-09-23）。既定は無効。顧客承認を登録したキャンペーンだけ、新規生成する偽ログインページが入力本文を送る。本文は `credential_captures` へ AEAD 暗号化して保存し、システム管理者専用の `reveal` で復号（監査付き）。通常明細・CSV・XLSX には出さない。クローズまたはキャンペーン削除で暗号文を消去、クローズ後は再収集・確定解除を拒否 | `9aafa33`、`credential_captures.php`、`lib/CredentialVault.php`、migration `20260923-credential-captures` / `20260923-campaign-close`、`deploy/README.md` | 鍵運用（`TET2_CAPTURE_KEY_FILE`）とバックアップ上の暗号文保持は運用設計で管理。本番配備・鍵設置は未実施 |
 | — | 経営層向け PDF 報告書・ガイドライン対応表 | 未実装 | 計画 候補 E | フェーズ 4（3 週） |
 | — | 受講記録・修了証 | 未実装 | 計画 候補 G | フェーズ 2（1 週） |
 
