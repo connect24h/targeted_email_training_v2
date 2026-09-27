@@ -125,6 +125,8 @@ deploy/rollbackの詳しい安全手順は[`deploy/README.md`](deploy/README.md)
 ## 関連
 
 - 文書一式（仕様書・基本設計・詳細設計・運用手順・利用マニュアル・提案書）: [`docs/spec/README.md`](docs/spec/README.md)
+- 教育コンテンツ（題材選定、教材の企画、アウェアネス小問）と制作の手順: [`docs/content/README.md`](docs/content/README.md)
+- 教育機能の拡張の検討（教材の画像表示、設問の画像など）: [`docs/spec/08-feature-expansion-review.md`](docs/spec/08-feature-expansion-review.md)
 - v1: `connect24h/targeted_email_training`（`/tet`, `/opt/training/git-repo`）— 当面共存
 - 将来の機能候補と判断記録: [`docs/product-roadmap.md`](docs/product-roadmap.md)
 - 第1期実装計画: [`plans/tet2-phase1-campaign-automation.md`](plans/tet2-phase1-campaign-automation.md)
