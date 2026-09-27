@@ -6,13 +6,13 @@ require_once __DIR__ . '/../lib/EduDeliverySeries.php';
  * 教育配信(edu_deliveries)管理 + launch(受講割当の採番)API。
  * templates.php / campaigns.php と同じ流儀。
  * - delivery_type: elearning(合格制約あり) / awareness_quiz(継続型・合格制約なし)
- * - target_type  : all(実対象者) / group(target_group) / risk(訓練失敗者) / individual(個別指定)
+ * - target_type  : all(実対象者) / group(target_group) / risk(訓練の結果) / individual(個別指定) / position(役職区分)
  * - launch       : 対象者を確定し edu_assignments を採番(access_token 発行) + edu_delivery_questions を確定。
  *   設問は明示指定(question_ids) か 条件抽出(category_ids/difficulty_range/question_count/randomize)。
  */
 
 const EDU_DELIVERY_TYPES = ['elearning', 'awareness_quiz'];
-const EDU_TARGET_TYPES   = ['all', 'group', 'risk', 'individual'];
+const EDU_TARGET_TYPES   = ['all', 'group', 'risk', 'individual', 'position'];
 const EDU_DELIVERY_STATUSES = ['draft', 'scheduled', 'running', 'done', 'cancelled'];
 /**
  * 配信の起動契機。phishing_failure は EduAutoEnroll(tet2-edu-enroll.timer)が
@@ -288,6 +288,58 @@ function edu_d_assert_schedule_order(?string $scheduledAt, ?string $deadline): v
     }
 }
 
+/** 役職区分の一覧(target_type=position だけ)。targets.position_category の値から選ぶ。 */
+function edu_d_target_positions(array $body, string $targetType): ?string
+{
+    if ($targetType !== 'position') {
+        return null;
+    }
+    $values = $body['target_positions'] ?? null;
+    if (!is_array($values) || $values === [] || count(array_unique($values, SORT_REGULAR)) !== count($values)) {
+        json_error('役職の配信には target_positions(役職区分の一覧)が必要です', 400);
+    }
+    foreach ($values as $value) {
+        if (!is_string($value) || !in_array($value, TET2_POSITION_CATEGORIES, true)) {
+            json_error('target_positions は ' . implode('・', TET2_POSITION_CATEGORIES) . ' から選んでください', 400);
+        }
+    }
+    return json_encode(array_values($values), JSON_UNESCAPED_UNICODE);
+}
+
+/**
+ * 訓練の結果の区分(target_type=risk だけ)。区分を選ぶときは、終わったキャンペーンの指定を必須にする。
+ * 訓練の期間中に同じ手口の教育を出すと、訓練の測定が崩れるため。
+ */
+function edu_d_risk_results(array $body, string $targetType, string $triggeredBy, ?int $campaignId, int $tenantId): ?string
+{
+    if (!array_key_exists('risk_results', $body) || $body['risk_results'] === null) {
+        return null;
+    }
+    $values = $body['risk_results'];
+    if ($targetType !== 'risk') {
+        json_error('risk_results は target_type=risk のときだけ指定できます', 400);
+    }
+    if ($triggeredBy !== 'manual') {
+        json_error('訓練の結果の区分は、自動の投入(phishing_failure)と組み合わせられません', 400);
+    }
+    if (!is_array($values) || $values === [] || count(array_unique($values, SORT_REGULAR)) !== count($values)) {
+        json_error('risk_results は区分の一覧で指定してください', 400);
+    }
+    foreach ($values as $value) {
+        if (!is_string($value) || !in_array($value, EduDeliveryLauncher::RISK_RESULTS, true)) {
+            json_error('risk_results は ' . implode(' / ', EduDeliveryLauncher::RISK_RESULTS) . ' から選んでください', 400);
+        }
+    }
+    if ($campaignId === null) {
+        json_error('訓練の結果で対象を選ぶときは、キャンペーン(phish_campaign_id)の指定が必要です', 400);
+    }
+    $campaign = assert_campaign_owned($campaignId, $tenantId);
+    if (!in_array((string) $campaign['status'], EduDeliveryLauncher::FINISHED_CAMPAIGN_STATUSES, true)) {
+        json_error('訓練が終わっていないキャンペーン(status=' . $campaign['status'] . ')の結果では配信を作れません。訓練の測定を崩さないため、終了後に作成してください', 409);
+    }
+    return json_encode(array_values($values));
+}
+
 /**
  * 配信の設定を検証し、edu_deliveries の列の値に揃える。配信の作成と毎月の配信の系列の作成が使う。
  *
@@ -364,6 +416,8 @@ function edu_d_parse_config(array $body, int $tenantId): array
             'phish_campaign_id' => $phishCampaignId,
             'feedback_mode' => edu_d_feedback_mode($body, $deliveryType),
             'send_invites' => edu_d_flag($body, 'send_invites', 0),
+            'target_positions' => edu_d_target_positions($body, $targetType),
+            'risk_results' => edu_d_risk_results($body, $targetType, $triggeredBy, $phishCampaignId, $tenantId),
         ],
         'target_ids' => $targetIds,
     ];

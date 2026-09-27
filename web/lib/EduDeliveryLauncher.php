@@ -21,6 +21,19 @@ final class EduDeliveryError extends RuntimeException
 final class EduDeliveryLauncher
 {
     /**
+     * 訓練の結果の区分(target_type=risk の risk_results)。events の意味は既存の集計(report.php)と同じ:
+     *   opened     = 開いた。リンクのクリック(click)か、偽サイトの HTML のビーコン(open)。
+     *                open はメールの開封ではない(メール本文にビーコンはない)。
+     *   submitted  = 偽サイトに入力した(auth)。
+     *   reported   = 訓練メールを報告した(report)。
+     *   not_opened = 送信済みで、開いた・入力したの記録がない(報告だけした人を含む)。
+     */
+    public const RISK_RESULTS = ['opened', 'submitted', 'reported', 'not_opened'];
+
+    /** 終わったキャンペーンの状態。これ以外(予約中、配信中、一時停止、下書き)の結果では配信を作らない。 */
+    public const FINISHED_CAMPAIGN_STATUSES = ['done', 'cancelled'];
+
+    /**
      * 配信を開始する。
      *
      * @return array{assigned:int, mail_sent:int, question_count:int}
@@ -128,6 +141,8 @@ final class EduDeliveryLauncher
             );
         } elseif ($type === 'risk') {
             $rows = self::riskTargets($delivery, $tenantId);
+        } elseif ($type === 'position') {
+            $rows = self::positionTargets($delivery, $tenantId);
         } else {
             throw new EduDeliveryError('target_type が不正です', 400);
         }
@@ -153,10 +168,74 @@ final class EduDeliveryLauncher
         );
     }
 
-    /** 訓練で失敗(auth or click)した実対象者。キャンペーンの指定がなければテナント全体。 */
+    /** 役職区分(targets.position_category)の一覧に当たる、在籍中の実対象者。 */
+    private static function positionTargets(array $delivery, int $tenantId): array
+    {
+        $positions = json_decode((string) ($delivery['target_positions'] ?? ''), true);
+        if (!is_array($positions) || $positions === []) {
+            throw new EduDeliveryError('役職の配信には役職区分の指定が必要です', 400);
+        }
+        $placeholders = implode(',', array_fill(0, count($positions), '?'));
+        return Db::all(
+            "SELECT id FROM targets
+             WHERE tenant_id = ? AND status = 'active' AND is_test = 0 AND position_category IN ($placeholders)
+             ORDER BY id",
+            array_merge([$tenantId], array_map('strval', $positions))
+        );
+    }
+
+    /**
+     * 訓練の結果の区分(risk_results)に当たる、そのキャンペーンの実対象者。
+     * 集計の形は TrainingLogRows(訓練結果の一覧)と同じく、対象者ごとに events を束ねる。
+     */
+    private static function riskResultTargets(array $results, int $campaignId, int $tenantId): array
+    {
+        self::assertCampaignOwned($campaignId, $tenantId);
+        $rows = Db::all(
+            "SELECT ct.target_id AS id,
+                    MAX(CASE WHEN e.event_type IN ('click','open') THEN 1 ELSE 0 END) AS opened,
+                    MAX(CASE WHEN e.event_type = 'auth' THEN 1 ELSE 0 END) AS submitted,
+                    MAX(CASE WHEN e.event_type = 'report' THEN 1 ELSE 0 END) AS reported,
+                    MAX(CASE WHEN ct.send_status = 'sent' THEN 1 ELSE 0 END) AS sent
+             FROM campaign_targets ct
+             INNER JOIN targets t ON t.id = ct.target_id
+             LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
+                   AND e.tenant_id = ? AND e.event_type IN ('open','click','auth','report')
+             WHERE ct.campaign_id = ? AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
+             GROUP BY ct.target_id
+             ORDER BY ct.target_id",
+            [$tenantId, $campaignId, $tenantId]
+        );
+        return array_values(array_filter($rows, static function (array $r) use ($results): bool {
+            $flags = [
+                'opened' => (int) $r['opened'] === 1 || (int) $r['submitted'] === 1,
+                'submitted' => (int) $r['submitted'] === 1,
+                'reported' => (int) $r['reported'] === 1,
+                'not_opened' => (int) $r['sent'] === 1 && (int) $r['opened'] === 0 && (int) $r['submitted'] === 0,
+            ];
+            foreach ($results as $result) {
+                if ($flags[$result] ?? false) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+    }
+
+    /**
+     * risk の対象。結果の区分(risk_results)があればその区分、なければ従来どおり訓練で失敗
+     * (auth or click)した実対象者(キャンペーンの指定がなければテナント全体)。
+     */
     private static function riskTargets(array $delivery, int $tenantId): array
     {
         $campaignId = $delivery['phish_campaign_id'] !== null ? (int) $delivery['phish_campaign_id'] : 0;
+        $results = json_decode((string) ($delivery['risk_results'] ?? ''), true);
+        if (is_array($results) && $results !== []) {
+            if ($campaignId < 1) {
+                throw new EduDeliveryError('訓練の結果で対象を選ぶときは、キャンペーンの指定が必要です', 400);
+            }
+            return self::riskResultTargets($results, $campaignId, $tenantId);
+        }
         $sql = "SELECT DISTINCT ct.target_id AS id
                 FROM events e
                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
