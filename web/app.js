@@ -3357,7 +3357,9 @@ async function renderEduMaterials() {
     <tr><td>${index + 1}</td><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
       <td class="small text-muted">${esc(material.description || '')}</td><td>${material.format === 'page_images' ? `PDF ${Number(material.page_count)}ページ` : `文字 ${Number(material.slide_count)}枚`}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduMaterial(${material.id})"><i class="bi bi-play-circle"></i> 教材を試行</button>
-        ${canEdit(material) && material.format !== 'page_images' ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
+        ${!canEdit(material) ? '<span class="small text-muted ms-1">閲覧のみ</span>'
+          : material.format === 'page_images' ? `<button class="btn btn-sm btn-outline-secondary" onclick="replaceEduMaterialPdf(${material.id})"><i class="bi bi-file-earmark-arrow-up"></i> PDF差し替え</button>`
+          : `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>`}</td></tr>`).join('') : emptyRow(5);
 }
 
 let eduMaterialPreviewIndex = 0;
@@ -3385,7 +3387,7 @@ function renderEduMaterialPreview(material) {
   if (material.format === 'page_images') {
     const img = document.createElement('img');
     img.className = 'edu-page-image'; img.alt = page.page_text;
-    img.src = eduMediaUrl('api/edu_materials.php', { action: 'page_image', id: material.id, page: page.page_no });
+    img.src = eduMediaUrl('api/edu_materials.php', { action: 'page_image', id: material.id, page: page.page_no, v: material.rev || '' });
     body.appendChild(img);
   } else $('#eduMaterialPreviewBody').textContent = page.body;
   $('#eduMaterialPreviewPrev').disabled = eduMaterialPreviewIndex === 0;
@@ -3460,6 +3462,32 @@ function importEduMaterialPdf() {
     const file = $('#eduPdfFile').files[0];
     $('#eduPdfTitle').value = file ? file.name.replace(/\.pdf$/i, '') : '';
   });
+}
+
+/** PDF の教材の PDF を差し替える(表紙を足した改訂版など)。教材の id は変わらないので、配信の受講リンクはそのまま使える。 */
+function replaceEduMaterialPdf(id) {
+  const material = Cache.eduMaterialList.find((m) => Number(m.id) === Number(id));
+  if (!material) return;
+  const body = `<form id="eduPdfReplaceForm">
+    <p class="small">「${esc(material.title)}」（現在 PDF ${Number(material.page_count)}ページ）のページを、新しい PDF に入れ替えます。
+      教材名、説明、配信と受講リンクは変わりません。受講中の人には、次にページを開いたときから新しいページが表示されます。</p>
+    <div class="mb-2"><label class="form-label" for="eduPdfReplaceFile">新しい PDF ファイル（60MBまで）</label>
+      <input class="form-control" id="eduPdfReplaceFile" type="file" accept=".pdf,application/pdf" required></div>
+    <div id="eduPdfReplaceProgress" class="small text-muted" role="status" aria-live="polite"></div>
+  </form>`;
+  showModal('PDFを差し替える', body, async () => {
+    const file = $('#eduPdfReplaceFile').files[0];
+    if (!file || !/\.pdf$/i.test(file.name)) throw new Error('PDFファイルを選択してください');
+    const progress = $('#eduPdfReplaceProgress');
+    try {
+      const uploadId = await uploadEduChunks(file, progress);
+      progress.textContent = 'PDFを変換して差し替えています…';
+      const result = await api('api/edu_materials.php', { method: 'POST', query: { action: 'replace_pdf' },
+        body: { id: material.id, upload_id: uploadId, filename: file.name }, timeout: 180000 });
+      toast(`PDF ${result.material.page_count}ページに差し替えました`, 'ok');
+      renderEduMaterials();
+    } catch (error) { progress.textContent = `失敗: ${error.message}`; throw error; }
+  }, { size: 'lg' });
 }
 
 function eduMaterialSlideRow(slide = {}) {

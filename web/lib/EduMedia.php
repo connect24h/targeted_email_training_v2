@@ -146,6 +146,38 @@ final class EduMedia
         }
     }
 
+    /**
+     * 教材のページの置き場を、変換済みの新しい置き場と入れ替える(PDF の差し替え)。
+     * 古い置き場は一度 .old- に退避してから消す。新しい置き場を移せなければ古い置き場を戻す。
+     */
+    public static function swapDir(string $dir, string $next): void
+    {
+        $old = null;
+        if (is_dir($dir)) {
+            $old = $dir . '.old-' . bin2hex(random_bytes(4));
+            if (!rename($dir, $old)) {
+                self::removeDir($next);
+                throw new RuntimeException('ページ画像を入れ替えられません');
+            }
+        }
+        if (!rename($next, $dir)) {
+            if ($old !== null) {
+                rename($old, $dir);
+            }
+            self::removeDir($next);
+            throw new RuntimeException('ページ画像を入れ替えられません');
+        }
+        if ($old !== null) {
+            self::removeDir($old);
+        }
+    }
+
+    /** 使わなくなった作業用の置き場を消す(保存先の外は消さない)。 */
+    public static function discardDir(string $dir): void
+    {
+        self::removeDir($dir);
+    }
+
     // ------------------------------------------------------------ 設問の画像
 
     public static function saveQuestionImage(?int $tenantId, int $questionId, string $bytes): string
@@ -258,7 +290,8 @@ final class EduMedia
                 $removed++;
             }
         }
-        foreach (glob(self::root() . '/*/materials/*.work-*', GLOB_ONLYDIR) ?: [] as $dir) {
+        // 変換の途中(.work-)と、差し替えの途中で止まった残り(.new-、.old-)
+        foreach (glob(self::root() . '/*/materials/*.{work,new,old}-*', GLOB_ONLYDIR | GLOB_BRACE) ?: [] as $dir) {
             if (filemtime($dir) < $now - 3600) {
                 self::removeDir($dir);
                 $removed++;

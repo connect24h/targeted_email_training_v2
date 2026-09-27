@@ -78,7 +78,21 @@ function edu_m_present(array $row): array
     $row['slide_count'] = count($row['slides']);
     $row['format'] = (string) ($row['format'] ?? 'text_slides');
     $row['page_count'] = (int) ($row['page_count'] ?? 0);
+    $row['rev'] = edu_m_rev($row['id'], $row['format']);
     return $row;
+}
+
+/**
+ * ページ画像の版。画像の URL に付け、差し替えの後にブラウザが古いページ画像を使わないようにする。
+ * ページの行は差し替えのたびに作り直され、AUTOINCREMENT の id は前の値に戻らないので、最小の id を版にする。
+ */
+function edu_m_rev(int $materialId, string $format): string
+{
+    if ($format !== 'page_images') {
+        return '';
+    }
+    $row = Db::one('SELECT MIN(id) AS rev FROM edu_material_pages WHERE material_id = ?', [$materialId]);
+    return (string) ($row['rev'] ?? '');
 }
 
 /** ページ画像の教材のページ一覧(画像は page_image で取る)。 */
@@ -301,6 +315,89 @@ function edu_m_handle_import_pdf(array $actor): never
 }
 
 /**
+ * ページ画像の教材の PDF を差し替える(表紙を足した改訂版など)。教材の id は変えないので、配信と受講のリンクはそのまま使える。
+ * 新しいページは別の場所へ変換し、DB を入れ替えてから置き場を入れ替える。変換に失敗したら元のページをそのまま残す。
+ */
+function edu_m_handle_replace_pdf(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_m_body_int($body, 'tenant_id'));
+    $id = edu_m_body_int($body, 'id');
+    $uploadId = is_string($body['upload_id'] ?? null) ? $body['upload_id'] : '';
+    $filename = is_string($body['filename'] ?? null) ? trim($body['filename']) : '';
+    if ($id === null) {
+        json_error('id が不正です', 400);
+    }
+    if ($filename === '' || !preg_match('/\.pdf$/i', $filename)) {
+        json_error('PDF ファイルを指定してください', 400);
+    }
+    $row = edu_m_find($id, $tenantId);
+    if ($row === null) {
+        json_error('教材が見つかりません', 404);
+    }
+    if ($row['tenant_id'] === null && ($actor['role'] ?? '') !== 'superadmin') {
+        json_error('共有教材を編集できるのはsuperadminだけです', 403);
+    }
+    if (($row['format'] ?? '') !== 'page_images') {
+        json_error('PDF で差し替えられるのは PDF の教材だけです', 409);
+    }
+    try {
+        $pdfPath = EduMedia::uploadPath($uploadId, $tenantId, (int) $actor['id']);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 400);
+    }
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(180);
+    }
+    $owner = $row['tenant_id'] !== null ? (int) $row['tenant_id'] : null;
+    $dir = EduMedia::materialDir($owner, $id);
+    $next = $dir . '.new-' . bin2hex(random_bytes(4));
+    try {
+        $pages = EduMedia::convertPdf($pdfPath, $next);
+    } catch (RuntimeException $error) {
+        EduMedia::discardUpload($uploadId, $tenantId, (int) $actor['id']);
+        error_log('edu_materials.replace_pdf: ' . $error->getMessage() . ' ' . EduMedia::$lastError);
+        json_error($error->getMessage(), 400);
+    }
+    try {
+        edu_m_store_replaced_pages($id, $pages, $filename);
+    } catch (Throwable $error) {
+        EduMedia::discardDir($next);
+        throw $error;
+    }
+    EduMedia::swapDir($dir, $next);
+    EduMedia::discardUpload($uploadId, $tenantId, (int) $actor['id']);
+    audit('edu_material.replace_pdf', 'material_id=' . $id . ' pages=' . count($pages));
+    $material = edu_m_present(edu_m_find($id, $tenantId));
+    $material['pages'] = edu_m_pages($id);
+    json_out(['success' => true, 'material' => $material]);
+}
+
+/** 差し替えたページを DB に入れる(ページの行を作り直し、教材のページ数と文字を新しくする)。 */
+function edu_m_store_replaced_pages(int $id, array $pages, string $filename): void
+{
+    Db::tx(static function () use ($id, $pages, $filename): void {
+        Db::run('DELETE FROM edu_material_pages WHERE material_id = ?', [$id]);
+        foreach ($pages as $p) {
+            Db::run(
+                'INSERT INTO edu_material_pages (material_id, page_no, image_name, page_text, width, height)
+                 VALUES (?, ?, ?, ?, ?, ?)',
+                [$id, $p['page_no'], $p['image_name'], $p['page_text'], $p['width'], $p['height']]
+            );
+        }
+        $slides = array_map(static fn(array $p): array => [
+            'title' => 'ページ ' . $p['page_no'],
+            'body' => $p['page_text'] !== '' ? mb_substr($p['page_text'], 0, 10000) : '（画像のページ）',
+        ], $pages);
+        Db::run(
+            "UPDATE edu_materials SET page_count = ?, slides = ?, source_name = ?, updated_at = datetime('now','localtime') WHERE id = ?",
+            [count($pages), json_encode($slides, JSON_UNESCAPED_UNICODE), mb_substr(basename($filename), 0, 200), $id]
+        );
+    });
+}
+
+/**
  * 管理画面でページ画像を表示するときのファイルの場所。閲覧できる教材(自組織か共有)のページだけを返す。
  *
  * @return array{path:string,mime:string}
@@ -395,6 +492,9 @@ try {
     }
     if ($action === 'import_pdf' && $method === 'POST') {
         edu_m_handle_import_pdf($actor);
+    }
+    if ($action === 'replace_pdf' && $method === 'POST') {
+        edu_m_handle_replace_pdf($actor);
     }
     if ($action === 'page_image' && $method === 'GET') {
         $materialId = edu_m_query_int('id');

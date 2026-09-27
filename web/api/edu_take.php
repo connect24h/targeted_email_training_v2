@@ -204,6 +204,10 @@ function take_delivery_material(int $deliveryId): ?array
                 'height' => (int) $page['height'], 'page_text' => (string) $page['page_text']];
         }
     }
+    // ページ画像の版。画像の URL に付け、PDF の差し替えの後にブラウザが古いページ画像を使わないようにする
+    // (管理 API の edu_m_rev と同じく、作り直すたびに増えるページの行の最小の id)
+    $rev = Db::one('SELECT MIN(id) AS rev FROM edu_material_pages WHERE material_id = ?', [$material['id']]);
+    $material['rev'] = (string) ($rev['rev'] ?? '');
     unset($material['tenant_id']);
     return $material;
 }

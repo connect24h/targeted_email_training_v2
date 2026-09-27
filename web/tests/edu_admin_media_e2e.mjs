@@ -67,6 +67,21 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(500);
 
+  // PDF の差し替え(表紙を足した改訂版などを、同じ教材のまま入れ替える)
+  await row.getByRole('button', { name: /PDF差し替え/ }).click();
+  await page.locator('#eduPdfReplaceFile').setInputFiles(env('TET2_E2E_PDF'));
+  await shot(page, 'a03b-replace-dialog');
+  await save();
+  await page.getByText(/ページに差し替えました/).first().waitFor({ timeout: 180000 });
+  await row.getByRole('button', { name: /教材を試行/ }).click();
+  await page.waitForFunction(() => {
+    const img = document.querySelector('.modal.show .edu-page-image');
+    return img && img.complete && img.naturalWidth > 0 && /[?&]v=\d+/.test(img.src);
+  }, null, { timeout: 30000 });
+  ok('PDF を差し替えると、試行で版つきの新しいページ画像を表示する');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(500);
+
   // --- 設問の Excel と画像の ZIP を読み込む ---
   const cats = ['aw-mail', 'aw-phishing', 'aw-auth', 'aw-malware', 'aw-bec', 'aw-genai', 'aw-data', 'aw-report', 'aw-scam', 'aw-remote'];
   for (const slug of cats) {

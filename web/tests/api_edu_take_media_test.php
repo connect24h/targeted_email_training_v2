@@ -74,6 +74,8 @@ $p = $r['payload'];
 check($p['delivery']['feedback_mode'] === 'immediate', 'TM-2: 答え合わせの時機を返す');
 check($p['material']['format'] === 'page_images' && count($p['material']['pages']) === 2
     && $p['material']['pages'][1]['page_text'] === 'ページ2の文字', 'TM-3: 教材のページ一覧と文字を返す');
+$minPage = (string) Db::one('SELECT MIN(id) AS m FROM edu_material_pages WHERE material_id = ?', [$p['material']['id']])['m'];
+check(($p['material']['rev'] ?? '') === $minPage && $minPage !== '', 'TM-3: ページ画像の版(rev)を返す');
 check($p['questions'][0]['has_image'] === true && $p['questions'][1]['has_image'] === false, 'TM-4: 設問に画像があるかを返す');
 check(!isset($p['questions'][0]['correct_answer']) && !isset($p['questions'][0]['option_explanations']),
     'TM-5: 開始の時点では正解と解説を返さない');

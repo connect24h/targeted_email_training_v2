@@ -101,6 +101,28 @@ EduMedia::collectGarbage();
 eml_check(!is_dir($root . '/tmp/' . $old) && is_dir($root . '/tmp/' . $fresh), 'EML-18: 24時間を過ぎた一時ファイルだけを消す');
 eml_check(!is_dir($work), 'EML-19: 1時間を過ぎた変換途中の作業ディレクトリを消す');
 
+// --- PDF の差し替えの置き場の入れ替えと、途中で止まった残りの掃除 ---
+$live = EduMedia::materialDir(1, 79);
+mkdir($live, 0770, true);
+file_put_contents($live . '/page-001.jpg', 'old');
+$next = $live . '.new-abcd1234';
+mkdir($next, 0770, true);
+file_put_contents($next . '/page-001.jpg', 'new');
+EduMedia::swapDir($live, $next);
+eml_check(file_get_contents($live . '/page-001.jpg') === 'new' && glob($live . '.*') === [],
+    'EML-21: 差し替えで置き場を入れ替え、古い置き場と作業用の置き場を残さない');
+$staleNew = $live . '.new-00000001';
+$staleOld = $live . '.old-00000002';
+$freshNew = $live . '.new-00000003';
+foreach ([$staleNew, $staleOld, $freshNew] as $d) {
+    mkdir($d, 0770, true);
+}
+touch($staleNew, time() - 7200);
+touch($staleOld, time() - 7200);
+EduMedia::collectGarbage();
+eml_check(!is_dir($staleNew) && !is_dir($staleOld) && is_dir($freshNew) && is_dir($live),
+    'EML-22: 1時間を過ぎた差し替えの残りだけを消し、使用中の置き場は消さない');
+
 // --- 失敗の詳細をログ用に残す ---
 EduMedia::$lastError = '';
 file_put_contents($root . '/broken.pdf', "%PDF-1.4\nbroken");

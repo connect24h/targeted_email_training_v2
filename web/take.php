@@ -205,7 +205,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
   const only = (id) => { VIEWS.forEach(hide); show(id); window.scrollTo(0, 0); };
   const esc = (s) => String(s == null ? '' : s).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
-  const pageUrl = (no) => `${API}?action=page_image&token=${encodeURIComponent(TOKEN)}&page=${no}`;
+  const pageUrl = (no) => `${API}?action=page_image&token=${encodeURIComponent(TOKEN)}&page=${no}&v=${encodeURIComponent((material && material.rev) || '')}`;
   const qImageUrl = (id) => `${API}?action=question_image&token=${encodeURIComponent(TOKEN)}&question_id=${id}`;
 
   let delivery = {};

@@ -95,4 +95,49 @@ check($r['code'] === 200 && !is_dir($root . '/tmp/' . $discard), 'MP-14: 分割�
 $r = call_handler('edu_m_handle_upload_discard', ['upload_id' => $discard]);
 check($r['code'] === 200, 'MP-14: 破棄済みのアップロードを重ねて破棄してもエラーにしない');
 
+// --- PDF の差し替え(表紙を足した改訂版などを、配信のリンクを変えずに入れ替える) ---
+$upload = static function (string $bytes): string {
+    $id = call_handler('edu_m_handle_upload_begin', [])['payload']['upload_id'];
+    call_handler('edu_m_handle_upload_chunk', ['upload_id' => $id, 'index' => 0, 'data_base64' => base64_encode($bytes)]);
+    return $id;
+};
+$_GET = ['id' => (string) $materialId];
+$revBefore = call_handler('edu_m_handle_get', [], 'viewer')['payload']['material']['rev'] ?? null;
+$_GET = [];
+check(is_string($revBefore) && $revBefore !== '', 'MP-15: 教材は画像の版(rev)を持つ');
+$GLOBALS['__TET2_TEST_AUDIT'] = [];
+$replaceId = $upload(tet2_test_make_pdf(['Cover page', 'Lesson page one', 'Lesson page two', 'Lesson page three']));
+$r = call_handler('edu_m_handle_replace_pdf', ['id' => $materialId, 'upload_id' => $replaceId, 'filename' => '初動報告-表紙つき.pdf']);
+check($r['code'] === 200, 'MP-16: PDF を差し替えられる');
+$replaced = $r['payload']['material'];
+check($replaced['id'] === $materialId && $replaced['page_count'] === 4 && count($replaced['pages']) === 4,
+    'MP-16: 同じ教材のまま4ページになる');
+check(str_contains($replaced['pages'][0]['page_text'], 'Cover page') && $replaced['slides'][3]['title'] === 'ページ 4',
+    'MP-16: ページの文字とスライドも新しくなる');
+check(($replaced['source_name'] ?? '') === '初動報告-表紙つき.pdf' && $replaced['title'] === '初動報告の教材',
+    'MP-16: 元のファイル名は新しくなり、表題は変わらない');
+check(($replaced['rev'] ?? null) !== $revBefore, 'MP-17: 画像の版が変わる(ブラウザに古いページ画像を使わせない)');
+$dir = EduMedia::materialDir($tenantId, $materialId);
+check(is_file($dir . '/page-004.jpg'), 'MP-17: 新しいページ画像を置く');
+check(glob($dir . '.*') === [], 'MP-17: 作業用のディレクトリを残さない');
+check(!is_dir($root . '/tmp/' . $replaceId), 'MP-17: 差し替え後に一時ファイルを消す');
+check(in_array('edu_material.replace_pdf', array_column($GLOBALS['__TET2_TEST_AUDIT'], 'action'), true), 'MP-17: 監査ログを残す');
+
+$textId = Db::insert("INSERT INTO edu_materials (tenant_id, title, slides) VALUES (?, '文字の教材', '[]')", [$tenantId]);
+$r = call_handler('edu_m_handle_replace_pdf', ['id' => $textId, 'upload_id' => $upload(tet2_test_make_pdf(['x'])), 'filename' => 'x.pdf']);
+check($r['code'] === 409, 'MP-18: 文字の教材は PDF で差し替えない');
+$r = call_handler('edu_m_handle_replace_pdf', ['id' => $otherId, 'upload_id' => $upload(tet2_test_make_pdf(['x'])), 'filename' => 'x.pdf']);
+check($r['code'] === 404, 'MP-18: 他のテナントの教材は差し替えられない');
+$sharedId = Db::insert("INSERT INTO edu_materials (tenant_id, title, slides, format, page_count, is_shared) VALUES (NULL, '共有の教材', '[]', 'page_images', 1, 1)");
+$r = call_handler('edu_m_handle_replace_pdf', ['id' => $sharedId, 'upload_id' => $upload(tet2_test_make_pdf(['x'])), 'filename' => 'x.pdf']);
+check($r['code'] === 403, 'MP-18: 共有の教材を差し替えられるのは superadmin だけ');
+
+$r = call_handler('edu_m_handle_replace_pdf', ['id' => $materialId, 'upload_id' => $upload('not a pdf at all'), 'filename' => 'bad.pdf']);
+check($r['code'] === 400, 'MP-19: PDF でないファイルでは差し替えない');
+$kept = Db::one('SELECT page_count, source_name FROM edu_materials WHERE id = ?', [$materialId]);
+check((int) $kept['page_count'] === 4 && $kept['source_name'] === '初動報告-表紙つき.pdf' && is_file($dir . '/page-004.jpg')
+    && (int) Db::one('SELECT COUNT(*) AS n FROM edu_material_pages WHERE material_id = ?', [$materialId])['n'] === 4,
+    'MP-19: 失敗したら元のページをそのまま残す');
+check(glob($dir . '.*') === [], 'MP-19: 失敗しても作業用のディレクトリを残さない');
+
 echo "ALL TESTS PASSED\n";
