@@ -18,10 +18,15 @@
  */
 
 require_once __DIR__ . '/../lib/Db.php';
+require_once __DIR__ . '/../lib/EduMedia.php';
 
 // ---- 最小レスポンスヘルパ(bootstrap を使わないため自前) ----
 function take_json($data, int $code = 200): never
 {
+    // テストでは応答を捕まえる json_out が定義されている(本番の受講 API は bootstrap を読まないので未定義)
+    if (function_exists('json_out')) {
+        json_out($data, $code);
+    }
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
     header('X-Content-Type-Options: nosniff');
@@ -38,6 +43,9 @@ function take_error(string $message, int $code = 400): never
 
 function take_body(): array
 {
+    if (function_exists('json_body')) {
+        return json_body();
+    }
     $raw = file_get_contents('php://input');
     if ($raw === '' || $raw === false) {
         return [];
@@ -66,7 +74,8 @@ function take_token(string $source): string
 function take_resolve(string $token): array
 {
     $a = Db::one(
-        'SELECT a.*, d.title AS delivery_title, d.delivery_type, d.pass_score, d.status AS delivery_status
+        'SELECT a.*, d.title AS delivery_title, d.delivery_type, d.pass_score, d.status AS delivery_status,
+                d.feedback_mode, d.material_id
          FROM edu_assignments a
          INNER JOIN edu_deliveries d ON d.id = a.delivery_id
          WHERE a.access_token = ?',
@@ -161,7 +170,8 @@ function take_arrays_equal(array $a, array $b): bool
 function take_delivery_questions(int $deliveryId): array
 {
     return Db::all(
-        'SELECT q.id, q.title, q.question_type, q.options, q.correct_answer, q.explanation, q.difficulty, dq.sort_order
+        'SELECT q.id, q.tenant_id, q.title, q.question_type, q.options, q.correct_answer, q.explanation, q.option_explanations,
+                q.image_name, q.difficulty, dq.sort_order
          FROM edu_delivery_questions dq
          INNER JOIN edu_questions q ON q.id = dq.question_id
          WHERE dq.delivery_id = ?
@@ -173,7 +183,7 @@ function take_delivery_questions(int $deliveryId): array
 function take_delivery_material(int $deliveryId): ?array
 {
     $material = Db::one(
-        'SELECT m.id, m.title, m.description, m.slides
+        'SELECT m.id, m.tenant_id, m.title, m.description, m.slides, m.format, m.page_count
          FROM edu_deliveries d
          INNER JOIN edu_materials m ON m.id = d.material_id
          WHERE d.id = ? AND m.is_active = 1',
@@ -184,7 +194,160 @@ function take_delivery_material(int $deliveryId): ?array
     }
     $material['id'] = (int) $material['id'];
     $material['slides'] = json_decode((string) $material['slides'], true) ?: [];
+    $material['format'] = (string) ($material['format'] ?? 'text_slides');
+    $material['page_count'] = (int) ($material['page_count'] ?? 0);
+    $material['pages'] = [];
+    if ($material['format'] === 'page_images') {
+        foreach (Db::all('SELECT page_no, width, height, page_text FROM edu_material_pages WHERE material_id = ? ORDER BY page_no',
+            [$material['id']]) as $page) {
+            $material['pages'][] = ['page_no' => (int) $page['page_no'], 'width' => (int) $page['width'],
+                'height' => (int) $page['height'], 'page_text' => (string) $page['page_text']];
+        }
+    }
+    unset($material['tenant_id']);
     return $material;
+}
+
+/** 選択肢ごとの解説(JSON)を配列に。なければ null。 */
+function take_option_explanations(?string $json): ?array
+{
+    $value = json_decode((string) $json, true);
+    return is_array($value) && $value !== [] ? array_values(array_map('strval', $value)) : null;
+}
+
+/** 1問の答え合わせの内容(正解、選択肢ごとの解説、まとめの解説)。 */
+function take_question_feedback(array $q, array $answer): array
+{
+    $correct = json_decode((string) $q['correct_answer'], true) ?: [];
+    return [
+        'id' => (int) $q['id'],
+        'title' => $q['title'],
+        'options' => json_decode((string) $q['options'], true) ?: [],
+        'your_answer' => array_values(array_map('intval', $answer)),
+        'correct_answer' => $correct,
+        'is_correct' => take_arrays_equal($answer, $correct),
+        'explanation' => $q['explanation'],
+        'option_explanations' => take_option_explanations($q['option_explanations'] ?? null),
+        'has_image' => ($q['image_name'] ?? '') !== '',
+    ];
+}
+
+/** 画像を送り出す。 */
+function take_send_file(array $file): never
+{
+    header('Content-Type: ' . $file['mime']);
+    header('Content-Length: ' . filesize($file['path']));
+    header('Cache-Control: private, max-age=3600');
+    header('X-Content-Type-Options: nosniff');
+    readfile($file['path']);
+    exit;
+}
+
+/**
+ * 受講者のトークンで、配信の教材のページ画像の場所を決める。受講の完了後も教材は見直せる。
+ *
+ * @return array{path:string,mime:string}
+ */
+function take_page_image_file(string $token, int $pageNo): array
+{
+    $a = take_resolve($token);
+    $material = $a['material_id'] !== null
+        ? Db::one("SELECT id, tenant_id FROM edu_materials WHERE id = ? AND format = 'page_images'", [(int) $a['material_id']])
+        : null;
+    $page = $material !== null
+        ? Db::one('SELECT image_name FROM edu_material_pages WHERE material_id = ? AND page_no = ?', [(int) $material['id'], $pageNo])
+        : null;
+    if ($page === null || !EduMedia::safeName((string) $page['image_name'])) {
+        take_error('ページが見つかりません', 404);
+    }
+    $owner = $material['tenant_id'] !== null ? (int) $material['tenant_id'] : null;
+    $path = EduMedia::materialDir($owner, (int) $material['id']) . '/' . $page['image_name'];
+    if (!is_file($path)) {
+        take_error('ページが見つかりません', 404);
+    }
+    return ['path' => $path, 'mime' => EduMedia::mimeOf((string) $page['image_name'])];
+}
+
+/** @return array{path:string,mime:string} 配信に含まれる設問の画像の場所 */
+function take_question_image_file(string $token, int $questionId): array
+{
+    $a = take_resolve($token);
+    $q = Db::one(
+        'SELECT q.tenant_id, q.image_name FROM edu_delivery_questions dq
+         INNER JOIN edu_questions q ON q.id = dq.question_id
+         WHERE dq.delivery_id = ? AND q.id = ?',
+        [(int) $a['delivery_id'], $questionId]
+    );
+    $name = (string) ($q['image_name'] ?? '');
+    if ($q === null || $name === '' || !EduMedia::safeName($name)) {
+        take_error('画像が見つかりません', 404);
+    }
+    $path = EduMedia::questionDir($q['tenant_id'] !== null ? (int) $q['tenant_id'] : null) . '/' . $name;
+    if (!is_file($path)) {
+        take_error('画像が見つかりません', 404);
+    }
+    return ['path' => $path, 'mime' => EduMedia::mimeOf($name)];
+}
+
+/** 答え合わせ済みの解答(question_id => int[])。 */
+function take_locked_answers(int $assignmentId): array
+{
+    $out = [];
+    foreach (Db::all('SELECT question_id, answer FROM edu_answer_locks WHERE assignment_id = ?', [$assignmentId]) as $row) {
+        $out[(int) $row['question_id']] = array_map('intval', json_decode((string) $row['answer'], true) ?: []);
+    }
+    return $out;
+}
+
+/**
+ * 1問ずつの答え合わせ(feedback_mode = immediate の配信だけ)。
+ * 配信の割当と設問の組で最初の解答だけを記録し、2回目以降は最初の結果を返す(正解を見てから選び直させない)。
+ */
+function take_handle_answer(): never
+{
+    $token = take_token('post');
+    $a = take_resolve($token);
+    if ((string) $a['status'] === 'completed') {
+        take_error('この受講は既に完了しています', 409);
+    }
+    if ((string) ($a['feedback_mode'] ?? '') !== 'immediate') {
+        take_error('この配信は提出後にまとめて答え合わせをします', 409);
+    }
+    $body = take_body();
+    $questionId = $body['question_id'] ?? null;
+    $answer = $body['answer'] ?? null;
+    if (!is_int($questionId) || !is_array($answer)) {
+        take_error('question_id と answer を指定してください', 400);
+    }
+    foreach ($answer as $v) {
+        if (!is_int($v) || $v < 0) {
+            take_error('answer の要素が不正です', 400);
+        }
+    }
+    $q = null;
+    foreach (take_delivery_questions((int) $a['delivery_id']) as $row) {
+        if ((int) $row['id'] === $questionId) {
+            $q = $row;
+        }
+    }
+    if ($q === null) {
+        take_error('この配信の設問ではありません', 404);
+    }
+    if ((string) $a['status'] === 'assigned') {
+        Db::run("UPDATE edu_assignments SET status='started', started_at=datetime('now','localtime') WHERE id=? AND status='assigned'",
+            [(int) $a['id']]);
+    }
+    $correct = json_decode((string) $q['correct_answer'], true) ?: [];
+    Db::run(
+        'INSERT OR IGNORE INTO edu_answer_locks (assignment_id, question_id, answer, is_correct) VALUES (?, ?, ?, ?)',
+        [(int) $a['id'], $questionId, json_encode(array_values($answer)), take_arrays_equal($answer, $correct) ? 1 : 0]
+    );
+    $locked = take_locked_answers((int) $a['id'])[$questionId];
+    take_json([
+        'success' => true,
+        'locked' => $locked !== array_values($answer),
+        'feedback' => take_question_feedback($q, $locked),
+    ]);
 }
 
 function take_upsert_response(array $assignment, array $result): int
@@ -209,9 +372,13 @@ function take_upsert_response(array $assignment, array $result): int
     );
 }
 
-function take_save_attempt(array $assignment, array $result, array $questionMeta, bool $completed): void
+function take_save_attempt(array $assignment, array $result, array $questionMeta, bool $completed, bool $clearLocks = false): void
 {
-    Db::tx(function () use ($assignment, $result, $questionMeta, $completed) {
+    Db::tx(function () use ($assignment, $result, $questionMeta, $completed, $clearLocks) {
+        if ($clearLocks) {
+            // eラーニングで不合格なら、答え合わせの固定を消して受け直せるようにする(採点の保存と同じトランザクション)
+            Db::run('DELETE FROM edu_answer_locks WHERE assignment_id = ?', [(int) $assignment['id']]);
+        }
         $responseId = take_upsert_response($assignment, $result);
         foreach ($result['answers'] as $answer) {
             if (!isset($questionMeta[$answer['question_id']])) {
@@ -268,14 +435,24 @@ function take_handle_start(): never
 
     // correct_answer / explanation は秘匿(採点前に答えを渡さない)
     $out = [];
+    $byId = [];
     foreach ($questions as $q) {
+        $byId[(int) $q['id']] = $q;
         $out[] = [
             'id' => (int) $q['id'],
             'title' => $q['title'],
             'question_type' => $q['question_type'],
             'options' => json_decode((string) $q['options'], true) ?: [],
             'difficulty' => (int) $q['difficulty'],
+            'has_image' => ($q['image_name'] ?? '') !== '',
         ];
+    }
+    // 途中で中断して再開したとき、答え合わせ済みの設問はその結果から続ける
+    $answered = [];
+    foreach (take_locked_answers((int) $a['id']) as $qid => $answer) {
+        if (isset($byId[$qid])) {
+            $answered[] = ['question_id' => $qid, 'feedback' => take_question_feedback($byId[$qid], $answer)];
+        }
     }
 
     take_json([
@@ -284,9 +461,12 @@ function take_handle_start(): never
             'title' => $a['delivery_title'],
             'delivery_type' => $a['delivery_type'],
             'question_count' => count($out),
+            'feedback_mode' => (string) ($a['feedback_mode'] ?? 'after_submit'),
+            'pass_score' => $a['pass_score'] !== null ? (int) $a['pass_score'] : null,
         ],
         'material' => take_delivery_material((int) $a['delivery_id']),
         'questions' => $out,
+        'answered' => $answered,
     ]);
 }
 
@@ -340,6 +520,14 @@ function take_handle_submit(): never
         $qMeta[$qid] = $q;
     }
 
+    // 答え合わせ済みの設問は、固定した解答で採点する(提出の中身で書き換えさせない)
+    $immediate = (string) ($a['feedback_mode'] ?? '') === 'immediate';
+    if ($immediate) {
+        foreach (take_locked_answers((int) $a['id']) as $qid => $answer) {
+            $submitted[$qid] = $answer;
+        }
+    }
+
     // 全設問について採点(未回答は空配列=不正解扱い、maxScoreには算入)
     $answersForScoring = [];
     foreach ($questions as $q) {
@@ -355,23 +543,13 @@ function take_handle_submit(): never
     $passScore = $a['pass_score'] !== null ? (int) $a['pass_score'] : null;
     $passed = $passScore !== null ? ($result['percentage'] >= $passScore) : null;
     $completed = (string) $a['delivery_type'] !== 'elearning' || $passed === true;
-    take_save_attempt($a, $result, $qMeta, $completed);
+    take_save_attempt($a, $result, $qMeta, $completed, $immediate && !$completed);
 
     // 即時結果(解説つき)。ここで初めて correct_answer と explanation を返す。
     $feedback = [];
     foreach ($questions as $q) {
         $qid = (int) $q['id'];
-        $userAns = $submitted[$qid] ?? [];
-        $correct = json_decode((string) $q['correct_answer'], true) ?: [];
-        $feedback[] = [
-            'id' => $qid,
-            'title' => $q['title'],
-            'options' => json_decode((string) $q['options'], true) ?: [],
-            'your_answer' => $userAns,
-            'correct_answer' => $correct,
-            'is_correct' => take_arrays_equal($userAns, $correct),
-            'explanation' => $q['explanation'],
-        ];
+        $feedback[] = take_question_feedback($q, $submitted[$qid] ?? []);
     }
 
     take_json([
@@ -397,6 +575,23 @@ try {
     }
     if ($action === 'submit' && $method === 'POST') {
         take_handle_submit();
+    }
+    if ($action === 'answer' && $method === 'POST') {
+        take_handle_answer();
+    }
+    if ($action === 'page_image' && $method === 'GET') {
+        $page = filter_var($_GET['page'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($page === false) {
+            take_error('page が不正です', 400);
+        }
+        take_send_file(take_page_image_file(take_token('get'), (int) $page));
+    }
+    if ($action === 'question_image' && $method === 'GET') {
+        $qid = filter_var($_GET['question_id'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($qid === false) {
+            take_error('question_id が不正です', 400);
+        }
+        take_send_file(take_question_image_file(take_token('get'), (int) $qid));
     }
     take_error('不正なアクションです', 400);
 } catch (Throwable $e) {

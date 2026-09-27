@@ -19,7 +19,11 @@ education_ui_check(str_contains($app, 'is_test') && str_contains($app, 'テス�
 education_ui_check(str_contains($app, 'edu_materials.php'), '配信と教材バンクがスライド教材APIを使う');
 education_ui_check(str_contains($app, 'eduMaterialSlides'), 'スライドを差し替える編集UIがある');
 education_ui_check(str_contains($take, 'lessonView'), '受講画面に教材スライド表示がある');
-education_ui_check(str_contains($take, 'lessonNextBtn'), '教材を順番に閲覧できる');
+education_ui_check(str_contains($take, 'id="lessonNext"'), '教材を順番に閲覧できる');
+education_ui_check(str_contains($take, 'id="pagesView"') && str_contains($take, 'action=page_image'),
+    '受講画面に PDF のページ画像のビューアがある');
+education_ui_check(str_contains($take, 'id="qCheck"') && str_contains($take, "api('answer'"),
+    '受講画面で1問ごとに答え合わせできる');
 education_ui_check(str_contains($take, 'もう一度受講'), '不合格時に再受講を案内する');
 education_ui_check(str_contains($index, 'eduMaterialsBody'), '教材バンクにスライド教材一覧がある');
 education_ui_check(str_contains($app, 'previewEduMaterial'), 'スライド教材を試行できる');

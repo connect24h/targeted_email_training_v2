@@ -81,6 +81,40 @@ function eduDownloadUrl(action) {
   return `api/edu_questions.php?${query.toString()}`;
 }
 
+function eduMediaUrl(path, query) {
+  const params = new URLSearchParams(query);
+  if (State.user?.role === 'superadmin' && State.activeTenantId) params.set('tenant_id', State.activeTenantId);
+  return `${path}?${params}`;
+}
+
+async function uploadEduChunks(file, progress) {
+  if (!file?.size || file.size > 60_000_000) throw new Error('ファイルは60MB以内にしてください');
+  const { upload_id: uploadId, chunk_bytes: chunkBytes } = await api('api/edu_materials.php', {
+    method: 'POST', query: { action: 'upload_begin' }, body: {},
+  });
+  const total = Math.ceil(file.size / chunkBytes);
+  try {
+    for (let index = 0; index < total; index++) {
+      const chunk = file.slice(index * chunkBytes, (index + 1) * chunkBytes);
+      const dataBase64 = await fileToBase64(chunk, chunkBytes);
+      await api('api/edu_materials.php', { method: 'POST', query: { action: 'upload_chunk' },
+        body: { upload_id: uploadId, index, data_base64: dataBase64 }, timeout: 60000 });
+      progress.textContent = `アップロード ${index + 1}/${total}（${Math.round((index + 1) * 100 / total)}%）`;
+    }
+  } catch (error) {
+    await discardEduUpload(uploadId);   // 途中で失敗したアップロードをサーバーに残さない
+    throw error;
+  }
+  return uploadId;
+}
+
+/** 分割アップロードを破棄する(失敗しても本来の処理のエラーを優先するので、ここでは握りつぶす)。 */
+async function discardEduUpload(uploadId) {
+  if (!uploadId) return;
+  try { await api('api/edu_materials.php', { method: 'POST', query: { action: 'upload_discard' }, body: { upload_id: uploadId } }); }
+  catch (_) { /* サーバー側も24時間で掃除する */ }
+}
+
 /**
  * 完了まで消えない進行表示。toast は 3.5 秒で消えるため、
  * 生成のように「押してから結果が返るまで」を覆いたい処理はこちらを使う。
@@ -3111,6 +3145,7 @@ async function renderEduDeliveries() {
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-primary" onclick="viewEduDelivery(${d.id})" title="配信レポート"><i class="bi bi-graph-up"></i> レポート</button>
         ${roleAtLeast(State.user.role,'operator') && d.status==='draft'?`
+        <button class="btn btn-sm btn-outline-secondary" data-edu-delivery-edit="${Number(d.id)}" title="配信を編集"><i class="bi bi-pencil"></i> 編集</button>
         <button class="btn btn-sm btn-outline-success" onclick="launchEduDelivery(${d.id})" title="配信開始"><i class="bi bi-send"></i></button>`:''}
         ${roleAtLeast(State.user.role,'operator') && d.status==='running'?`
         <button class="btn btn-sm btn-outline-warning" onclick="remindEduDelivery(${d.id})" title="未完了者へ催促メール"><i class="bi bi-envelope-exclamation"></i></button>`:''}
@@ -3118,6 +3153,9 @@ async function renderEduDeliveries() {
           ? '<span class="small text-muted ms-1">受講履歴を保持（削除不可）</span>'
           : `<button class="btn btn-sm btn-outline-danger" onclick="deleteEduDelivery(${d.id})" title="受講開始前の配信を削除"><i class="bi bi-trash"></i> 削除</button>`) : ''}
       </td></tr>`).join('') : emptyRow(9);
+  for (const button of $('#eduDeliveriesBody').querySelectorAll?.('[data-edu-delivery-edit]') || []) {
+    button.addEventListener('click', () => editEduDelivery(Number(button.dataset.eduDeliveryEdit)));
+  }
 }
 function eduDeliveryForm() {
   const catOpts = (Cache.eduCats || []).map((c) =>
@@ -3134,6 +3172,11 @@ function eduDeliveryForm() {
         <option value="elearning">eラーニング（合格点まで再受講）</option>
         <option value="awareness_quiz">アウェアネス（回答提出で完了・合否なし）</option>
       </select><div class="form-text" id="eduTypeHelp"></div></div>
+    <div class="mb-2"><label class="form-label" for="eduFeedbackMode">答え合わせの時機</label>
+      <select class="form-select" name="feedback_mode" id="eduFeedbackMode">
+        <option value="after_submit">提出後にまとめて</option>
+        <option value="immediate">1問ごとに答え合わせ</option>
+      </select></div>
     <div class="mb-2" id="eduMaterialField"><label class="form-label">スライド教材</label>
       <select class="form-select" name="material_id"><option value="">教材なし</option>${materialOpts}</select></div>
     <div class="mb-2"><label class="form-label">配信対象</label>
@@ -3174,6 +3217,10 @@ function syncEduDeliveryForm() {
     : '理解度を測る継続教育です。回答提出で完了し、合格・不合格は付けません。';
 }
 
+function defaultEduFeedbackMode() {
+  $('#eduFeedbackMode').value = $('#eduDType').value === 'awareness_quiz' ? 'immediate' : 'after_submit';
+}
+
 function filterEduIndividualTargets() {
   const form = $('#eduDeliveryForm');
   const keyword = $('#eduTargetSearch').value.trim().toLowerCase();
@@ -3188,7 +3235,7 @@ function eduDeliveryPayload(form) {
   const targets = Array.from(form.target_ids.selectedOptions).map((o) => Number(o.value));
   const type = form.delivery_type.value;
   if (form.target_type.value === 'individual' && !targets.length) throw new Error('個別対象者を選択してください');
-  const body = { title: form.title.value.trim(), delivery_type: type, target_type: form.target_type.value,
+  const body = { title: form.title.value.trim(), delivery_type: type, feedback_mode: form.feedback_mode.value, target_type: form.target_type.value,
     question_count: Number(form.question_count.value) || 3, category_ids: categories.length ? categories : undefined };
   if (type === 'elearning') {
     body.pass_score = Number(form.pass_score.value) || 80;
@@ -3210,7 +3257,7 @@ async function newEduDelivery() {
     await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'create' }, body: eduDeliveryPayload($('#eduDeliveryForm')) });
     toast('配信を作成しました', 'ok'); renderEduDeliveries();
   }, { size: 'lg' });
-  $('#eduDType').addEventListener('change', syncEduDeliveryForm);
+  $('#eduDType').addEventListener('change', () => { defaultEduFeedbackMode(); syncEduDeliveryForm(); });
   $('#eduTargetType').addEventListener('change', syncEduDeliveryForm);
   $('#eduTargetSearch').addEventListener('input', filterEduIndividualTargets);
   $('#eduDeliveryForm').target_ids.addEventListener('change', filterEduIndividualTargets);
@@ -3223,6 +3270,27 @@ async function newEduDelivery() {
     syncEduDeliveryForm();
   });
   $('#eduRiskPreset').click();
+}
+async function editEduDelivery(id) {
+  let delivery;
+  try { ({ delivery } = await api('api/edu_deliveries.php', { query: { action: 'get', id } })); }
+  catch (error) { toast(error.message, 'err'); return; }
+  if (delivery.status !== 'draft') return toast('下書きの配信だけ編集できます', 'err');
+  const type = EDU_DTYPE[delivery.delivery_type] || delivery.delivery_type;
+  const body = `<form id="eduDeliveryEditForm">
+    <div class="mb-2 small text-muted">種別: ${esc(type)}</div>
+    <div class="mb-2"><label class="form-label" for="eduEditTitle">タイトル</label><input class="form-control" id="eduEditTitle" value="${esc(delivery.title)}" required></div>
+    <div class="mb-2"><label class="form-label" for="eduEditFeedback">答え合わせの時機</label><select class="form-select" id="eduEditFeedback">
+      <option value="after_submit"${delivery.feedback_mode === 'after_submit' ? ' selected' : ''}>提出後にまとめて</option>
+      <option value="immediate"${delivery.feedback_mode === 'immediate' ? ' selected' : ''}>1問ごとに答え合わせ</option>
+    </select></div></form>`;
+  showModal('教育配信を編集', body, async () => {
+    const title = $('#eduEditTitle').value.trim();
+    if (!title) throw new Error('タイトルを入力してください');
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' },
+      body: { id, title, feedback_mode: $('#eduEditFeedback').value } });
+    toast('更新しました', 'ok'); renderEduDeliveries();
+  });
 }
 async function deleteEduDelivery(id) {
   if (!roleAtLeast(State.user.role, 'operator')) return;
@@ -3271,13 +3339,25 @@ async function viewEduDelivery(id) {
 async function renderEduMaterials() {
   const { materials } = await api('api/edu_materials.php', { query: { action: 'list' } });
   Cache.eduMaterialList = materials || [];
+  if (typeof document !== 'undefined') {
+    const pptxButton = document.getElementById('eduPptxImportBtn');
+    if (pptxButton && !$('#eduPdfImportBtn')) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.id = 'eduPdfImportBtn';
+      button.className = 'btn btn-outline-primary btn-sm';
+      button.textContent = 'PDF読込';
+      button.addEventListener('click', importEduMaterialPdf);
+      pptxButton.after(button);
+    }
+    $('#eduPdfImportBtn')?.classList.toggle('d-none', !roleAtLeast(State.user.role, 'operator'));
+  }
   const canEdit = (material) => roleAtLeast(State.user.role, 'operator')
     && (Number(material.is_shared) !== 1 || State.user.role === 'superadmin');
   $('#eduMaterialsBody').innerHTML = Cache.eduMaterialList.length ? Cache.eduMaterialList.map((material, index) => `
     <tr><td>${index + 1}</td><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
-      <td class="small text-muted">${esc(material.description || '')}</td><td>${material.slide_count}枚</td>
+      <td class="small text-muted">${esc(material.description || '')}</td><td>${material.format === 'page_images' ? `PDF ${Number(material.page_count)}ページ` : `文字 ${Number(material.slide_count)}枚`}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduMaterial(${material.id})"><i class="bi bi-play-circle"></i> 教材を試行</button>
-        ${canEdit(material) ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
+        ${canEdit(material) && material.format !== 'page_images' ? `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>` : '<span class="small text-muted ms-1">閲覧のみ</span>'}</td></tr>`).join('') : emptyRow(5);
 }
 
 let eduMaterialPreviewIndex = 0;
@@ -3294,19 +3374,36 @@ function eduMaterialPreviewHtml() {
     </div>`;
 }
 function renderEduMaterialPreview(material) {
-  const slides = material.slides || [];
-  const slide = slides[eduMaterialPreviewIndex];
-  $('#eduMaterialPreviewProgress').textContent = `${eduMaterialPreviewIndex + 1} / ${slides.length}`;
-  $('#eduMaterialPreviewBar').style.width = `${Math.round((eduMaterialPreviewIndex + 1) * 100 / slides.length)}%`;
-  $('#eduMaterialPreviewTitle').textContent = slide.title;
-  $('#eduMaterialPreviewBody').textContent = slide.body;
+  const pages = material.format === 'page_images' ? material.pages || [] : material.slides || [];
+  const page = pages[eduMaterialPreviewIndex];
+  $('#eduMaterialPreviewProgress').textContent = `${eduMaterialPreviewIndex + 1} / ${pages.length}`;
+  $('#eduMaterialPreviewBar').style.width = `${Math.round((eduMaterialPreviewIndex + 1) * 100 / pages.length)}%`;
+  // ページ画像はページ番号が上の進み具合に出るので、見出しは出さない
+  $('#eduMaterialPreviewTitle').textContent = material.format === 'page_images' ? '' : page.title;
+  const body = $('#eduMaterialPreviewBody');
+  body.replaceChildren();
+  if (material.format === 'page_images') {
+    const img = document.createElement('img');
+    img.className = 'edu-page-image'; img.alt = page.page_text;
+    img.src = eduMediaUrl('api/edu_materials.php', { action: 'page_image', id: material.id, page: page.page_no });
+    body.appendChild(img);
+  } else $('#eduMaterialPreviewBody').textContent = page.body;
   $('#eduMaterialPreviewPrev').disabled = eduMaterialPreviewIndex === 0;
-  $('#eduMaterialPreviewNext').innerHTML = eduMaterialPreviewIndex === slides.length - 1
+  $('#eduMaterialPreviewNext').innerHTML = eduMaterialPreviewIndex === pages.length - 1
     ? '<i class="bi bi-arrow-counterclockwise"></i> 最初に戻る' : '次へ <i class="bi bi-chevron-right"></i>';
 }
-function previewEduMaterial(id) {
-  const material = (Cache.eduMaterialList || []).find((row) => Number(row.id) === Number(id));
-  if (!material?.slides?.length) return toast('試行できるスライドがありません', 'err');
+let eduMaterialPreviewLoading = false;
+let eduMaterialPreviewKeyHandler = null;
+async function previewEduMaterial(id) {
+  // 「教材を試行」の連打で取得が並走し、キーボードの操作が重複して登録されないようにする
+  if (eduMaterialPreviewLoading) return;
+  eduMaterialPreviewLoading = true;
+  let material;
+  try { ({ material } = await api('api/edu_materials.php', { query: { action: 'get', id } })); }
+  catch (error) { toast(error.message, 'err'); return; }
+  finally { eduMaterialPreviewLoading = false; }
+  const pages = material.format === 'page_images' ? material.pages || [] : material.slides || [];
+  if (!pages.length) return toast('試行できるページがありません', 'err');
   eduMaterialPreviewIndex = 0;
   showInfoModal(`教材試行: ${material.title}`, eduMaterialPreviewHtml(), { size: 'xl' });
   $('#eduMaterialPreviewPrev').addEventListener('click', () => {
@@ -3314,10 +3411,55 @@ function previewEduMaterial(id) {
     renderEduMaterialPreview(material);
   });
   $('#eduMaterialPreviewNext').addEventListener('click', () => {
-    eduMaterialPreviewIndex = eduMaterialPreviewIndex === material.slides.length - 1 ? 0 : eduMaterialPreviewIndex + 1;
+    eduMaterialPreviewIndex = eduMaterialPreviewIndex === pages.length - 1 ? 0 : eduMaterialPreviewIndex + 1;
     renderEduMaterialPreview(material);
   });
+  const onKey = (event) => {
+    if (!$('#appModal').classList.contains('show') || !$('#eduMaterialPreviewNext')) {
+      document.removeEventListener('keydown', onKey); return;
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      $(`#eduMaterialPreview${event.key === 'ArrowLeft' ? 'Prev' : 'Next'}`).click();
+    }
+  };
+  if (eduMaterialPreviewKeyHandler) document.removeEventListener('keydown', eduMaterialPreviewKeyHandler);
+  eduMaterialPreviewKeyHandler = onKey;
+  document.addEventListener('keydown', onKey);
+  $('#appModal').addEventListener('hidden.bs.modal', () => {
+    document.removeEventListener('keydown', onKey);
+    if (eduMaterialPreviewKeyHandler === onKey) eduMaterialPreviewKeyHandler = null;
+  }, { once: true });
   renderEduMaterialPreview(material);
+}
+
+function importEduMaterialPdf() {
+  const body = `<form id="eduPdfImportForm">
+    <div class="mb-2"><label class="form-label" for="eduPdfFile">PDFファイル（60MBまで）</label>
+      <input class="form-control" id="eduPdfFile" type="file" accept=".pdf,application/pdf" required></div>
+    <div class="mb-2"><label class="form-label" for="eduPdfTitle">教材名</label><input class="form-control" id="eduPdfTitle" maxlength="200" required></div>
+    <div class="mb-2"><label class="form-label" for="eduPdfDescription">説明（任意）</label><textarea class="form-control" id="eduPdfDescription" maxlength="1000"></textarea></div>
+    <div id="eduPdfProgress" class="small text-muted" role="status" aria-live="polite"></div>
+  </form>`;
+  showModal('PDF教材を読み込む', body, async () => {
+    const file = $('#eduPdfFile').files[0];
+    if (!file || !/\.pdf$/i.test(file.name)) throw new Error('PDFファイルを選択してください');
+    const title = $('#eduPdfTitle').value.trim();
+    if (!title) throw new Error('教材名を入力してください');
+    const progress = $('#eduPdfProgress');
+    try {
+      const uploadId = await uploadEduChunks(file, progress);
+      progress.textContent = 'PDFを教材に変換しています…';
+      const result = await api('api/edu_materials.php', { method: 'POST', query: { action: 'import_pdf' },
+        body: { upload_id: uploadId, filename: file.name, title, description: $('#eduPdfDescription').value.trim() }, timeout: 180000 });
+      toast(`PDF ${result.material.page_count}ページを読み込みました`, 'ok');
+      renderEduMaterials();
+    } catch (error) { progress.textContent = `失敗: ${error.message}`; throw error; }
+  }, { size: 'lg' });
+  $('#eduPdfFile').addEventListener('change', () => {
+    const file = $('#eduPdfFile').files[0];
+    $('#eduPdfTitle').value = file ? file.name.replace(/\.pdf$/i, '') : '';
+  });
 }
 
 function eduMaterialSlideRow(slide = {}) {
@@ -3411,7 +3553,7 @@ async function renderEduQuestions() {
   const canEdit = (q) => roleAtLeast(State.user.role, 'operator')
     && (Number(q.is_shared) !== 1 || State.user.role === 'superadmin');
   $('#eduQuestionsBody').innerHTML = questionsAsc.length ? questionsAsc.map((q, i) => `
-    <tr><td>${i + 1}</td><td>${esc(q.category_name || '')}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
+    <tr><td>${i + 1}</td><td>${esc(q.category_name || '')}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}${q.image_name ? `<img class="edu-question-thumb ms-2" src="${esc(eduMediaUrl('api/edu_questions.php', { action: 'image', id: q.id }))}" alt="設問画像">` : ''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduQuestion(${q.id})"><i class="bi bi-play-circle"></i> 試行</button>
         ${canEdit(q) ? `
         <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})" title="設問を編集"><i class="bi bi-pencil"></i> 編集</button>
@@ -3428,7 +3570,7 @@ function eduPreviewArray(value) {
 function eduQuestionPreviewHtml() {
   return `<div class="alert alert-info py-2 small"><i class="bi bi-eye me-1"></i>プレビューです。受講履歴や採点結果は保存されません。</div>
     <div class="mx-auto" style="max-width:760px"><div class="card shadow-sm"><div class="card-body p-4">
-      <div id="eduQuestionPreviewTitle" class="fw-bold mb-3"></div><div id="eduQuestionPreviewOptions" class="d-grid gap-2"></div>
+      <div id="eduQuestionPreviewTitle" class="fw-bold mb-3"></div><img id="eduQuestionPreviewImage" class="edu-question-image mb-3 d-none" alt="設問画像"><div id="eduQuestionPreviewOptions" class="d-grid gap-2"></div>
       <button id="eduQuestionPreviewCheck" class="btn btn-primary w-100 mt-3">回答を確認</button>
       <div id="eduQuestionPreviewFeedback" class="alert mt-3 mb-0 d-none" style="white-space:pre-wrap" aria-live="polite"></div>
     </div></div></div>`;
@@ -3454,6 +3596,11 @@ function previewEduQuestion(id) {
   const selected = new Set();
   showInfoModal('確認テストを試行', eduQuestionPreviewHtml(), { size: 'lg' });
   $('#eduQuestionPreviewTitle').textContent = question.title;
+  const image = $('#eduQuestionPreviewImage');
+  if (question.image_name) {
+    image.src = eduMediaUrl('api/edu_questions.php', { action: 'image', id: question.id });
+    image.classList.remove('d-none');
+  }
   renderEduQuestionPreviewOptions(question, selected);
   $('#eduQuestionPreviewCheck').addEventListener('click', () => {
     if (!selected.size) return toast('回答を選択してください', 'err');
@@ -3463,7 +3610,10 @@ function previewEduQuestion(id) {
     const correctLabels = correct.map((index) => eduPreviewArray(question.options)[index]).filter(Boolean).join(' / ');
     const feedback = $('#eduQuestionPreviewFeedback');
     feedback.className = `alert mt-3 mb-0 ${passed ? 'alert-success' : 'alert-danger'}`;
-    feedback.textContent = `${passed ? '正解です' : '不正解です'}\n正解: ${correctLabels}${question.explanation ? `\n解説: ${question.explanation}` : ''}`;
+    const optionExplanations = eduPreviewArray(question.option_explanations);
+    const details = eduPreviewArray(question.options).map((option, index) => optionExplanations[index]
+      ? `${index + 1}. ${option}: ${optionExplanations[index]}` : '').filter(Boolean).join('\n');
+    feedback.textContent = `${passed ? '正解です' : '不正解です'}\n正解: ${correctLabels}${question.explanation ? `\n解説: ${question.explanation}` : ''}${details ? `\n選択肢ごとの解説:\n${details}` : ''}`;
   });
 }
 
@@ -3473,11 +3623,12 @@ async function previewEduQuestionsWithAnswers() {
   const cards = (questions || []).map((question, questionIndex) => {
     const options = eduPreviewArray(question.options);
     const correct = new Set(eduPreviewArray(question.correct_answer).map(Number));
+    const optionExplanations = eduPreviewArray(question.option_explanations);
     const optionList = options.map((option, optionIndex) =>
-      `<li class="list-group-item d-flex justify-content-between gap-2"><span>${optionIndex + 1}. ${esc(option)}</span>${correct.has(optionIndex) ? '<span class="badge bg-success">正解</span>' : ''}</li>`).join('');
+      `<li class="list-group-item"><div class="d-flex justify-content-between gap-2"><span>${optionIndex + 1}. ${esc(option)}</span>${correct.has(optionIndex) ? '<span class="badge bg-success">正解</span>' : ''}</div>${optionExplanations[optionIndex] ? `<div class="small text-muted mt-1 edu-option-explanation">${esc(optionExplanations[optionIndex])}</div>` : ''}</li>`).join('');
     return `<section class="card mb-3"><div class="card-header d-flex justify-content-between gap-2">
       <strong>${questionIndex + 1}. ${esc(question.title)}</strong><span class="text-muted small text-nowrap">${esc(question.category_name || '')} / ${typeName[question.question_type] || esc(question.question_type)} / 難${question.difficulty}</span>
-      </div><ul class="list-group list-group-flush">${optionList}</ul>
+      </div>${question.image_name ? `<img class="edu-question-image m-3" src="${esc(eduMediaUrl('api/edu_questions.php', { action: 'image', id: question.id }))}" alt="設問画像">` : ''}<ul class="list-group list-group-flush">${optionList}</ul>
       <div class="card-footer small"><strong>解説:</strong> ${esc(question.explanation || '（なし）')}</div></section>`;
   }).join('');
   showInfoModal('確認テスト 全設問・回答付き一覧', cards || '<p class="text-muted">設問がありません。</p>', { size: 'xl' });
@@ -3495,15 +3646,28 @@ function importEduQuestionsXlsx() {
   const body = `<form id="eduXlsxImportForm">
     <div class="alert alert-info py-2 small">テンプレートの列名を変更せず、1行につき1設問を入力してください。不正な行が1つでもある場合は全件を取り込みません。</div>
     <label class="form-label" for="eduXlsxFile">Excelファイル（.xlsx、5MB・1000設問まで）</label>
-    <input class="form-control" id="eduXlsxFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+    <input class="form-control mb-2" id="eduXlsxFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+    <label class="form-label" for="eduXlsxImagesZip">画像のZIP（任意・60MBまで）</label>
+    <input class="form-control" id="eduXlsxImagesZip" type="file" accept=".zip,application/zip">
+    <div id="eduXlsxProgress" class="small text-muted mt-2" role="status" aria-live="polite"></div>
   </form>`;
   showModal('確認テスト設問をExcelから追加', body, async () => {
     const file = $('#eduXlsxFile').files[0];
     if (!file || !/\.xlsx$/i.test(file.name)) throw new Error('Excel（.xlsx）ファイルを選択してください');
     const fileBase64 = await fileToBase64(file);
-    const result = await api('api/edu_questions.php', {
-      method: 'POST', query: { action: 'import_xlsx' }, body: { filename: file.name, file_base64: fileBase64 }, timeout: 60000,
-    });
+    const zip = $('#eduXlsxImagesZip').files[0];
+    if (zip && !/\.zip$/i.test(zip.name)) throw new Error('画像のZIPファイルを選択してください');
+    const imagesUploadId = zip ? await uploadEduChunks(zip, $('#eduXlsxProgress')) : undefined;
+    $('#eduXlsxProgress').textContent = '設問を取り込んでいます…';
+    let result;
+    try {
+      result = await api('api/edu_questions.php', {
+        method: 'POST', query: { action: 'import_xlsx' }, body: { filename: file.name, file_base64: fileBase64, images_upload_id: imagesUploadId }, timeout: 60000,
+      });
+    } catch (error) {
+      await discardEduUpload(imagesUploadId);   // 取込に失敗したら、送った画像の ZIP も残さない
+      throw error;
+    }
     toast(`${result.imported}問を追加しました`, 'ok');
     eduCatFilter = 0;
     renderEduQuestions();
@@ -3588,16 +3752,52 @@ function eduQuestionForm(q = {}) {
   const catOpts = cats.map((c) => `<option value="${c.id}"${Number(q.category_id)===c.id?' selected':''}>${esc(c.name)}</option>`).join('');
   const typeOpts = [['single_choice','単一選択'],['true_false','正誤'],['multiple_choice','複数選択']]
     .map(([v,l]) => `<option value="${v}"${type===v?' selected':''}>${l}</option>`).join('');
+  const explanations = eduPreviewArray(q.option_explanations);
   return `<form id="eduQForm">
     <div class="mb-2"><label class="form-label">カテゴリ</label><select class="form-select" name="category_id" required>${catOpts}</select></div>
     <div class="mb-2"><label class="form-label">設問文</label><input class="form-control" name="title" value="${esc(q.title)}" required></div>
     <div class="mb-2"><label class="form-label">種別</label><select class="form-select" name="question_type">${typeOpts}</select></div>
     <div class="mb-2"><label class="form-label">選択肢（1行に1つ）</label><textarea class="form-control" name="options" rows="4">${esc(opts.join('\n'))}</textarea></div>
+    <div class="mb-2"><label class="form-label">選択肢ごとの解説（任意）</label><div id="eduQOptionExplanations">${eduQExplanationRows(opts, explanations)}</div></div>
+    <div class="mb-2"><label class="form-label" for="eduQImageFile">設問画像（PNG・JPEG、5MB以内）</label>
+      <input class="form-control" id="eduQImageFile" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg">
+      <div id="eduQImagePreview" class="mt-2${q.image_name ? '' : ' d-none'}"> <img class="edu-question-image" ${q.image_name ? `src="${esc(eduMediaUrl('api/edu_questions.php', { action: 'image', id: q.id }))}"` : ''} alt="設問画像のプレビュー">
+        <button type="button" class="btn btn-sm btn-outline-danger ms-2" id="eduQImageRemove">画像を外す</button></div></div>
     <div class="mb-2"><label class="form-label">正答の番号（1始まり・複数選択はカンマ区切り）</label><input class="form-control" name="correct" value="${esc(correct.map((i)=>Number(i)+1).join(','))}" placeholder="例: 1"></div>
     <div class="mb-2"><label class="form-label">難易度（1〜3）</label><input class="form-control" name="difficulty" type="number" min="1" max="3" value="${q.difficulty||1}"></div>
     <div class="mb-2"><label class="form-label">解説</label><textarea class="form-control" name="explanation" rows="2">${esc(q.explanation)}</textarea></div>
     <div class="form-check"><input class="form-check-input" type="checkbox" name="is_active" id="eduQActive"${q.id===undefined||Number(q.is_active)===1?' checked':''}><label class="form-check-label" for="eduQActive">有効（出題対象にする）</label></div>
   </form>`;
+}
+function eduQExplanationRows(options, explanations = []) {
+  return options.map((option, index) => `<div class="mb-2"><label class="form-label small">${index + 1}. ${esc(option)}：この選択肢の解説</label>
+    <textarea class="form-control edu-option-explanation-input" rows="2" maxlength="2000">${esc(explanations[index] || '')}</textarea></div>`).join('');
+}
+function bindEduQuestionForm() {
+  const form = $('#eduQForm');
+  form.options.addEventListener('input', () => {
+    const explanations = Array.from(form.querySelectorAll('.edu-option-explanation-input')).map((field) => field.value);
+    const options = form.options.value.split('\n').map((value) => value.trim()).filter(Boolean);
+    $('#eduQOptionExplanations').innerHTML = eduQExplanationRows(options, explanations);
+  });
+  $('#eduQImageFile').addEventListener('change', async (event) => {
+    const file = event.target.files[0]; if (!file) return;
+    if (file.size > 5_000_000 || !['image/png', 'image/jpeg'].includes(file.type)) {
+      event.target.value = ''; return toast('画像は5MB以内のPNGかJPEGを選択してください', 'err');
+    }
+    try {
+      const base64 = await fileToBase64(file);
+      $('#eduQImagePreview img').src = `data:${file.type};base64,${base64}`;
+      $('#eduQImagePreview').classList.remove('d-none');
+      $('#eduQImagePreview').dataset.removed = '';
+    } catch (error) { toast(error.message, 'err'); }
+  });
+  $('#eduQImageRemove').addEventListener('click', () => {
+    $('#eduQImageFile').value = '';
+    $('#eduQImagePreview img').removeAttribute('src');
+    $('#eduQImagePreview').classList.add('d-none');
+    $('#eduQImagePreview').dataset.removed = '1';
+  });
 }
 /* フォーム値 → API body。選択肢テキストと正答番号を配列化して検証する。 */
 function eduQFormBody(f) {
@@ -3606,25 +3806,44 @@ function eduQFormBody(f) {
   const correct = f.correct.value.split(',').map((s) => parseInt(s.trim(), 10) - 1).filter((n) => !Number.isNaN(n));
   if (correct.length === 0) { toast('正答の番号を入力してください', 'err'); return null; }
   if (correct.some((i) => i < 0 || i >= options.length)) { toast('正答の番号が選択肢の範囲外です', 'err'); return null; }
+  const explanations = Array.from(f.querySelectorAll('.edu-option-explanation-input')).map((field) => field.value.trim());
   return {
     category_id: parseInt(f.category_id.value, 10),
     title: f.title.value.trim(),
     question_type: f.question_type.value,
     options,
+    option_explanations: explanations.some(Boolean) ? explanations : [],
     correct_answer: correct,
     difficulty: parseInt(f.difficulty.value, 10) || 1,
     explanation: f.explanation.value.trim(),
     is_active: f.is_active.checked ? 1 : 0,
   };
 }
+async function saveEduQuestionImage(id) {
+  const file = $('#eduQImageFile').files[0];
+  if (file) {
+    const fileBase64 = await fileToBase64(file);
+    await api('api/edu_questions.php', { method: 'POST', query: { action: 'upload_image' }, body: { id, file_base64: fileBase64 } });
+  } else if ($('#eduQImagePreview').dataset.removed === '1') {
+    await api('api/edu_questions.php', { method: 'POST', query: { action: 'remove_image' }, body: { id } });
+  }
+}
 function newEduQuestion() {
   if (!Cache.eduCats || !Cache.eduCats.length) { toast('先にカテゴリを用意してください', 'err'); return; }
   const preset = eduCatFilter ? { category_id: eduCatFilter } : {};
+  let savedId = null;
   showModal('新規設問', eduQuestionForm(preset), async () => {
     const body = eduQFormBody($('#eduQForm')); if (!body) return false;
-    await api('api/edu_questions.php', { method: 'POST', query: { action: 'create' }, body });
+    if (savedId) {
+      await api('api/edu_questions.php', { method: 'POST', query: { action: 'update' }, body: { ...body, id: savedId } });
+    } else {
+      const result = await api('api/edu_questions.php', { method: 'POST', query: { action: 'create' }, body });
+      savedId = result.question.id;
+    }
+    await saveEduQuestionImage(savedId);
     toast('作成しました', 'ok'); renderEduQuestions();
   });
+  bindEduQuestionForm();
 }
 function editEduQuestion(id) {
   const q = Cache.eduQuestions[id]; if (!q) return;
@@ -3632,8 +3851,10 @@ function editEduQuestion(id) {
     const body = eduQFormBody($('#eduQForm')); if (!body) return false;
     body.id = q.id;
     await api('api/edu_questions.php', { method: 'POST', query: { action: 'update' }, body });
+    await saveEduQuestionImage(q.id);
     toast('更新しました', 'ok'); renderEduQuestions();
   });
+  bindEduQuestionForm();
 }
 async function deleteEduQuestion(id) {
   const q = Cache.eduQuestions[id]; if (!q) return;

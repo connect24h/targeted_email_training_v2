@@ -22,6 +22,7 @@ final class MigrationRunner
         '20260923-credential-captures',
         '20260923-campaign-close',
         '20260925-surveys',
+        '20260927-edu-rich-content',
     ];
 
     /**
@@ -201,6 +202,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-survey.sql'));
             return;
         }
+        if ($version === '20260927-edu-rich-content') {
+            // 教材のページ画像、設問の画像と選択肢ごとの解説、答えた直後の答え合わせ(08 の G16〜G18)。
+            // 列とテーブルの追加だけで、既存の教材と配信は文字のスライドと提出後の答え合わせのまま。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-edu-media.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -374,7 +382,17 @@ final class MigrationRunner
                 'attachment_filename' => 'TEXT',
             ],
             'edu_categories' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
-            'edu_questions' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
+            'edu_questions' => [
+                'is_shared' => 'INTEGER NOT NULL DEFAULT 0',
+                'option_explanations' => 'TEXT',
+                'image_name' => 'TEXT',
+            ],
+            'edu_materials' => [
+                'format' => "TEXT NOT NULL DEFAULT 'text_slides'",
+                'page_count' => 'INTEGER NOT NULL DEFAULT 0',
+                'source_name' => 'TEXT',
+            ],
+            'edu_deliveries' => ['feedback_mode' => "TEXT NOT NULL DEFAULT 'after_submit'"],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],
         ];
         foreach ($columns as $table => $definitions) {

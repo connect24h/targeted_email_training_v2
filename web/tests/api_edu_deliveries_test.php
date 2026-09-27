@@ -90,6 +90,19 @@ check(($r['payload']['delivery']['delivery_type'] ?? '') === 'elearning', 'ED-1:
 check((int) ($r['payload']['delivery']['pass_score'] ?? 0) === 70, 'ED-1: pass_score=70 が保存される');
 check((int) ($r['payload']['delivery']['material_id'] ?? 0) === $materialId, 'ED-1: スライド教材を保存する');
 $ed1Id = (int) $r['payload']['delivery']['id'];
+check(($r['payload']['delivery']['feedback_mode'] ?? '') === 'after_submit', 'ED-FB-1: eラーニングの既定は提出後にまとめて答え合わせ');
+$fb = call_handler('edu_d_handle_create', [
+    'title' => 'ED-FB 小問', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all',
+], 'operator');
+check(($fb['payload']['delivery']['feedback_mode'] ?? '') === 'immediate', 'ED-FB-2: 小問の既定は1問ごとの答え合わせ');
+$fb = call_handler('edu_d_handle_create', [
+    'title' => 'ED-FB 指定', 'delivery_type' => 'elearning', 'target_type' => 'all', 'pass_score' => 60, 'feedback_mode' => 'immediate',
+], 'operator');
+check(($fb['payload']['delivery']['feedback_mode'] ?? '') === 'immediate', 'ED-FB-3: 答え合わせの時機を指定できる');
+$fb = call_handler('edu_d_handle_create', [
+    'title' => 'ED-FB 不正', 'delivery_type' => 'elearning', 'target_type' => 'all', 'pass_score' => 60, 'feedback_mode' => 'later',
+], 'operator');
+check($fb['code'] === 400, 'ED-FB-4: 不正な答え合わせの時機を拒否する');
 
 // ---- ED-2: elearning + all + no pass_score → 400 ----
 $r = call_handler('edu_d_handle_create', [

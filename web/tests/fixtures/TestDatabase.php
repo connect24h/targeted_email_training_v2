@@ -28,6 +28,7 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-template-snapshots.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-credential-captures.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-survey.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-media.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS edu_questions (
   options        TEXT NOT NULL,                          -- JSON配列 例 ["選択肢A","選択肢B",...]
   correct_answer TEXT NOT NULL,                          -- JSON配列(0始まりindex) 例 [2] / [0,3]
   explanation    TEXT,
+  option_explanations TEXT,                              -- JSON配列(選択肢と同じ順の解説)。NULL なら explanation だけを使う
+  image_name     TEXT,                                   -- 設問の画像。edu-media 配下のファイル名(サーバーが決める)
   difficulty     INTEGER NOT NULL DEFAULT 1,             -- 配点(移植元 scoring.ts: 難易度=配点)
   is_active      INTEGER NOT NULL DEFAULT 1,
   is_shared      INTEGER NOT NULL DEFAULT 0,
@@ -51,6 +53,9 @@ CREATE TABLE IF NOT EXISTS edu_materials (
   title       TEXT NOT NULL,
   description TEXT,
   slides      TEXT NOT NULL,                            -- JSON [{"title":"...","body":"..."}]
+  format      TEXT NOT NULL DEFAULT 'text_slides',      -- text_slides(文字のスライド) / page_images(PDF のページ画像)
+  page_count  INTEGER NOT NULL DEFAULT 0,               -- page_images のページ数
+  source_name TEXT,                                     -- 取り込んだ PDF の元のファイル名
   is_active   INTEGER NOT NULL DEFAULT 1,
   is_shared   INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
@@ -73,6 +78,7 @@ CREATE TABLE IF NOT EXISTS edu_deliveries (
   scheduled_at     TEXT,
   deadline         TEXT,
   pass_score       INTEGER,                             -- elearning のみ必達
+  feedback_mode    TEXT NOT NULL DEFAULT 'after_submit', -- after_submit(提出後にまとめて) / immediate(1問ごとに答え合わせ)
   material_id      INTEGER,
   target_type      TEXT,                                -- all / group / risk / individual
   target_group_id  INTEGER,

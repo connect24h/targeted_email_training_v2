@@ -1,5 +1,6 @@
 <?php declare(strict_types=1); require __DIR__ . '/../lib/bootstrap.php';
 require_once __DIR__ . '/../lib/OfficeDocumentReader.php';
+require_once __DIR__ . '/../lib/EduMedia.php';
 
 /** スライド教材管理。本文はplain textとして保存し、受講画面側でescapeして表示する。 */
 
@@ -75,7 +76,22 @@ function edu_m_present(array $row): array
     $row['is_shared'] = (int) $row['is_shared'];
     $row['slides'] = json_decode((string) $row['slides'], true) ?: [];
     $row['slide_count'] = count($row['slides']);
+    $row['format'] = (string) ($row['format'] ?? 'text_slides');
+    $row['page_count'] = (int) ($row['page_count'] ?? 0);
     return $row;
+}
+
+/** ページ画像の教材のページ一覧(画像は page_image で取る)。 */
+function edu_m_pages(int $materialId): array
+{
+    $rows = Db::all(
+        'SELECT page_no, width, height, page_text FROM edu_material_pages WHERE material_id = ? ORDER BY page_no',
+        [$materialId]
+    );
+    return array_map(static fn(array $r): array => [
+        'page_no' => (int) $r['page_no'], 'width' => (int) $r['width'], 'height' => (int) $r['height'],
+        'page_text' => (string) $r['page_text'],
+    ], $rows);
 }
 
 function edu_m_find(int $id, int $tenantId): ?array
@@ -153,6 +169,175 @@ function edu_m_handle_update(array $actor): never
     json_out(['success' => true, 'material' => edu_m_present(edu_m_find($id, $tenantId))]);
 }
 
+function edu_m_handle_get(array $actor): never
+{
+    $tenantId = effective_tenant_id($actor, edu_m_query_int('tenant_id'));
+    $id = edu_m_query_int('id');
+    $row = $id !== null ? edu_m_find($id, $tenantId) : null;
+    if ($row === null) {
+        json_error('教材が見つかりません', 404);
+    }
+    $material = edu_m_present($row);
+    $material['pages'] = $material['format'] === 'page_images' ? edu_m_pages($material['id']) : [];
+    json_out(['success' => true, 'material' => $material]);
+}
+
+/** PDF の分割アップロードを始める。PHP の受信の上限を超える PDF を4MBずつ受け取るため。 */
+function edu_m_handle_upload_begin(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_m_body_int($body, 'tenant_id'));
+    try {
+        $uploadId = EduMedia::beginUpload($tenantId, (int) $actor['id']);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 500);
+    }
+    json_out(['success' => true, 'upload_id' => $uploadId, 'chunk_bytes' => 4_000_000]);
+}
+
+function edu_m_handle_upload_chunk(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_m_body_int($body, 'tenant_id'));
+    $uploadId = is_string($body['upload_id'] ?? null) ? $body['upload_id'] : '';
+    $index = $body['index'] ?? null;
+    $encoded = is_string($body['data_base64'] ?? null) ? $body['data_base64'] : '';
+    if (!is_int($index) || $index < 0 || $encoded === '' || strlen($encoded) > 5_700_000) {
+        json_error('分割の指定が不正です', 400);
+    }
+    $bytes = base64_decode($encoded, true);
+    if (!is_string($bytes)) {
+        json_error('分割を読み取れません', 400);
+    }
+    try {
+        $total = EduMedia::appendChunk($uploadId, $tenantId, (int) $actor['id'], $index, $bytes);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 400);
+    }
+    json_out(['success' => true, 'received_bytes' => $total]);
+}
+
+/** 途中で失敗した分割アップロードを破棄する(画面から呼ぶ)。 */
+function edu_m_handle_upload_discard(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_m_body_int($body, 'tenant_id'));
+    $uploadId = is_string($body['upload_id'] ?? null) ? $body['upload_id'] : '';
+    try {
+        EduMedia::discardUpload($uploadId, $tenantId, (int) $actor['id']);
+    } catch (RuntimeException) {
+        // 既に消えている、または自分のアップロードではない。どちらも破棄済みとして扱う
+    }
+    json_out(['success' => true]);
+}
+
+/** アップロードした PDF をページ画像に変換し、ページ画像の教材として保存する。 */
+function edu_m_handle_import_pdf(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_m_body_int($body, 'tenant_id'));
+    $uploadId = is_string($body['upload_id'] ?? null) ? $body['upload_id'] : '';
+    $filename = is_string($body['filename'] ?? null) ? trim($body['filename']) : '';
+    $title = edu_m_text($body, 'title', false);
+    $description = edu_m_text($body, 'description', false) ?? '';
+    if ($filename === '' || !preg_match('/\.pdf$/i', $filename)) {
+        json_error('PDF ファイルを指定してください', 400);
+    }
+    $title = $title !== null && $title !== ''
+        ? $title : mb_substr((string) preg_replace('/\.pdf$/i', '', basename($filename)), 0, 200);
+    if ($title === '' || mb_strlen($title) > 200 || mb_strlen($description) > 1000) {
+        json_error('教材の入力が不正です', 400);
+    }
+    try {
+        $pdfPath = EduMedia::uploadPath($uploadId, $tenantId, (int) $actor['id']);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 400);
+    }
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(180);   // 34ページで約15秒。大きな PDF でも途中で打ち切らない
+    }
+    // 先に教材の行を作って id を決め、その id の置き場へ変換する。行は変換が終わるまで非表示(is_active=0)にし、
+    // 途中で処理が止まっても、ページのない教材が一覧や配信に出ないようにする。失敗したら行を消す
+    $id = Db::insert(
+        "INSERT INTO edu_materials (tenant_id, title, description, slides, is_active, is_shared, format, page_count, source_name)
+         VALUES (?, ?, ?, '[]', 0, 0, 'page_images', 0, ?)",
+        [$tenantId, $title, $description, mb_substr(basename($filename), 0, 200)]
+    );
+    try {
+        $pages = EduMedia::convertPdf($pdfPath, EduMedia::materialDir($tenantId, $id));
+    } catch (RuntimeException $error) {
+        Db::run('DELETE FROM edu_materials WHERE id = ?', [$id]);
+        EduMedia::discardUpload($uploadId, $tenantId, (int) $actor['id']);
+        error_log('edu_materials.import_pdf: ' . $error->getMessage() . ' ' . EduMedia::$lastError);
+        json_error($error->getMessage(), 400);
+    }
+    Db::tx(static function () use ($id, $pages): void {
+        foreach ($pages as $p) {
+            Db::run(
+                'INSERT INTO edu_material_pages (material_id, page_no, image_name, page_text, width, height)
+                 VALUES (?, ?, ?, ?, ?, ?)',
+                [$id, $p['page_no'], $p['image_name'], $p['page_text'], $p['width'], $p['height']]
+            );
+        }
+        // 文字だけで表示する経路(旧い受講画面や取込処理)のため、ページの文字をスライドとしても持つ
+        $slides = array_map(static fn(array $p): array => [
+            'title' => 'ページ ' . $p['page_no'],
+            'body' => $p['page_text'] !== '' ? mb_substr($p['page_text'], 0, 10000) : '（画像のページ）',
+        ], $pages);
+        Db::run(
+            "UPDATE edu_materials SET page_count = ?, slides = ?, is_active = 1, updated_at = datetime('now','localtime') WHERE id = ?",
+            [count($pages), json_encode($slides, JSON_UNESCAPED_UNICODE), $id]
+        );
+    });
+    EduMedia::discardUpload($uploadId, $tenantId, (int) $actor['id']);
+    audit('edu_material.import_pdf', 'material_id=' . $id . ' pages=' . count($pages));
+    $material = edu_m_present(edu_m_find($id, $tenantId));
+    $material['pages'] = edu_m_pages($id);
+    json_out(['success' => true, 'material' => $material], 201);
+}
+
+/**
+ * 管理画面でページ画像を表示するときのファイルの場所。閲覧できる教材(自組織か共有)のページだけを返す。
+ *
+ * @return array{path:string,mime:string}
+ */
+function edu_m_page_image_file(array $actor, int $materialId, int $pageNo): array
+{
+    $tenantId = effective_tenant_id($actor, edu_m_query_int('tenant_id'));
+    $row = edu_m_find($materialId, $tenantId);
+    if ($row === null || ($row['format'] ?? '') !== 'page_images') {
+        json_error('教材が見つかりません', 404);
+    }
+    $page = Db::one(
+        'SELECT image_name FROM edu_material_pages WHERE material_id = ? AND page_no = ?',
+        [$materialId, $pageNo]
+    );
+    if ($page === null || !EduMedia::safeName((string) $page['image_name'])) {
+        json_error('ページが見つかりません', 404);
+    }
+    $owner = $row['tenant_id'] !== null ? (int) $row['tenant_id'] : null;
+    $path = EduMedia::materialDir($owner, $materialId) . '/' . $page['image_name'];
+    if (!is_file($path)) {
+        json_error('ページの画像がありません', 404);
+    }
+    return ['path' => $path, 'mime' => EduMedia::mimeOf((string) $page['image_name'])];
+}
+
+/** 画像を送り出す(非公開の画像なので、ブラウザ以外に保存させない)。 */
+function edu_m_send_file(array $file): never
+{
+    header('Content-Type: ' . $file['mime']);
+    header('Content-Length: ' . filesize($file['path']));
+    header('Cache-Control: private, max-age=3600');
+    header('X-Content-Type-Options: nosniff');
+    readfile($file['path']);
+    exit;
+}
+
 function edu_m_handle_import_pptx(array $actor): never
 {
     tet2_require_csrf();
@@ -195,6 +380,29 @@ try {
     }
     if ($action === 'import_pptx' && $method === 'POST') {
         edu_m_handle_import_pptx($actor);
+    }
+    if ($action === 'get' && $method === 'GET') {
+        edu_m_handle_get($actor);
+    }
+    if ($action === 'upload_begin' && $method === 'POST') {
+        edu_m_handle_upload_begin($actor);
+    }
+    if ($action === 'upload_chunk' && $method === 'POST') {
+        edu_m_handle_upload_chunk($actor);
+    }
+    if ($action === 'upload_discard' && $method === 'POST') {
+        edu_m_handle_upload_discard($actor);
+    }
+    if ($action === 'import_pdf' && $method === 'POST') {
+        edu_m_handle_import_pdf($actor);
+    }
+    if ($action === 'page_image' && $method === 'GET') {
+        $materialId = edu_m_query_int('id');
+        $pageNo = edu_m_query_int('page');
+        if ($materialId === null || $pageNo === null) {
+            json_error('id と page を指定してください', 400);
+        }
+        edu_m_send_file(edu_m_page_image_file($actor, $materialId, $pageNo));
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $error) {

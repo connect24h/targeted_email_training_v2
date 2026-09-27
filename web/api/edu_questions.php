@@ -1,6 +1,7 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/OfficeDocumentReader.php';
 require_once __DIR__ . '/../lib/SimpleXlsx.php';
+require_once __DIR__ . '/../lib/EduMedia.php';
 
 /**
  * 設問バンク(edu_questions)管理 API。
@@ -108,6 +109,32 @@ function edu_q_correct(array $body, string $type, int $optionCount): array
     return array_values($body['correct_answer']);
 }
 
+/**
+ * 選択肢ごとの解説(08 の G17)。選択肢と同じ数の文字列の配列。キーがなければ null(変更なし)。
+ * 空の配列か null を明示したら「解説なし」として [] を返す。
+ */
+function edu_q_option_explanations(array $body, int $optionCount): ?array
+{
+    if (!array_key_exists('option_explanations', $body)) {
+        return null;
+    }
+    $value = $body['option_explanations'];
+    if ($value === null || $value === []) {
+        return [];
+    }
+    if (!is_array($value) || count($value) !== $optionCount) {
+        json_error('option_explanations は選択肢と同じ数で指定してください', 400);
+    }
+    $out = [];
+    foreach ($value as $text) {
+        if (!is_string($text) || mb_strlen($text) > 2_000) {
+            json_error('option_explanations の各項目は2000文字以内の文字列です', 400);
+        }
+        $out[] = trim($text);
+    }
+    return $out;
+}
+
 function edu_q_type(array $body): string
 {
     $type = edu_q_string($body, 'question_type');
@@ -191,7 +218,7 @@ function edu_q_handle_list(array $actor): never
     // 共有カテゴリの設問 + 自テナントの設問(閲覧・出題用)
     $rows = Db::all(
         'SELECT q.id, q.tenant_id, q.category_id, q.title, q.question_type, q.options,
-                q.correct_answer, q.explanation, q.difficulty, q.is_active, q.is_shared,
+                q.correct_answer, q.explanation, q.option_explanations, q.image_name, q.difficulty, q.is_active, q.is_shared,
                 q.created_at, c.name AS category_name, c.slug AS category_slug
          FROM edu_questions q
          INNER JOIN edu_categories c ON c.id = q.category_id
@@ -233,10 +260,11 @@ function edu_q_handle_create(array $actor): never
     $correct = edu_q_correct($body, $type, count($options));
     $explanation = edu_q_optional_string($body, 'explanation');
     $difficulty = edu_q_difficulty($body);
+    $optionExplanations = edu_q_option_explanations($body, count($options));
 
     $id = Db::insert(
-        'INSERT INTO edu_questions (tenant_id, category_id, title, question_type, options, correct_answer, explanation, difficulty, is_active, is_shared)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ' . $qShared . ')',
+        'INSERT INTO edu_questions (tenant_id, category_id, title, question_type, options, correct_answer, explanation, option_explanations, difficulty, is_active, is_shared)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ' . $qShared . ')',
         [
             $qTenant,
             $categoryId,
@@ -245,6 +273,7 @@ function edu_q_handle_create(array $actor): never
             json_encode($options, JSON_UNESCAPED_UNICODE),
             json_encode($correct, JSON_UNESCAPED_UNICODE),
             $explanation,
+            $optionExplanations ? json_encode($optionExplanations, JSON_UNESCAPED_UNICODE) : null,
             $difficulty,
         ]
     );
@@ -292,8 +321,19 @@ function edu_q_handle_update(array $actor): never
         $isActive = $body['is_active'] ? 1 : 0;
     }
 
+    // 選択肢ごとの解説: 指定があれば検証して置き換える。選択肢の数が変わり、既存の解説と数が合わなくなったら消す
+    $optionExplanations = edu_q_option_explanations($body, count($options));
+    $existingExplanations = json_decode((string) ($existing['option_explanations'] ?? ''), true);
+    if ($optionExplanations === null && is_array($existingExplanations) && count($existingExplanations) !== count($options)) {
+        $optionExplanations = [];
+    }
+    $explanationsJson = $optionExplanations === null
+        ? ($existing['option_explanations'] ?? null)
+        : ($optionExplanations === [] ? null : json_encode($optionExplanations, JSON_UNESCAPED_UNICODE));
+
     $nothingChanged = $title === null && $explanation === null && $difficulty === null && $isActive === null
-        && !$optionsChanged && !$correctChanged && !array_key_exists('question_type', $body);
+        && !$optionsChanged && !$correctChanged && !array_key_exists('question_type', $body)
+        && !array_key_exists('option_explanations', $body);
     if ($nothingChanged) {
         json_error('更新項目がありません', 400);
     }
@@ -305,6 +345,7 @@ function edu_q_handle_update(array $actor): never
              options = ?,
              correct_answer = ?,
              explanation = COALESCE(?, explanation),
+             option_explanations = ?,
              difficulty = COALESCE(?, difficulty),
              is_active = COALESCE(?, is_active)
          WHERE id = ?',
@@ -314,6 +355,7 @@ function edu_q_handle_update(array $actor): never
             json_encode($options, JSON_UNESCAPED_UNICODE),
             json_encode($correct, JSON_UNESCAPED_UNICODE),
             $explanation,
+            $explanationsJson,
             $difficulty,
             $isActive,
             $id,
@@ -321,6 +363,63 @@ function edu_q_handle_update(array $actor): never
     );
     audit('edu_question.update', 'question_id=' . $id);
     json_out(['success' => true, 'question' => edu_q_assert_visible($id, $tenantId)]);
+}
+
+/** 設問の画像を付ける(差し替えたら古い画像を消す)。 */
+function edu_q_handle_upload_image(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = edu_effective_tenant_id($actor, edu_q_body_optional_int($body, 'tenant_id'));
+    $id = edu_q_id_body($body);
+    $row = edu_q_assert_editable($actor, $id, $tenantId);
+    $encoded = is_string($body['file_base64'] ?? null) ? $body['file_base64'] : '';
+    if ($encoded === '' || strlen($encoded) > 7_000_000) {
+        json_error('画像は5MB以内の PNG か JPEG を指定してください', 400);
+    }
+    $bytes = base64_decode($encoded, true);
+    if (!is_string($bytes)) {
+        json_error('画像を読み取れません', 400);
+    }
+    $owner = $row['tenant_id'] !== null ? (int) $row['tenant_id'] : null;
+    try {
+        $name = EduMedia::saveQuestionImage($owner, $id, $bytes);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 400);
+    }
+    Db::run('UPDATE edu_questions SET image_name = ? WHERE id = ?', [$name, $id]);
+    EduMedia::removeQuestionImage($owner, $row['image_name'] ?? null);
+    audit('edu_question.upload_image', 'question_id=' . $id);
+    json_out(['success' => true, 'question' => edu_q_assert_visible($id, $tenantId)]);
+}
+
+function edu_q_handle_remove_image(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = edu_effective_tenant_id($actor, edu_q_body_optional_int($body, 'tenant_id'));
+    $id = edu_q_id_body($body);
+    $row = edu_q_assert_editable($actor, $id, $tenantId);
+    Db::run('UPDATE edu_questions SET image_name = NULL WHERE id = ?', [$id]);
+    EduMedia::removeQuestionImage($row['tenant_id'] !== null ? (int) $row['tenant_id'] : null, $row['image_name'] ?? null);
+    audit('edu_question.remove_image', 'question_id=' . $id);
+    json_out(['success' => true, 'question' => edu_q_assert_visible($id, $tenantId)]);
+}
+
+/** @return array{path:string,mime:string} 閲覧できる設問(自組織か共有)の画像の場所 */
+function edu_q_image_file(array $actor, int $id): array
+{
+    $tenantId = edu_effective_tenant_id($actor, edu_q_query_int('tenant_id'));
+    $row = edu_q_assert_visible($id, $tenantId);
+    $name = (string) ($row['image_name'] ?? '');
+    if ($name === '' || !EduMedia::safeName($name)) {
+        json_error('画像がありません', 404);
+    }
+    $path = EduMedia::questionDir($row['tenant_id'] !== null ? (int) $row['tenant_id'] : null) . '/' . $name;
+    if (!is_file($path)) {
+        json_error('画像がありません', 404);
+    }
+    return ['path' => $path, 'mime' => EduMedia::mimeOf($name)];
 }
 
 function edu_q_handle_delete(array $actor): never
@@ -353,7 +452,7 @@ function edu_q_export_rows(int $tenantId): array
 {
     $rows = [[
         'カテゴリ名', 'カテゴリスラッグ', '設問文', '種別', '選択肢（改行区切り）',
-        '正答番号（1始まり）', '難易度', '解説', '有効',
+        '正答番号（1始まり）', '難易度', '解説', '有効', '選択肢ごとの解説（改行区切り）', '画像ファイル名',
     ]];
     $questions = Db::all(
         'SELECT q.*, c.name AS category_name, c.slug AS category_slug, c.sort_order AS category_order
@@ -376,6 +475,8 @@ function edu_q_export_rows(int $tenantId): array
             (int) $question['difficulty'],
             (string) ($question['explanation'] ?? ''),
             (int) $question['is_active'],
+            implode("\n", array_map('strval', json_decode((string) ($question['option_explanations'] ?? ''), true) ?: [])),
+            (string) ($question['image_name'] ?? ''),
         ];
     }
     return $rows;
@@ -501,7 +602,22 @@ function edu_q_import_records(array $rows, array $actor, int $tenantId): array
         if (!in_array($activeText, ['', '0', '1'], true)) {
             json_error("Excel {$line}行目: 有効は1または0で入力してください", 400);
         }
+        $optionExplanations = [];
+        if (array_key_exists('選択肢ごとの解説（改行区切り）', $headerMap) && $cell('選択肢ごとの解説（改行区切り）') !== '') {
+            $optionExplanations = array_map('trim', preg_split('/\R/u', $cell('選択肢ごとの解説（改行区切り）')) ?: []);
+            if (count($optionExplanations) !== count($options)
+                || array_filter($optionExplanations, static fn(string $v): bool => mb_strlen($v) > 2_000)) {
+                json_error("Excel {$line}行目: 選択肢ごとの解説は選択肢と同じ数だけ改行で区切ってください", 400);
+            }
+        }
+        $imageFile = array_key_exists('画像ファイル名', $headerMap) ? $cell('画像ファイル名') : '';
+        if ($imageFile !== '' && !preg_match('/^[A-Za-z0-9._-]{1,120}\.(png|jpe?g)$/i', $imageFile)) {
+            json_error("Excel {$line}行目: 画像ファイル名は英数字の png か jpg にしてください", 400);
+        }
         $records[] = [
+            'option_explanations' => $optionExplanations,
+            'image_file' => $imageFile,
+            'line' => $line,
             'tenant_id' => $category['tenant_id'] !== null ? (int) $category['tenant_id'] : null,
             'category_id' => (int) $category['id'],
             'title' => $title,
@@ -518,6 +634,58 @@ function edu_q_import_records(array $rows, array $actor, int $tenantId): array
         json_error('Excelに追加対象の設問がありません', 400);
     }
     return $records;
+}
+
+/**
+ * Excel の「画像ファイル名」に書かれた画像を、分割アップロードした ZIP から読む。
+ * 書かれた名前のファイルだけを読み、1枚ごとの大きさを展開前に確かめる(圧縮爆弾の対策)。
+ *
+ * @return array<string,string> ファイル名 => 画像のバイト列
+ */
+function edu_q_import_images(array $records, array $body, int $tenantId, int $userId): array
+{
+    $wanted = array_values(array_unique(array_filter(array_column($records, 'image_file'))));
+    if ($wanted === []) {
+        return [];
+    }
+    $uploadId = is_string($body['images_upload_id'] ?? null) ? $body['images_upload_id'] : '';
+    if ($uploadId === '') {
+        json_error('画像ファイル名がある設問には、画像の ZIP が必要です', 400);
+    }
+    try {
+        $zipPath = EduMedia::uploadPath($uploadId, $tenantId, $userId);
+    } catch (RuntimeException $error) {
+        json_error($error->getMessage(), 400);
+    }
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath, ZipArchive::RDONLY) !== true) {
+        json_error('画像の ZIP を読み取れません', 400);
+    }
+    if ($zip->numFiles > 2000) {
+        $zip->close();
+        json_error('画像の ZIP の中のファイルは2000件以内にしてください', 400);
+    }
+    $images = [];
+    try {
+        foreach ($wanted as $name) {
+            $stat = $zip->statName($name);
+            if ($stat === false) {
+                $line = current(array_filter($records, static fn(array $r): bool => $r['image_file'] === $name))['line'] ?? '?';
+                json_error("Excel {$line}行目: 画像「{$name}」が ZIP にありません", 400);
+            }
+            if ((int) $stat['size'] > EduMedia::MAX_IMAGE_BYTES) {
+                json_error("画像「{$name}」は5MB以内にしてください", 400);
+            }
+            $bytes = $zip->getFromName($name, EduMedia::MAX_IMAGE_BYTES + 1);
+            if (!is_string($bytes) || (!str_starts_with($bytes, "\x89PNG\r\n\x1a\n") && !str_starts_with($bytes, "\xFF\xD8\xFF"))) {
+                json_error("画像「{$name}」は PNG か JPEG にしてください", 400);
+            }
+            $images[$name] = $bytes;
+        }
+    } finally {
+        $zip->close();
+    }
+    return $images;
 }
 
 function edu_q_handle_import_xlsx(array $actor): never
@@ -543,21 +711,41 @@ function edu_q_handle_import_xlsx(array $actor): never
         json_error($error->getMessage(), 400);
     }
     $records = edu_q_import_records($rows, $actor, $tenantId);
-    Db::txImmediate(function () use ($records): void {
-        foreach ($records as $record) {
-            Db::insert(
-                'INSERT INTO edu_questions
-                 (tenant_id, category_id, title, question_type, options, correct_answer, explanation, difficulty, is_active, is_shared)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [
-                    $record['tenant_id'], $record['category_id'], $record['title'], $record['type'],
-                    json_encode($record['options'], JSON_UNESCAPED_UNICODE),
-                    json_encode($record['correct'], JSON_UNESCAPED_UNICODE),
-                    $record['explanation'], $record['difficulty'], $record['is_active'], $record['is_shared'],
-                ]
-            );
+    // 画像は DB に追加する前にすべて読み、検証する(1枚でも欠ければ1件も追加しない)
+    $images = edu_q_import_images($records, $body, $tenantId, (int) $actor['id']);
+    $saved = [];
+    try {
+        Db::txImmediate(function () use ($records, $images, &$saved): void {
+            foreach ($records as $record) {
+                $id = Db::insert(
+                    'INSERT INTO edu_questions
+                     (tenant_id, category_id, title, question_type, options, correct_answer, explanation, option_explanations, difficulty, is_active, is_shared)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        $record['tenant_id'], $record['category_id'], $record['title'], $record['type'],
+                        json_encode($record['options'], JSON_UNESCAPED_UNICODE),
+                        json_encode($record['correct'], JSON_UNESCAPED_UNICODE),
+                        $record['explanation'],
+                        $record['option_explanations'] ? json_encode($record['option_explanations'], JSON_UNESCAPED_UNICODE) : null,
+                        $record['difficulty'], $record['is_active'], $record['is_shared'],
+                    ]
+                );
+                if ($record['image_file'] !== '') {
+                    $name = EduMedia::saveQuestionImage($record['tenant_id'], $id, $images[$record['image_file']]);
+                    $saved[] = [$record['tenant_id'], $name];
+                    Db::run('UPDATE edu_questions SET image_name = ? WHERE id = ?', [$name, $id]);
+                }
+            }
+        });
+    } catch (Throwable $error) {
+        foreach ($saved as [$owner, $name]) {
+            EduMedia::removeQuestionImage($owner, $name);
         }
-    });
+        throw $error;
+    }
+    if (is_string($body['images_upload_id'] ?? null)) {
+        EduMedia::discardUpload($body['images_upload_id'], $tenantId, (int) $actor['id']);
+    }
     audit('edu_question.import_xlsx', 'count=' . count($records));
     json_out(['success' => true, 'imported' => count($records)], 201);
 }
@@ -590,6 +778,25 @@ try {
     }
     if ($action === 'import_xlsx' && $method === 'POST') {
         edu_q_handle_import_xlsx($actor);
+    }
+    if ($action === 'upload_image' && $method === 'POST') {
+        edu_q_handle_upload_image($actor);
+    }
+    if ($action === 'remove_image' && $method === 'POST') {
+        edu_q_handle_remove_image($actor);
+    }
+    if ($action === 'image' && $method === 'GET') {
+        $imageId = edu_q_query_int('id');
+        if ($imageId === null) {
+            json_error('id を指定してください', 400);
+        }
+        $file = edu_q_image_file($actor, $imageId);
+        header('Content-Type: ' . $file['mime']);
+        header('Content-Length: ' . filesize($file['path']));
+        header('Cache-Control: private, max-age=3600');
+        header('X-Content-Type-Options: nosniff');
+        readfile($file['path']);
+        exit;
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

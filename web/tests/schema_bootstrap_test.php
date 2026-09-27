@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 43, 'fresh DBに43個の業務tableがある');
+check(count($businessTables) === 45, 'fresh DBに45個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -36,6 +36,8 @@ $expectedTables = [
     'campaign_template_snapshots',
     'credential_captures',
     'edu_score_snapshots',
+    'edu_material_pages',
+    'edu_answer_locks',
     'campaign_automations',
     'campaign_automation_groups',
     'campaign_automation_runs',

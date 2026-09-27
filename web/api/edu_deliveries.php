@@ -316,6 +316,23 @@ function edu_d_handle_get(array $actor): never
     json_out(['success' => true, 'delivery' => $delivery, 'questions' => $questions]);
 }
 
+/**
+ * 答え合わせの時機(08 の G18)。指定がなければ、小問は1問ごと、eラーニングは提出後にまとめて。
+ */
+function edu_d_feedback_mode(array $body, ?string $deliveryType): ?string
+{
+    if (!array_key_exists('feedback_mode', $body) || $body['feedback_mode'] === null) {
+        if ($deliveryType === null) {
+            return null;
+        }
+        return $deliveryType === 'awareness_quiz' ? 'immediate' : 'after_submit';
+    }
+    if (!in_array($body['feedback_mode'], ['after_submit', 'immediate'], true)) {
+        json_error('feedback_mode は after_submit か immediate です', 400);
+    }
+    return $body['feedback_mode'];
+}
+
 function edu_d_handle_create(array $actor): never
 {
     tet2_require_csrf();
@@ -339,6 +356,7 @@ function edu_d_handle_create(array $actor): never
     }
     $triggeredBy = edu_d_triggered_by($body);
     edu_d_assert_trigger_consistency($triggeredBy, $targetType);
+    $feedbackMode = edu_d_feedback_mode($body, $deliveryType);
 
     // difficulty_range: [min,max] 各1-3
     $diffRange = null;
@@ -386,14 +404,14 @@ function edu_d_handle_create(array $actor): never
     $id = Db::insert(
         'INSERT INTO edu_deliveries
          (tenant_id, title, status, delivery_type, question_count, category_ids, difficulty_range,
-          randomize, pass_score, material_id, target_type, target_group_id, triggered_by, phish_campaign_id, created_by)
-         VALUES (?, ?, \'draft\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          randomize, pass_score, material_id, target_type, target_group_id, triggered_by, phish_campaign_id, created_by, feedback_mode)
+         VALUES (?, ?, \'draft\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
             $tenantId, $title, $deliveryType, $questionCount,
             $categoryIds !== null ? json_encode($categoryIds) : null,
             $diffRange !== null ? json_encode($diffRange) : null,
             $randomize, $passScore, $materialId, $targetType, $targetGroupId, $triggeredBy, $phishCampaignId,
-            $actor['id'],
+            $actor['id'], $feedbackMode,
         ]
     );
 
@@ -454,8 +472,10 @@ function edu_d_handle_update(array $actor): never
         edu_d_assert_trigger_consistency($triggeredBy, (string) $delivery['target_type']);
     }
 
+    $feedbackMode = edu_d_feedback_mode($body, null);
+
     if ($title === null && $passScore === null && $scheduledAt === null && $deadline === null
-        && $triggeredBy === null) {
+        && $triggeredBy === null && $feedbackMode === null) {
         json_error('更新項目がありません', 400);
     }
 
@@ -465,9 +485,10 @@ function edu_d_handle_update(array $actor): never
              pass_score = COALESCE(?, pass_score),
              scheduled_at = COALESCE(?, scheduled_at),
              deadline = COALESCE(?, deadline),
-             triggered_by = COALESCE(?, triggered_by)
+             triggered_by = COALESCE(?, triggered_by),
+             feedback_mode = COALESCE(?, feedback_mode)
          WHERE id = ? AND tenant_id = ?',
-        [$title, $passScore, $scheduledAt, $deadline, $triggeredBy, $id, $tenantId]
+        [$title, $passScore, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $id, $tenantId]
     );
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
