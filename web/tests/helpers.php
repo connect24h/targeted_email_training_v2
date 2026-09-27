@@ -33,7 +33,12 @@ function tet2_test_boot(?string $seedSql = null): string
 {
     $tmp = sys_get_temp_dir() . '/tet2-test-' . getmypid() . '-' . substr(md5((string) mt_rand()), 0, 8) . '.sqlite';
     TestDatabase::create($tmp);
-    register_shutdown_function(fn() => @unlink($tmp));
+    // WAL の付随ファイル(-wal、-shm)も消す。本体だけを消すと /tmp(tmpfs)に残りが溜まり、満杯になった(2026-09-28)
+    register_shutdown_function(static function () use ($tmp): void {
+        foreach (["", "-wal", "-shm", "-journal"] as $suffix) {
+            @unlink($tmp . $suffix);
+        }
+    });
     putenv("TET2_DB_PATH={$tmp}");
     require_once __DIR__ . '/../lib/Db.php';
     if ($seedSql !== null) {
