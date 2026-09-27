@@ -49,6 +49,18 @@ applyはbackup IDを出力する。migrationとservice操作は別工程のま�
 
 アンケートのメール送信（案内と締切前の催促）は既定で無効。`TET2_SURVEY_MAIL_ENABLED=1`をApache/PHPとCLIの環境に設定したときだけ送る。未設定なら管理APIは409を返し、`web/db/survey_reminder.php`は何も送らずに終わる。催促用のsystemd timerは用意していない。送信の有効化とtimerの作成は、実在の従業員へメールが届くため利用者の明示の承認を得てから行う。無効のままでも、配信一覧の「回答用 URL（CSV）」を社内メールで配布すれば運用できる。
 
+教育の配信の自動化（予約の自動開始、毎月の配信、役職と訓練の結果での対象、新入社員への出題）を含む配備では、`20261001-edu-delivery-features` migrationを**コードより先に**適用する。`edu_deliveries`へ列（`send_invites`・`series_id`・`target_positions`・`risk_results`・`new_target_days`）を足し、`edu_delivery_series`表を作るだけで、既存の配信の行は変えない。既存の配信は`send_invites=0`になり、手動の開始（launch）でも受講の案内メールを送らなくなる（催促`remind`は明示の操作なので従来どおり送る）。`tet2-edu-enroll`の自動の投入も、配信で「案内メールを送る」を選んだものだけ送る。
+
+自動の処理は`web/db/edu_scheduler.php`の1つにまとめてある。予約の日時が来た配信の開始、毎月の配信の回の作成、新入社員の投入を順に行い、結果を1行で出す。冪等で、`TET2_DB_PATH`で隔離DBに向けられる。timerは`deploy/systemd/tet2-edu-scheduler.{service,timer}`（15分ごと）を用意したが、配備では有効にならない。**有効化は利用者の承認が要る**（案内メールを選んだ配信があると、実在の従業員へ教育メールが届く）。承認までは、画面の開始ボタンか、CLIの手動実行で使う。
+
+```bash
+# 本番のコピーで結果を確かめる
+TET2_DB_PATH=/abs/path/tet2-copy.sqlite php web/db/edu_scheduler.php
+# 承認後だけ
+sudo systemctl daemon-reload
+sudo systemctl enable --now tet2-edu-scheduler.timer
+```
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```

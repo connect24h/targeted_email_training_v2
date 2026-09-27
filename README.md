@@ -22,7 +22,7 @@ bin/        メール送信処理（本番: /opt/training/bin）
   tet2-purge-campaigns.py  論理削除済みキャンペーンの物理パージ
   replace_url.py / training_config.py / requirements.txt / config.ini
   master*.html / __BeaconMst.png  生成用HTML・ビーコン素材
-deploy/systemd/  systemd unit 13本（worker + Maildir権限補正 + automation + edu enroll/reminder/snapshot + report-ingest）
+deploy/systemd/  systemd unit 15本（worker + Maildir権限補正 + automation + edu enroll/reminder/snapshot/scheduler + report-ingest）。edu scheduler の timer は既定で無効
 deploy/cron/     論理削除済みキャンペーンのパージ定義
 deploy/*.sh      dry-run既定のallowlist deploy / rollback / backup prune
 ```

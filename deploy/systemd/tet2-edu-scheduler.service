@@ -1,0 +1,14 @@
+[Unit]
+Description=TET v2 Education Scheduler (scheduled launch, monthly series, new targets)
+After=network.target
+
+# 有効化は利用者の承認が要る(deploy/README.md の「教育の配信の自動化」)。
+# 案内メールは配信で send_invites=1 を選んだものだけ送る。
+
+[Service]
+Type=oneshot
+User=training
+Group=www-data
+ExecStart=/usr/bin/php /var/www/html/tet2/db/edu_scheduler.php
+StandardOutput=append:/opt/training/tet2-data/edu-scheduler.log
+StandardError=append:/opt/training/tet2-data/edu-scheduler.log
