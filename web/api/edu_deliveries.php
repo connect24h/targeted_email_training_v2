@@ -520,6 +520,9 @@ function edu_d_handle_update(array $actor): never
         if ($triggeredBy === 'new_target' && $delivery['new_target_days'] === null) {
             json_error('新入社員の配信は、作成時に new_target_days を指定してください', 400);
         }
+        if ($triggeredBy !== 'manual' && $delivery['risk_results'] !== null) {
+            json_error('訓練の結果の区分を持つ配信は、自動の投入に切り替えられません', 400);
+        }
     }
 
     $feedbackMode = edu_d_feedback_mode($body, null);

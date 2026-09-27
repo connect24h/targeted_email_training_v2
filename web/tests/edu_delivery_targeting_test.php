@@ -110,6 +110,9 @@ foreach ($cases as [$results, $expected, $label]) {
 $r = call_handler('edu_d_handle_create', $risk + ['phish_campaign_id' => $done, 'risk_results' => ['opened']], 'operator');
 check(json_decode((string) $r['payload']['delivery']['risk_results'], true) === ['opened'], 'F4-3: 結果の区分を JSON で保存する');
 
+$r = call_handler('edu_d_handle_update', ['id' => (int) $r['payload']['delivery']['id'], 'triggered_by' => 'phishing_failure'], 'operator');
+check($r['code'] === 400, 'F4-3: 結果の区分を持つ配信を、編集で自動の投入に切り替えられない');
+
 $r = call_handler('edu_d_handle_create', $risk + ['risk_results' => ['opened']], 'operator');
 check($r['code'] === 400, 'F4-4: 結果の区分を選ぶときはキャンペーンの指定が必須');
 foreach (['running', 'scheduled', 'paused', 'draft'] as $status) {
