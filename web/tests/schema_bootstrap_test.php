@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 45, 'fresh DBに45個の業務tableがある');
+check(count($businessTables) === 46, 'fresh DBに46個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -57,6 +57,7 @@ $expectedTables = [
     'survey_assignments',
     'survey_responses',
     'survey_answers',
+    'edu_delivery_series',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -71,7 +72,7 @@ $expectedColumns = [
     'edu_categories' => ['is_shared'],
     'edu_questions' => ['is_shared'],
     'edu_assignments' => ['last_reminded_at'],
-    'edu_deliveries' => ['material_id'],
+    'edu_deliveries' => ['material_id', 'send_invites', 'series_id', 'target_positions', 'risk_results', 'new_target_days'],
 ];
 foreach ($expectedColumns as $table => $columns) {
     $actual = $pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_COLUMN, 1);

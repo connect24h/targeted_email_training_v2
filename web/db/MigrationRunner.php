@@ -23,6 +23,7 @@ final class MigrationRunner
         '20260923-campaign-close',
         '20260925-surveys',
         '20260927-edu-rich-content',
+        '20261001-edu-delivery-features',
     ];
 
     /**
@@ -209,6 +210,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-edu-media.sql'));
             return;
         }
+        if ($version === '20261001-edu-delivery-features') {
+            // 予約の自動開始、毎月の配信、役職と訓練の結果での対象、新入社員への出題。
+            // 列とテーブルを足すだけ。既存の配信は send_invites=0(案内メールを送らない)になる。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-edu-delivery.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -392,7 +400,14 @@ final class MigrationRunner
                 'page_count' => 'INTEGER NOT NULL DEFAULT 0',
                 'source_name' => 'TEXT',
             ],
-            'edu_deliveries' => ['feedback_mode' => "TEXT NOT NULL DEFAULT 'after_submit'"],
+            'edu_deliveries' => [
+                'feedback_mode' => "TEXT NOT NULL DEFAULT 'after_submit'",
+                'send_invites' => 'INTEGER NOT NULL DEFAULT 0',
+                'series_id' => 'INTEGER REFERENCES edu_delivery_series(id)',
+                'target_positions' => 'TEXT',
+                'risk_results' => 'TEXT',
+                'new_target_days' => 'INTEGER',
+            ],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],
         ];
         foreach ($columns as $table => $definitions) {

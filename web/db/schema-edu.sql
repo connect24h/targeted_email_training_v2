@@ -80,10 +80,15 @@ CREATE TABLE IF NOT EXISTS edu_deliveries (
   pass_score       INTEGER,                             -- elearning のみ必達
   feedback_mode    TEXT NOT NULL DEFAULT 'after_submit', -- after_submit(提出後にまとめて) / immediate(1問ごとに答え合わせ)
   material_id      INTEGER,
-  target_type      TEXT,                                -- all / group / risk / individual
+  target_type      TEXT,                                -- all / group / risk / individual / position
   target_group_id  INTEGER,
   triggered_by     TEXT,                                -- manual / phishing_failure / new_target
   phish_campaign_id INTEGER,
+  send_invites     INTEGER NOT NULL DEFAULT 0,          -- 1 の配信だけ、開始時と自動の投入時に受講の案内メールを送る
+  series_id        INTEGER REFERENCES edu_delivery_series(id), -- 毎月の配信(schema-edu-delivery.sql)から作った回
+  target_positions TEXT,                                -- target_type=position の役職区分(JSON配列)
+  risk_results     TEXT,                                -- target_type=risk の訓練の結果の区分(JSON配列)
+  new_target_days  INTEGER,                             -- triggered_by=new_target の「登録から N 日以内」
   created_by       INTEGER,
   created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id)         REFERENCES tenants(id),
