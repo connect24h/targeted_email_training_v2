@@ -3209,6 +3209,8 @@ function eduDeliveryForm() {
   const resultChecks = EDU_RISK_RESULTS.map(([value, label]) => `<div class="form-check form-check-inline">
       <input class="form-check-input" type="checkbox" name="risk_results" id="eduRisk_${value}" value="${value}"${value === 'opened' || value === 'submitted' ? ' checked' : ''}>
       <label class="form-check-label" for="eduRisk_${value}">${label}</label></div>`).join('');
+  // 「開いた」は偽サイトの表示(ビーコン)も含むため、訓練レポートの失敗(クリックと入力)より広い
+  const resultNote = '<div class="form-text">「開いた」には、偽サイトを表示しただけの人も含みます。訓練レポートの「失敗」（リンクのクリックと入力）より広い範囲です。</div>';
   return `<form id="eduDeliveryForm">
     <div class="alert alert-primary py-2"><button type="button" class="btn btn-sm btn-primary me-2" id="eduRiskPreset">訓練失敗者向けを設定</button><span class="small">標的型メール訓練の直後に、スライド教材と確認テストを配信します。</span></div>
     <div class="mb-2"><label class="form-label">タイトル</label><input class="form-control" name="title" value="標的型メール訓練 フォローアップ" required></div>
@@ -3238,7 +3240,7 @@ function eduDeliveryForm() {
       <div class="form-text">開始後も毎時、新たに訓練で失敗した人を自動で受講対象に加えます。配信を作成した時点より後の失敗が対象です。</div></div>
     <div class="mb-2 d-none" id="eduRiskResultField"><label class="form-label" for="eduRiskCampaign">訓練のキャンペーン（終わったもの）</label>
       <select class="form-select" name="phish_campaign_id" id="eduRiskCampaign"><option value="">選択してください</option>${campaignOpts}</select>
-      <div class="mt-1">${resultChecks}</div>
+      <div class="mt-1">${resultChecks}</div>${resultNote}
       <div class="form-text">訓練の期間中に同じ手口の教育を出すと測定が崩れるため、終了・中止したキャンペーンだけを選べます。</div></div>
     <div class="mb-2 d-none" id="eduPositionField"><label class="form-label">役職区分</label><div>${positionChecks}</div></div>
     <div class="mb-2 d-none" id="eduNewTargetField"><label class="form-label" for="eduNewTargetDays">登録からの日数</label>
@@ -3419,7 +3421,8 @@ async function editEduDelivery(id) {
     const title = $('#eduEditTitle').value.trim();
     if (!title) throw new Error('タイトルを入力してください');
     const payload = { id, title, feedback_mode: $('#eduEditFeedback').value, send_invites: $('#eduEditSendInvites').checked };
-    if ($('#eduEditScheduledAt').value) payload.scheduled_at = $('#eduEditScheduledAt').value;
+    // 空にして保存したら予約を解除する(null を送る。送らないと API は予約をそのまま残す)
+    payload.scheduled_at = $('#eduEditScheduledAt').value || null;
     await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' }, body: payload });
     toast('更新しました', 'ok'); renderEduDeliveries();
   });

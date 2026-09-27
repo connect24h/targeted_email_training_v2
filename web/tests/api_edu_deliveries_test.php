@@ -290,6 +290,16 @@ $r = call_handler('edu_d_handle_update', ['id' => $draftId, 'scheduled_at' => '2
 check(($r['payload']['delivery']['status'] ?? '') === 'scheduled', 'SC-5: 下書きに予約の日時を入れると予約になる');
 $r = call_handler('edu_d_handle_update', ['id' => $draftId, 'send_invites' => true], 'operator');
 check((int) ($r['payload']['delivery']['send_invites'] ?? 0) === 1, 'SC-6: 案内メールの設定を編集で変えられる');
+// 予約の日時を空で送ると予約を解除して下書きに戻す。項目を送らなければ予約はそのまま
+$r = call_handler('edu_d_handle_update', ['id' => $draftId, 'title' => 'SC 下書き 改'], 'operator');
+check(($r['payload']['delivery']['status'] ?? '') === 'scheduled' && ($r['payload']['delivery']['scheduled_at'] ?? '') === '2030-06-01 09:00:00',
+    'SC-7: 予約の日時を送らない編集では予約を変えない');
+$r = call_handler('edu_d_handle_update', ['id' => $draftId, 'scheduled_at' => null], 'operator');
+check($r['code'] === 200 && ($r['payload']['delivery']['status'] ?? '') === 'draft'
+    && array_key_exists('scheduled_at', $r['payload']['delivery']) && $r['payload']['delivery']['scheduled_at'] === null,
+    'SC-7: 予約の日時を空で送ると予約を解除して下書きに戻す');
+$r = call_handler('edu_d_handle_update', ['id' => $draftId, 'scheduled_at' => ''], 'operator');
+check($r['code'] === 200 && ($r['payload']['delivery']['status'] ?? '') === 'draft', 'SC-7: 空の文字でも予約を解除する(下書きのまま)');
 $mails = [];
 $r = call_handler('edu_d_handle_launch', ['id' => $scheduledId], 'operator');
 check($r['code'] === 200 && ($r['payload']['status'] ?? '') === 'running', 'SC-7: 予約中の配信を画面から今すぐ開始できる');

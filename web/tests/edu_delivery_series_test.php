@@ -118,8 +118,8 @@ $seriesId = seriesInsert('2026-10-01 09:00:00', null, $settings);
 $first = EduScheduler::run($at('2026-10-01 09:30:00'));
 $rounds = seriesDeliveries($seriesId);
 check(count($rounds) === 1 && $first['series_created'] === 1, 'F1-5: 次の回の日時が来た系列から配信を1つ作る');
-check($rounds[0]['status'] === 'scheduled' && $rounds[0]['scheduled_at'] === '2026-10-01 09:00:00',
-    'F1-5: 作った配信は予約の状態で、予約の日時はその回の日時');
+check($rounds[0]['status'] === 'running' && $rounds[0]['scheduled_at'] === '2026-10-01 09:00:00' && $first['launched'] === 1,
+    'F1-5: 作った配信は、予約の日時がその回の日時で、同じ実行の中で開始される');
 check($rounds[0]['deadline'] === '2026-10-08', 'F1-5: その回の締切は設定の日数(7日)の後');
 check(str_contains((string) $rounds[0]['title'], '2026年10月'), 'F1-5: 回のタイトルに年月を付ける');
 check((string) Db::one('SELECT next_run_at FROM edu_delivery_series WHERE id = ?', [$seriesId])['next_run_at'] === '2026-11-01 09:00:00',
@@ -130,7 +130,7 @@ check($audit !== null && $audit['user_id'] === null, 'F1-5: 系列からの作�
 $second = EduScheduler::run($at('2026-10-01 09:30:00'));
 $rounds = seriesDeliveries($seriesId);
 check(count($rounds) === 1 && $second['series_created'] === 0, 'F1-6: 同じ日時で再実行しても配信は増えない(冪等)');
-check($rounds[0]['status'] === 'running' && $second['launched'] === 1, 'F1-6: 作った配信は次の実行で開始される');
+check($rounds[0]['status'] === 'running' && $second['launched'] === 0, 'F1-6: 再実行しても開始を重ねない');
 $round1 = deliveryQuestions((int) $rounds[0]['id']);
 check($round1 === [$questionIds[0], $questionIds[1]], 'F1-6: 1回目は条件どおりに2問');
 

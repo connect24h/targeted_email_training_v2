@@ -2,10 +2,9 @@
 /**
  * 教育の配信の自動の処理。db/edu_scheduler.php(CLI)から呼ぶ。冪等で、何度動かしても同じ結果になる。
  *
- *   1. 予約した配信の開始(F0): status='scheduled' かつ scheduled_at が来た配信を開始する。
- *      締切を過ぎた配信は開始せず、監査ログに1回だけ記録する。
- *   2. 毎月の配信(F1): next_run_at が来た系列から、その回の配信を予約の状態で作る。
- *      作った配信は次の実行の 1. で開始される。
+ *   1. 毎月の配信(F1): next_run_at が来た系列から、その回の配信を予約の状態で作る。
+ *   2. 予約した配信の開始(F0): status='scheduled' かつ scheduled_at が来た配信を開始する。
+ *      1. で作った回も同じ実行の中で開始する。締切を過ぎた配信は開始せず、監査ログに1回だけ記録する。
  *   3. 新入社員への出題(F5): triggered_by='new_target' の running の配信に、登録から N 日以内の対象者を入れる。
  *
  * 受講の案内メールは、配信の send_invites=1 のときだけ送る(既定は送らない)。
@@ -24,8 +23,9 @@ final class EduScheduler
     public static function run(?DateTimeImmutable $now = null): array
     {
         $now = $now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
-        $launch = self::launchDue($now);
+        // 毎月の配信の回を先に作り、同じ実行の中で予約の開始まで進める(逆の順だと、作った回の開始が次の実行まで遅れる)
         $series = EduDeliverySeries::runDue($now);
+        $launch = self::launchDue($now);
         $newcomers = self::enrollNewTargets($now);
         $launch['mail_sent'] += $newcomers['mail_sent'];
         return $launch + [
@@ -110,6 +110,11 @@ final class EduScheduler
             try {
                 $launched = EduDeliveryLauncher::launch($delivery, $tenantId, $now);
             } catch (EduDeliveryError $e) {
+                if ($e->getCode() === 409) {
+                    // 同じ時に画面から開始された(先に開始した方が勝つ)。二重の開始を防いだ結果で、失敗ではない
+                    self::auditOnce($tenantId, 'edu_scheduler.already_started', $id, 'reason=' . $e->getMessage());
+                    continue;
+                }
                 // 対象者や設問がいない配信は予約のまま残し、理由を1回だけ記録する(直せば次の実行で開始される)。
                 self::auditOnce($tenantId, 'edu_scheduler.launch_failed', $id, 'reason=' . $e->getMessage());
                 $result['failed']++;

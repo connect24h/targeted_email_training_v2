@@ -510,8 +510,10 @@ function edu_d_handle_update(array $actor): never
     $title = array_key_exists('title', $body) ? edu_d_string($body, 'title') : null;
     $passScore = edu_d_body_optional_int($body, 'pass_score');
     $scheduledAt = edu_d_datetime($body, 'scheduled_at');
+    // 予約の日時を空(null か空の文字)で送ったら予約を解除する。項目を送らなければ予約は変えない
+    $clearSchedule = array_key_exists('scheduled_at', $body) && ($body['scheduled_at'] === null || $body['scheduled_at'] === '');
     $deadline = edu_d_deadline($body);
-    edu_d_assert_schedule_order($scheduledAt ?? $delivery['scheduled_at'], $deadline ?? $delivery['deadline']);
+    edu_d_assert_schedule_order($clearSchedule ? null : ($scheduledAt ?? $delivery['scheduled_at']), $deadline ?? $delivery['deadline']);
     // draft のうちに手動配信⇄自動連携を切り替えられるようにする。
     $triggeredBy = null;
     if (array_key_exists('triggered_by', $body) && $body['triggered_by'] !== null) {
@@ -528,25 +530,25 @@ function edu_d_handle_update(array $actor): never
     $feedbackMode = edu_d_feedback_mode($body, null);
     $sendInvites = array_key_exists('send_invites', $body) ? edu_d_flag($body, 'send_invites', 0) : null;
 
-    if ($title === null && $passScore === null && $scheduledAt === null && $deadline === null
+    if ($title === null && $passScore === null && $scheduledAt === null && !$clearSchedule && $deadline === null
         && $triggeredBy === null && $feedbackMode === null && $sendInvites === null) {
         json_error('更新項目がありません', 400);
     }
-    // 下書きに予約の日時を入れたら予約にする(その日時に edu_scheduler.php が開始する)。
-    $status = $scheduledAt !== null ? 'scheduled' : null;
+    // 下書きに予約の日時を入れたら予約にする(その日時に edu_scheduler.php が開始する)。予約を解除したら下書きに戻す
+    $status = $scheduledAt !== null ? 'scheduled' : ($clearSchedule ? 'draft' : null);
 
     Db::run(
         'UPDATE edu_deliveries
          SET title = COALESCE(?, title),
              pass_score = COALESCE(?, pass_score),
-             scheduled_at = COALESCE(?, scheduled_at),
+             scheduled_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, scheduled_at) END,
              deadline = COALESCE(?, deadline),
              triggered_by = COALESCE(?, triggered_by),
              feedback_mode = COALESCE(?, feedback_mode),
              send_invites = COALESCE(?, send_invites),
              status = COALESCE(?, status)
          WHERE id = ? AND tenant_id = ? AND status IN (\'draft\',\'scheduled\')',
-        [$title, $passScore, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $status, $id, $tenantId]
+        [$title, $passScore, $clearSchedule ? 1 : 0, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $status, $id, $tenantId]
     );
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
