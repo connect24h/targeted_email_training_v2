@@ -252,7 +252,7 @@ const VIEWS = {
   riskDashboard: renderRiskDashboard,
   groups: renderGroups,
   templates: renderTemplates,
-  eduDeliveries: renderEduDeliveries,
+  eduDeliveries: refreshEduDeliveries,
   eduQuestions: renderEduQuestions,
   eduReport: renderEduReport,
   masters: renderMasters,
@@ -3133,20 +3133,32 @@ async function scenarioViewer(scenarioKey) {
 
 /* ========== セキュリティ教育: 配信 ========== */
 const EDU_DTYPE = { elearning: 'eラーニング', awareness_quiz: 'アウェアネス' };
+const EDU_STATUS = { draft: '下書き', scheduled: '予約', running: '配信中', done: '終了', cancelled: '中止' };
+const EDU_RISK_RESULTS = [
+  ['opened', '開いた（リンクか偽サイトを開いた）'], ['submitted', '入力した'],
+  ['reported', '報告した'], ['not_opened', '開かなかった'],
+];
+function eduStatusCell(d) {
+  const color = d.status === 'running' ? 'success' : d.status === 'done' ? 'secondary' : d.status === 'scheduled' ? 'info text-dark' : 'light text-dark';
+  const when = d.status === 'scheduled' && d.scheduled_at ? `<div class="small text-muted">${esc(String(d.scheduled_at).slice(0, 16))}</div>` : '';
+  const monthly = d.series_id ? ' <span class="badge bg-light text-dark border">毎月</span>' : '';
+  return `<span class="badge bg-${color}">${esc(EDU_STATUS[d.status] || d.status)}</span>${monthly}${when}`;
+}
 async function renderEduDeliveries() {
   const { deliveries } = await api('api/edu_report.php', { query: { action: 'deliveries' } });
   cacheRows('eduDeliveries', deliveries || []);
   // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
   const deliveriesAsc = (deliveries || []).slice().sort((a, b) => a.id - b.id);
+  const beforeStart = (d) => d.status === 'draft' || d.status === 'scheduled';
   $('#eduDeliveriesBody').innerHTML = deliveriesAsc.length ? deliveriesAsc.map((d, i) => `
     <tr><td>${i + 1}</td><td>${esc(d.title)}</td><td>${EDU_DTYPE[d.delivery_type] || esc(d.delivery_type)}</td>
-      <td><span class="badge bg-${d.status==='running'?'success':d.status==='done'?'secondary':'light text-dark'}">${esc(d.status)}</span></td>
+      <td>${eduStatusCell(d)}</td>
       <td>${d.assigned}</td><td>${d.completed}</td><td>${d.completion_rate}%</td><td>${d.average_score}%</td>
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-primary" onclick="viewEduDelivery(${d.id})" title="配信レポート"><i class="bi bi-graph-up"></i> レポート</button>
-        ${roleAtLeast(State.user.role,'operator') && d.status==='draft'?`
+        ${roleAtLeast(State.user.role,'operator') && beforeStart(d)?`
         <button class="btn btn-sm btn-outline-secondary" data-edu-delivery-edit="${Number(d.id)}" title="配信を編集"><i class="bi bi-pencil"></i> 編集</button>
-        <button class="btn btn-sm btn-outline-success" onclick="launchEduDelivery(${d.id})" title="配信開始"><i class="bi bi-send"></i></button>`:''}
+        <button class="btn btn-sm btn-outline-success" onclick="launchEduDelivery(${d.id})" title="${d.status === 'scheduled' ? '予約を待たずに今すぐ開始' : '配信開始'}"><i class="bi bi-send"></i></button>`:''}
         ${roleAtLeast(State.user.role,'operator') && d.status==='running'?`
         <button class="btn btn-sm btn-outline-warning" onclick="remindEduDelivery(${d.id})" title="未完了者へ催促メール"><i class="bi bi-envelope-exclamation"></i></button>`:''}
         ${roleAtLeast(State.user.role,'operator') ? (Number(d.completed) > 0 || Number(d.started_count) > 0
@@ -3157,6 +3169,30 @@ async function renderEduDeliveries() {
     button.addEventListener('click', () => editEduDelivery(Number(button.dataset.eduDeliveryEdit)));
   }
 }
+function refreshEduDeliveries() {
+  return Promise.all([renderEduDeliveries(), renderEduSeries()]);
+}
+/** 毎月の配信(系列)。回ごとの配信は edu_scheduler が予約の状態で作り、予約の日時に開始する。 */
+async function renderEduSeries() {
+  const { series } = await api('api/edu_deliveries.php', { query: { action: 'series_list' } });
+  const operator = roleAtLeast(State.user.role, 'operator');
+  $('#eduSeriesBody').innerHTML = (series || []).length ? series.map((r) => `
+    <tr><td>${esc(r.title)}</td><td>毎月${Number(r.day_of_month)}日 ${esc(r.time_of_day)}</td>
+      <td>${Number(r.deadline_days)}日</td>
+      <td>${Number(r.is_active) === 1 ? esc(String(r.next_run_at).slice(0, 16)) : '—'}</td>
+      <td>${r.end_date ? esc(r.end_date) : 'なし'}</td><td>${Number(r.delivery_count)}</td>
+      <td>${Number(r.is_active) === 1 ? '<span class="badge bg-success">有効</span>' : '<span class="badge bg-secondary">停止</span>'}</td>
+      <td>${operator && Number(r.is_active) === 1 ? `<button class="btn btn-sm btn-outline-danger" onclick="stopEduSeries(${Number(r.id)})"><i class="bi bi-stop-circle"></i> 停止</button>` : ''}</td></tr>`).join('')
+    : emptyRow(8);
+}
+async function stopEduSeries(id) {
+  if (!confirm('この毎月の配信を停止しますか？\n作成済みの予約の配信は残ります（不要なら配信の一覧から削除してください）。')) return;
+  try {
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'series_stop' }, body: { id } });
+    toast('毎月の配信を停止しました', 'ok');
+    await renderEduSeries();
+  } catch (e) { toast(e.message, 'err'); }
+}
 function eduDeliveryForm() {
   const catOpts = (Cache.eduCats || []).map((c) =>
     `<option value="${c.id}"${c.slug === 'phishing' ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
@@ -3164,6 +3200,15 @@ function eduDeliveryForm() {
     `<option value="${m.id}">${esc(m.title)}（${m.slide_count}枚）</option>`).join('');
   const targetOpts = (Cache.eduTargets || []).map((t) =>
     `<option value="${t.id}">${Number(t.is_test) === 1 ? '[テスト] ' : ''}${esc(t.email)}（${esc(t.name || '')}）</option>`).join('');
+  // 訓練の結果で選べるのは終わったキャンペーンだけ(訓練の期間中に出すと測定が崩れる)
+  const finished = (Cache.eduCampaigns || []).filter((c) => c.status === 'done' || c.status === 'cancelled');
+  const campaignOpts = finished.map((c) => `<option value="${c.id}">${esc(c.name)}（${esc(EDU_STATUS[c.status] || c.status)}）</option>`).join('');
+  const positionChecks = POSITION_CATEGORIES.map((p, i) => `<div class="form-check form-check-inline">
+      <input class="form-check-input" type="checkbox" name="target_positions" id="eduPos${i}" value="${esc(p)}">
+      <label class="form-check-label" for="eduPos${i}">${esc(p)}</label></div>`).join('');
+  const resultChecks = EDU_RISK_RESULTS.map(([value, label]) => `<div class="form-check form-check-inline">
+      <input class="form-check-input" type="checkbox" name="risk_results" id="eduRisk_${value}" value="${value}"${value === 'opened' || value === 'submitted' ? ' checked' : ''}>
+      <label class="form-check-label" for="eduRisk_${value}">${label}</label></div>`).join('');
   return `<form id="eduDeliveryForm">
     <div class="alert alert-primary py-2"><button type="button" class="btn btn-sm btn-primary me-2" id="eduRiskPreset">訓練失敗者向けを設定</button><span class="small">標的型メール訓練の直後に、スライド教材と確認テストを配信します。</span></div>
     <div class="mb-2"><label class="form-label">タイトル</label><input class="form-control" name="title" value="標的型メール訓練 フォローアップ" required></div>
@@ -3181,14 +3226,24 @@ function eduDeliveryForm() {
       <select class="form-select" name="material_id"><option value="">教材なし</option>${materialOpts}</select></div>
     <div class="mb-2"><label class="form-label">配信対象</label>
       <select class="form-select" name="target_type" id="eduTargetType">
-        <option value="risk">訓練失敗者のみ（実対象者）</option>
+        <option value="risk">訓練の結果で選ぶ（実対象者）</option>
         <option value="all">全対象者（テスト宛先を除く）</option>
+        <option value="position">役職区分で選ぶ</option>
+        <option value="new_target">新入社員（登録から指定の日数以内）</option>
         <option value="individual">個別選択（テスト宛先も選択可）</option>
       </select></div>
     <div class="mb-2 d-none" id="eduAutoEnrollField">
       <div class="form-check"><input class="form-check-input" type="checkbox" name="auto_enroll" id="eduAutoEnroll">
         <label class="form-check-label" for="eduAutoEnroll">訓練失敗者を自動で追加し続ける</label></div>
-      <div class="form-text">開始後も毎時、新たに訓練で失敗した人を自動で受講対象に加え、受講案内を送ります。配信を作成した時点より後の失敗が対象です。</div></div>
+      <div class="form-text">開始後も毎時、新たに訓練で失敗した人を自動で受講対象に加えます。配信を作成した時点より後の失敗が対象です。</div></div>
+    <div class="mb-2 d-none" id="eduRiskResultField"><label class="form-label" for="eduRiskCampaign">訓練のキャンペーン（終わったもの）</label>
+      <select class="form-select" name="phish_campaign_id" id="eduRiskCampaign"><option value="">選択してください</option>${campaignOpts}</select>
+      <div class="mt-1">${resultChecks}</div>
+      <div class="form-text">訓練の期間中に同じ手口の教育を出すと測定が崩れるため、終了・中止したキャンペーンだけを選べます。</div></div>
+    <div class="mb-2 d-none" id="eduPositionField"><label class="form-label">役職区分</label><div>${positionChecks}</div></div>
+    <div class="mb-2 d-none" id="eduNewTargetField"><label class="form-label" for="eduNewTargetDays">登録からの日数</label>
+      <input class="form-control" type="number" name="new_target_days" id="eduNewTargetDays" min="1" max="365" value="30">
+      <div class="form-text">開始後も、対象者の登録から指定の日数以内の人を自動で受講対象に加えます（自動の処理を動かしている場合）。</div></div>
     <div class="mb-2 d-none" id="eduIndividualTargets"><label class="form-label">個別対象者</label>
       <input class="form-control form-control-sm mb-2" id="eduTargetSearch" placeholder="氏名またはメールアドレスで絞り込み">
       <select class="form-select" name="target_ids" multiple size="7">${targetOpts}</select>
@@ -3199,19 +3254,48 @@ function eduDeliveryForm() {
       <div class="col-6 mb-2"><label class="form-label">出題数</label><input class="form-control" type="number" name="question_count" min="1" value="3"></div>
       <div class="col-6 mb-2" id="eduPassScoreField"><label class="form-label">合格点</label><input class="form-control" type="number" name="pass_score" min="1" max="100" value="80"></div>
     </div>
+    <div class="border rounded p-2 mb-2">
+      <div class="form-check mb-1" id="eduRepeatField"><input class="form-check-input" type="checkbox" name="repeat_monthly" id="eduRepeatMonthly">
+        <label class="form-check-label" for="eduRepeatMonthly">毎月くり返す</label></div>
+      <div class="row" id="eduOnceFields">
+        <div class="col-6 mb-2"><label class="form-label" for="eduScheduledAt">予約の日時（任意）</label><input class="form-control" type="datetime-local" name="scheduled_at" id="eduScheduledAt"></div>
+        <div class="col-6 mb-2"><label class="form-label" for="eduDeadline">締切（任意）</label><input class="form-control" type="date" name="deadline" id="eduDeadline"></div>
+        <div class="form-text">予約の日時を入れると「予約」になり、その日時に自動で開始します（自動の処理を動かしている場合）。空なら下書きで作り、一覧の開始ボタンで開始します。</div>
+      </div>
+      <div class="row d-none" id="eduSeriesFields">
+        <div class="col-3 mb-2"><label class="form-label" for="eduDayOfMonth">毎月の日</label><input class="form-control" type="number" name="day_of_month" id="eduDayOfMonth" min="1" max="28" value="1"></div>
+        <div class="col-3 mb-2"><label class="form-label" for="eduTimeOfDay">時刻</label><input class="form-control" type="time" name="time_of_day" id="eduTimeOfDay" value="09:00"></div>
+        <div class="col-3 mb-2"><label class="form-label" for="eduDeadlineDays">締切までの日数</label><input class="form-control" type="number" name="deadline_days" id="eduDeadlineDays" min="1" max="90" value="14"></div>
+        <div class="col-3 mb-2"><label class="form-label" for="eduEndDate">終了日（任意）</label><input class="form-control" type="date" name="end_date" id="eduEndDate"></div>
+        <div class="form-text">毎月その日時に、この設定の配信を予約の状態で作って開始します。前の回で出した設問は次の回で外します。</div>
+      </div>
+    </div>
+    <div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="send_invites" id="eduSendInvites">
+      <label class="form-check-label" for="eduSendInvites">受講の案内メールを送る</label></div>
+    <div class="form-text mb-2">既定では送りません。送らない場合は、開始後に一覧の催促ボタンで案内するか、社内の連絡で受講を依頼してください。</div>
   </form>`;
 }
 
 function syncEduDeliveryForm() {
   const f = $('#eduDeliveryForm');
   const elearning = f.delivery_type.value === 'elearning';
+  const target = f.target_type.value;
   $('#eduMaterialField').classList.toggle('d-none', !elearning);
   $('#eduPassScoreField').classList.toggle('d-none', !elearning);
-  $('#eduIndividualTargets').classList.toggle('d-none', f.target_type.value !== 'individual');
-  // 自動連携は「訓練失敗者」を対象にしたときだけ意味を持つ(他の対象種別では二重投入になる)
-  const risk = f.target_type.value === 'risk';
+  $('#eduIndividualTargets').classList.toggle('d-none', target !== 'individual');
+  $('#eduPositionField').classList.toggle('d-none', target !== 'position');
+  $('#eduNewTargetField').classList.toggle('d-none', target !== 'new_target');
+  // 自動連携は「訓練の結果」を対象にしたときだけ意味を持つ(他の対象種別では二重投入になる)
+  const risk = target === 'risk';
   $('#eduAutoEnrollField').classList.toggle('d-none', !risk);
   if (!risk) f.auto_enroll.checked = false;
+  $('#eduRiskResultField').classList.toggle('d-none', !risk || f.auto_enroll.checked);
+  // 毎月くり返せるのは、手動の配信(全員・役職・個別)だけ
+  const repeatable = target === 'all' || target === 'position' || target === 'individual';
+  $('#eduRepeatField').classList.toggle('d-none', !repeatable);
+  if (!repeatable) f.repeat_monthly.checked = false;
+  $('#eduOnceFields').classList.toggle('d-none', f.repeat_monthly.checked);
+  $('#eduSeriesFields').classList.toggle('d-none', !f.repeat_monthly.checked);
   $('#eduTypeHelp').textContent = elearning
     ? '教材を読んで確認テストに合格すると完了します。不合格の場合は再受講できます。'
     : '理解度を測る継続教育です。回答提出で完了し、合格・不合格は付けません。';
@@ -3230,35 +3314,75 @@ function filterEduIndividualTargets() {
   $('#eduTargetCount').textContent = `${form.target_ids.selectedOptions.length}名選択`;
 }
 
+function eduCheckedValues(form, name) {
+  return Array.from(form.querySelectorAll(`input[name="${name}"]:checked`)).map((input) => input.value);
+}
+function eduDeliveryAction(form) {
+  return form.repeat_monthly.checked ? 'series_create' : 'create';
+}
 function eduDeliveryPayload(form) {
   const categories = Array.from(form.category_ids.selectedOptions).map((o) => Number(o.value));
   const targets = Array.from(form.target_ids.selectedOptions).map((o) => Number(o.value));
   const type = form.delivery_type.value;
-  if (form.target_type.value === 'individual' && !targets.length) throw new Error('個別対象者を選択してください');
-  const body = { title: form.title.value.trim(), delivery_type: type, feedback_mode: form.feedback_mode.value, target_type: form.target_type.value,
-    question_count: Number(form.question_count.value) || 3, category_ids: categories.length ? categories : undefined };
+  const target = form.target_type.value;
+  if (target === 'individual' && !targets.length) throw new Error('個別対象者を選択してください');
+  const body = { title: form.title.value.trim(), delivery_type: type, feedback_mode: form.feedback_mode.value,
+    target_type: target === 'new_target' ? 'all' : target,
+    question_count: Number(form.question_count.value) || 3, category_ids: categories.length ? categories : undefined,
+    send_invites: form.send_invites.checked };
   if (type === 'elearning') {
     body.pass_score = Number(form.pass_score.value) || 80;
     body.material_id = Number(form.material_id.value) || undefined;
   }
-  if (form.target_type.value === 'individual') body.target_ids = targets;
-  if (form.target_type.value === 'risk' && form.auto_enroll.checked) body.triggered_by = 'phishing_failure';
+  if (target === 'individual') body.target_ids = targets;
+  if (target === 'position') {
+    body.target_positions = eduCheckedValues(form, 'target_positions');
+    if (!body.target_positions.length) throw new Error('役職区分を1つ以上選んでください');
+  }
+  if (target === 'new_target') {
+    body.triggered_by = 'new_target';
+    body.new_target_days = Number(form.new_target_days.value);
+  }
+  if (target === 'risk' && form.auto_enroll.checked) body.triggered_by = 'phishing_failure';
+  if (target === 'risk' && !form.auto_enroll.checked) {
+    body.phish_campaign_id = Number(form.phish_campaign_id.value) || undefined;
+    body.risk_results = eduCheckedValues(form, 'risk_results');
+    if (!body.phish_campaign_id) throw new Error('訓練のキャンペーンを選んでください');
+    if (!body.risk_results.length) throw new Error('訓練の結果の区分を1つ以上選んでください');
+  }
+  if (form.repeat_monthly.checked) {
+    const day = Number(form.day_of_month.value);
+    if (!Number.isInteger(day) || day < 1 || day > 28) throw new Error('毎月の日は1〜28で入力してください');
+    body.day_of_month = day;
+    body.time_of_day = form.time_of_day.value;
+    body.deadline_days = Number(form.deadline_days.value) || 14;
+    if (form.end_date.value) body.end_date = form.end_date.value;
+  } else {
+    if (form.scheduled_at.value) body.scheduled_at = form.scheduled_at.value;
+    if (form.deadline.value) body.deadline = form.deadline.value;
+  }
   return body;
 }
 
 async function newEduDelivery() {
-  const [cats, materials, targets] = await Promise.all([
+  const [cats, materials, targets, campaigns] = await Promise.all([
     api('api/edu_categories.php', { query: { action: 'list' } }),
     api('api/edu_materials.php', { query: { action: 'list' } }),
     api('api/targets.php', { query: { action: 'list' } }),
+    api('api/campaigns.php', { query: { action: 'list' } }),
   ]);
   Cache.eduCats = cats.categories || []; Cache.eduMaterialList = materials.materials || []; Cache.eduTargets = targets.targets || [];
+  Cache.eduCampaigns = campaigns.campaigns || [];
   showModal('新規教育配信', eduDeliveryForm(), async () => {
-    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'create' }, body: eduDeliveryPayload($('#eduDeliveryForm')) });
-    toast('配信を作成しました', 'ok'); renderEduDeliveries();
+    const form = $('#eduDeliveryForm');
+    const action = eduDeliveryAction(form);
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action }, body: eduDeliveryPayload(form) });
+    toast(action === 'series_create' ? '毎月の配信を作成しました' : '配信を作成しました', 'ok'); refreshEduDeliveries();
   }, { size: 'lg' });
   $('#eduDType').addEventListener('change', () => { defaultEduFeedbackMode(); syncEduDeliveryForm(); });
   $('#eduTargetType').addEventListener('change', syncEduDeliveryForm);
+  $('#eduAutoEnroll').addEventListener('change', syncEduDeliveryForm);
+  $('#eduRepeatMonthly').addEventListener('change', syncEduDeliveryForm);
   $('#eduTargetSearch').addEventListener('input', filterEduIndividualTargets);
   $('#eduDeliveryForm').target_ids.addEventListener('change', filterEduIndividualTargets);
   $('#eduRiskPreset').addEventListener('click', () => {
@@ -3275,20 +3399,28 @@ async function editEduDelivery(id) {
   let delivery;
   try { ({ delivery } = await api('api/edu_deliveries.php', { query: { action: 'get', id } })); }
   catch (error) { toast(error.message, 'err'); return; }
-  if (delivery.status !== 'draft') return toast('下書きの配信だけ編集できます', 'err');
+  if (delivery.status !== 'draft' && delivery.status !== 'scheduled') return toast('開始前の配信だけ編集できます', 'err');
   const type = EDU_DTYPE[delivery.delivery_type] || delivery.delivery_type;
+  const scheduled = delivery.scheduled_at ? String(delivery.scheduled_at).slice(0, 16).replace(' ', 'T') : '';
   const body = `<form id="eduDeliveryEditForm">
-    <div class="mb-2 small text-muted">種別: ${esc(type)}</div>
+    <div class="mb-2 small text-muted">種別: ${esc(type)}・状態: ${esc(EDU_STATUS[delivery.status] || delivery.status)}</div>
     <div class="mb-2"><label class="form-label" for="eduEditTitle">タイトル</label><input class="form-control" id="eduEditTitle" value="${esc(delivery.title)}" required></div>
     <div class="mb-2"><label class="form-label" for="eduEditFeedback">答え合わせの時機</label><select class="form-select" id="eduEditFeedback">
       <option value="after_submit"${delivery.feedback_mode === 'after_submit' ? ' selected' : ''}>提出後にまとめて</option>
       <option value="immediate"${delivery.feedback_mode === 'immediate' ? ' selected' : ''}>1問ごとに答え合わせ</option>
-    </select></div></form>`;
+    </select></div>
+    <div class="mb-2"><label class="form-label" for="eduEditScheduledAt">予約の日時</label>
+      <input class="form-control" type="datetime-local" id="eduEditScheduledAt" value="${esc(scheduled)}">
+      <div class="form-text">日時を入れると予約になり、その日時に自動で開始します。</div></div>
+    <div class="form-check"><input class="form-check-input" type="checkbox" id="eduEditSendInvites"${Number(delivery.send_invites) === 1 ? ' checked' : ''}>
+      <label class="form-check-label" for="eduEditSendInvites">受講の案内メールを送る</label></div>
+  </form>`;
   showModal('教育配信を編集', body, async () => {
     const title = $('#eduEditTitle').value.trim();
     if (!title) throw new Error('タイトルを入力してください');
-    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' },
-      body: { id, title, feedback_mode: $('#eduEditFeedback').value } });
+    const payload = { id, title, feedback_mode: $('#eduEditFeedback').value, send_invites: $('#eduEditSendInvites').checked };
+    if ($('#eduEditScheduledAt').value) payload.scheduled_at = $('#eduEditScheduledAt').value;
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' }, body: payload });
     toast('更新しました', 'ok'); renderEduDeliveries();
   });
 }
@@ -3305,10 +3437,12 @@ async function deleteEduDelivery(id) {
   } catch (e) { toast(e.message, 'err'); }
 }
 async function launchEduDelivery(id) {
-  if (!confirm('この配信を開始し、対象者に受講を割り当てますか？')) return;
+  const delivery = Cache.eduDeliveries?.[id];
+  const mail = Number(delivery?.send_invites) === 1 ? '受講の案内メールを送ります。' : '案内メールは送りません。';
+  if (!confirm(`この配信を今すぐ開始し、対象者に受講を割り当てますか？\n${mail}`)) return;
   try {
     const r = await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'launch' }, body: { id } });
-    toast(`${r.assigned}名に割り当てました`, 'ok'); renderEduDeliveries();
+    toast(`${r.assigned}名に割り当てました（案内メール ${r.mail_sent}通）`, 'ok'); renderEduDeliveries();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function remindEduDelivery(id) {

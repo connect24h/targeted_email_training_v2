@@ -102,3 +102,122 @@ test('started delivery is retained without offering deletion', async () => {
   await h.context.deleteEduDelivery(12);
   assert.equal(h.calls.length, 1);
 });
+
+// ---- 教育の配信の機能(予約、毎月、役職、訓練の結果、新入社員、案内メール) ----
+const payloadSource = app.slice(app.indexOf('function eduCheckedValues('), app.indexOf('async function newEduDelivery('));
+function fakeForm(values = {}) {
+  const defaults = {
+    title: '配信', delivery_type: 'awareness_quiz', feedback_mode: 'immediate', target_type: 'all',
+    question_count: '3', pass_score: '80', material_id: '', auto_enroll: false, send_invites: false,
+    scheduled_at: '', deadline: '', phish_campaign_id: '', new_target_days: '30', repeat_monthly: false,
+    day_of_month: '1', time_of_day: '09:00', deadline_days: '14', end_date: '',
+    category_ids: [], target_ids: [], target_positions: [], risk_results: [],
+  };
+  const v = { ...defaults, ...values };
+  const form = {
+    querySelectorAll: (selector) => {
+      const name = /name="([^"]+)"/.exec(selector)[1];
+      return (v[name] || []).map((value) => ({ value }));
+    },
+  };
+  for (const [key, value] of Object.entries(v)) {
+    if (Array.isArray(value)) form[key] = { selectedOptions: value.map((x) => ({ value: String(x) })) };
+    else if (typeof value === 'boolean') form[key] = { checked: value };
+    else form[key] = { value };
+  }
+  return form;
+}
+function payloadContext() {
+  const context = vm.createContext({ POSITION_CATEGORIES: ['役員', '管理職', '一般従業員'] });
+  vm.runInContext(payloadSource, context);
+  return context;
+}
+
+test('案内メールは既定で送らず、選んだときだけ send_invites を立てる', () => {
+  const c = payloadContext();
+  assert.equal(c.eduDeliveryPayload(fakeForm()).send_invites, false);
+  assert.equal(c.eduDeliveryPayload(fakeForm({ send_invites: true })).send_invites, true);
+});
+
+test('予約の日時と締切を送り、毎月くり返すときは系列の作成を使う', () => {
+  const c = payloadContext();
+  const once = c.eduDeliveryPayload(fakeForm({ scheduled_at: '2030-04-01T09:00', deadline: '2030-04-15' }));
+  assert.equal(once.scheduled_at, '2030-04-01T09:00');
+  assert.equal(once.deadline, '2030-04-15');
+  assert.equal(c.eduDeliveryAction(fakeForm()), 'create');
+  const monthly = fakeForm({ repeat_monthly: true, scheduled_at: '2030-04-01T09:00', day_of_month: '10', time_of_day: '08:30', deadline_days: '7', end_date: '2031-03-31' });
+  assert.equal(c.eduDeliveryAction(monthly), 'series_create');
+  const body = c.eduDeliveryPayload(monthly);
+  assert.equal(body.day_of_month, 10);
+  assert.equal(body.time_of_day, '08:30');
+  assert.equal(body.deadline_days, 7);
+  assert.equal(body.end_date, '2031-03-31');
+  assert.equal(body.scheduled_at, undefined);
+  assert.throws(() => c.eduDeliveryPayload(fakeForm({ repeat_monthly: true, day_of_month: '29' })), /1〜28/);
+});
+
+test('役職区分と新入社員の対象を API の形にする', () => {
+  const c = payloadContext();
+  const position = c.eduDeliveryPayload(fakeForm({ target_type: 'position', target_positions: ['役員', '管理職'] }));
+  assert.equal(position.target_type, 'position');
+  assert.deepEqual([...position.target_positions], ['役員', '管理職']);
+  assert.throws(() => c.eduDeliveryPayload(fakeForm({ target_type: 'position' })), /役職区分/);
+  const newcomer = c.eduDeliveryPayload(fakeForm({ target_type: 'new_target', new_target_days: '45' }));
+  assert.equal(newcomer.target_type, 'all');
+  assert.equal(newcomer.triggered_by, 'new_target');
+  assert.equal(newcomer.new_target_days, 45);
+});
+
+test('訓練の結果で選ぶときは、キャンペーンと区分を送る', () => {
+  const c = payloadContext();
+  const body = c.eduDeliveryPayload(fakeForm({ target_type: 'risk', phish_campaign_id: '7', risk_results: ['reported', 'not_opened'] }));
+  assert.equal(body.phish_campaign_id, 7);
+  assert.deepEqual([...body.risk_results], ['reported', 'not_opened']);
+  assert.equal(body.triggered_by, undefined);
+  assert.throws(() => c.eduDeliveryPayload(fakeForm({ target_type: 'risk', risk_results: ['opened'] })), /キャンペーン/);
+  assert.throws(() => c.eduDeliveryPayload(fakeForm({ target_type: 'risk', phish_campaign_id: '7' })), /区分/);
+  const auto = c.eduDeliveryPayload(fakeForm({ target_type: 'risk', auto_enroll: true, risk_results: ['opened'] }));
+  assert.equal(auto.triggered_by, 'phishing_failure');
+  assert.equal(auto.risk_results, undefined);
+});
+
+test('予約中の配信は予約の日時を出し、今すぐ開始と編集ができる', async () => {
+  const body = { innerHTML: '', querySelectorAll: () => [] };
+  const context = vm.createContext({
+    State: { user: { role: 'operator' } }, Cache: {},
+    roleAtLeast: () => true, $: () => body, esc: String, emptyRow: () => '', cacheRows: () => {},
+    api: async () => ({ deliveries: [{ id: 5, title: '月例', status: 'scheduled', scheduled_at: '2030-04-01 09:00:00', series_id: 2, completed: 0, started_count: 0, assigned: 0 }] }),
+  });
+  vm.runInContext(education, context);
+  await context.renderEduDeliveries();
+  assert.match(body.innerHTML, /予約/);
+  assert.match(body.innerHTML, /2030-04-01 09:00/);
+  assert.match(body.innerHTML, /launchEduDelivery\(5\)/);
+  assert.match(body.innerHTML, /data-edu-delivery-edit="5"/);
+  assert.match(body.innerHTML, /毎月/);
+});
+
+test('毎月の配信の一覧を出し、有効な系列だけ停止できる', async () => {
+  const source = app.slice(app.indexOf('async function renderEduSeries('), app.indexOf('function eduDeliveryForm('));
+  const body = { innerHTML: '' };
+  const calls = [];
+  const context = vm.createContext({
+    State: { user: { role: 'operator' } }, roleAtLeast: () => true, $: () => body, esc: String, emptyRow: () => '<tr></tr>',
+    confirm: () => true, toast: () => {},
+    api: async (path, options) => {
+      calls.push(options);
+      return { series: [
+        { id: 3, title: '月例', day_of_month: 1, time_of_day: '09:00', deadline_days: 14, next_run_at: '2026-11-01 09:00:00', end_date: null, is_active: 1, delivery_count: 2 },
+        { id: 4, title: '停止済み', day_of_month: 5, time_of_day: '10:00', deadline_days: 7, next_run_at: '2026-11-05 10:00:00', end_date: null, is_active: 0, delivery_count: 1 },
+      ] };
+    },
+  });
+  vm.runInContext(source, context);
+  await context.renderEduSeries();
+  assert.match(body.innerHTML, /毎月1日 09:00/);
+  assert.match(body.innerHTML, /stopEduSeries\(3\)/);
+  assert.doesNotMatch(body.innerHTML, /stopEduSeries\(4\)/);
+  await context.stopEduSeries(3);
+  assert.equal(calls[1].query.action, 'series_stop');
+  assert.equal(calls[1].body.id, 3);
+});

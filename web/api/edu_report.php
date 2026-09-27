@@ -171,6 +171,7 @@ function edu_rep_handle_deliveries(array $user): never
     // 配信ごとの assigned/completed/平均% を1クエリで
     $rows = Db::all(
         "SELECT d.id, d.title, d.delivery_type, d.status, d.pass_score, d.created_at,
+                d.scheduled_at, d.series_id, d.send_invites, d.triggered_by,
                 COUNT(a.id) AS assigned,
                 SUM(CASE WHEN a.status = 'started' THEN 1 ELSE 0 END) AS started_count,
                 SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed,
@@ -193,6 +194,10 @@ function edu_rep_handle_deliveries(array $user): never
             'delivery_type' => (string) $r['delivery_type'],
             'status' => (string) $r['status'],
             'pass_score' => $r['pass_score'] !== null ? (int) $r['pass_score'] : null,
+            'scheduled_at' => $r['scheduled_at'],
+            'series_id' => $r['series_id'] !== null ? (int) $r['series_id'] : null,
+            'send_invites' => (int) $r['send_invites'],
+            'triggered_by' => $r['triggered_by'],
             'assigned' => $assigned,
             'started_count' => (int) $r['started_count'],
             'completed' => $completed,

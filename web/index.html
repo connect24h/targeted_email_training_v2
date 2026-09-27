@@ -536,6 +536,12 @@
           <tbody id="eduDeliveriesBody"></tbody>
         </table></div>
         <p class="small text-muted">削除できるのは受講開始前の配信です。受講開始・完了の履歴がある配信は保持されます。</p>
+        <h6 class="mt-4"><i class="bi bi-arrow-repeat me-1"></i>毎月の配信</h6>
+        <div class="table-responsive"><table class="table table-sm align-middle">
+          <thead><tr><th>タイトル</th><th>くり返し</th><th>締切</th><th>次の回</th><th>終了日</th><th>作成した回</th><th>状態</th><th>操作</th></tr></thead>
+          <tbody id="eduSeriesBody"></tbody>
+        </table></div>
+        <p class="small text-muted">予約と毎月の配信は、自動の処理（edu_scheduler）を動かしているときに、その日時に開始します。</p>
       </section>
 
       <!-- 教材バンク -->
@@ -713,7 +719,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=dd7f3f20"></script>
+<script src="app.js?v=37bd95bf"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=ffb3eb27"></script>
 <script src="assets/context-help.js?v=f0af67ac"></script>
