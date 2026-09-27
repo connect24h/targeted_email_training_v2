@@ -50,14 +50,15 @@ function enrollDelivery(array $overrides = []): int
         'phish_campaign_id' => null,
         'question_count' => 3,
         'created_at' => '2026-01-01 00:00:00',
+        'send_invites' => 1,
     ], $overrides);
     return Db::insert(
         'INSERT INTO edu_deliveries
          (tenant_id, title, status, delivery_type, question_count, randomize,
-          target_type, triggered_by, phish_campaign_id, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
+          target_type, triggered_by, phish_campaign_id, created_by, created_at, send_invites)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)',
         [1, '訓練フォローアップ', $data['status'], 'awareness_quiz', $data['question_count'],
-         'risk', $data['triggered_by'], $data['phish_campaign_id'], 1, $data['created_at']]
+         'risk', $data['triggered_by'], $data['phish_campaign_id'], 1, $data['created_at'], $data['send_invites']]
     );
 }
 
@@ -163,6 +164,24 @@ check($manualResult['deliveries'] === 1, 'manual トリガーの配信は自動�
 $draftDeliveryId = enrollDelivery(['status' => 'draft']);
 $draftResult = EduAutoEnroll::run();
 check($draftResult['deliveries'] === 1, 'draft の配信は running になるまで対象外');
+
+// --- 案内メールは send_invites=1 の配信だけ送る(既定は送らない) ---
+$mailCalls = 0;
+EduMailer::useTransport(static function () use (&$mailCalls): bool {
+    $mailCalls++;
+    return true;
+});
+// 先の配信(全キャンペーンの失敗者が対象)は終えておき、この配信だけを動かす
+Db::run("UPDATE edu_deliveries SET status = 'done' WHERE id = ?", [$deliveryId]);
+$quietCampaignId = enrollCampaign();
+$quietDeliveryId = enrollDelivery(['send_invites' => 0, 'phish_campaign_id' => $quietCampaignId]);
+$quietTargetId = enrollTarget('quiet@example.test');
+enrollFailure($quietCampaignId, $quietTargetId, '1000000009', '2026-07-02 10:00:00');
+EduAutoEnroll::run();
+$quiet = Db::one('SELECT last_reminded_at FROM edu_assignments WHERE delivery_id = ? AND target_id = ?', [$quietDeliveryId, $quietTargetId]);
+check($quiet !== null, 'send_invites=0 の配信にも失敗者を割り当てる');
+check($mailCalls === 0 && $quiet['last_reminded_at'] === null, 'send_invites=0 の配信では EduMailer を呼ばない');
+EduMailer::useTransport(null);
 
 // --- EduQuestionPicker: テナント固有設問を共有より優先する ---
 $tenantQuestionId = enrollTenantQuestion(1, $categoryId, 1);

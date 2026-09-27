@@ -14,6 +14,18 @@ final class EduMailer
     private const DEFAULT_BASE_URL  = 'https://sat.cojp.online';
     private const DEFAULT_MAIL_FROM = 'no-reply@cojp.online';
 
+    /** @var null|callable(string,string,string):bool 送信口の差し替え(テスト用)。null なら SMTP へ投函する */
+    private static $transport = null;
+
+    /**
+     * 送信口を差し替える。テストで「送信が何回呼ばれたか」を SMTP なしで数えるために使う。
+     * null を渡すと SMTP への投函に戻る。
+     */
+    public static function useTransport(?callable $transport): void
+    {
+        self::$transport = $transport;
+    }
+
     public static function baseUrl(): string
     {
         $env = getenv('TET2_EDU_BASE_URL');
@@ -44,6 +56,10 @@ final class EduMailer
         $subject = str_replace(["\r", "\n"], '', $subject);
         if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
             return false;
+        }
+
+        if (self::$transport !== null) {
+            return (bool) (self::$transport)($toEmail, $subject, $body);
         }
 
         // テストから localhost:25 へ実送信しないための逃がし口。

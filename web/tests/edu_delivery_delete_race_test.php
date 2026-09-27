@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/helpers.php';
 $path = tet2_test_boot();
+require_once __DIR__ . '/../lib/EduDeliveryLauncher.php';
 load_api('edu_deliveries');
 // DELETE直前に別接続で受講開始をcommitし、競合順序を決定的に再現する。
 $source = file_get_contents(__DIR__ . '/../api/edu_deliveries.php');

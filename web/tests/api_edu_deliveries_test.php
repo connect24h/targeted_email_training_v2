@@ -11,6 +11,14 @@ require_once __DIR__ . '/../lib/EduQuestionPicker.php';
 require_once __DIR__ . '/../lib/EduMailer.php';
 
 tet2_test_boot();
+require_once __DIR__ . '/../lib/EduDeliveryLauncher.php';
+
+// メールは送信口を差し替えて数える(TET2_EDU_MAIL_DISABLE に頼らない)。
+$mails = [];
+EduMailer::useTransport(static function (string $to) use (&$mails): bool {
+    $mails[] = $to;
+    return true;
+});
 load_api('edu_deliveries');
 
 $tenantId = current_user()['tenant_id'];
@@ -219,17 +227,73 @@ check(edu_d_token_expiry(['deadline' => '  ']) === null, 'ER-5: 空白だけの�
 check(edu_d_token_expiry([]) === null, 'ER-5: deadline 列が無い配信でも落ちない');
 
 // launch の transaction closure でも配信情報を参照でき、割当と期限設定を完了する。
-// SMTP投函だけを無効化し、宛先解決からメール成功件数までは本番と同じ経路を通す。
-Db::run("UPDATE edu_deliveries SET deadline = '2030-01-02 03:04:05' WHERE id = ?", [$ed7Id]);
-putenv('TET2_EDU_MAIL_DISABLE=1');
-try {
-    $r = call_handler('edu_d_handle_launch', ['id' => $ed7Id], 'operator');
-} finally {
-    putenv('TET2_EDU_MAIL_DISABLE');
-}
+// 案内メールを送る設定(send_invites=1)の配信だけ、宛先解決からメール成功件数まで通す。
+check((int) Db::one('SELECT send_invites FROM edu_deliveries WHERE id = ?', [$ed7Id])['send_invites'] === 0,
+    'SI-1: 案内メールは既定で送らない設定になる');
+Db::run("UPDATE edu_deliveries SET deadline = '2030-01-02 03:04:05', send_invites = 1 WHERE id = ?", [$ed7Id]);
+$r = call_handler('edu_d_handle_launch', ['id' => $ed7Id], 'operator');
 check($r['code'] === 200, 'ED-12: 個別配信をlaunchできる');
 check((int) ($r['payload']['assigned'] ?? 0) === 2, 'ED-12: 指定した2名だけを割り当てる');
 check((int) ($r['payload']['mail_sent'] ?? 0) === 2, 'ED-12: 新規割当2名のメール送信成功数を返す');
+check(count($mails) === 2, 'ED-12: send_invites=1 の配信は EduMailer で2通送る');
+$r = call_handler('edu_d_handle_launch', ['id' => $ed7Id], 'operator');
+check($r['code'] === 409, 'ED-12: 開始済みの配信は再び開始できない');
+
+// ---- 案内メールの既定は送らない。手動の開始もこの値に従う ----
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SI メールなし', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all',
+], 'operator');
+check((int) ($r['payload']['delivery']['send_invites'] ?? -1) === 0, 'SI-2: 作成時の既定は送らない(send_invites=0)');
+$mails = [];
+$r = call_handler('edu_d_handle_launch', ['id' => (int) $r['payload']['delivery']['id']], 'operator');
+check($r['code'] === 200 && (int) $r['payload']['assigned'] >= 1, 'SI-2: メールなしの配信も開始できる');
+check((int) $r['payload']['mail_sent'] === 0 && $mails === [], 'SI-2: send_invites=0 の手動の開始では EduMailer を呼ばない');
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SI メールあり', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all', 'send_invites' => true,
+], 'operator');
+check((int) ($r['payload']['delivery']['send_invites'] ?? 0) === 1, 'SI-3: 案内メールを送る設定を保存できる');
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SI 不正', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all', 'send_invites' => 'yes',
+], 'operator');
+check($r['code'] === 400, 'SI-4: send_invites は真偽値か 0/1 だけ受け付ける');
+
+// ---- F0: 作成時に予約の日時を入れると予約(scheduled)になる ----
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SC 予約', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all',
+    'scheduled_at' => '2030-04-01T09:00', 'deadline' => '2030-04-15',
+], 'operator');
+check($r['code'] === 201 && ($r['payload']['delivery']['status'] ?? '') === 'scheduled', 'SC-1: 予約の日時があると status=scheduled で作る');
+check(($r['payload']['delivery']['scheduled_at'] ?? '') === '2030-04-01 09:00:00', 'SC-1: 予約の日時を秒まで揃えて保存する');
+check(($r['payload']['delivery']['deadline'] ?? '') === '2030-04-15', 'SC-1: 締切を保存する');
+$scheduledId = (int) $r['payload']['delivery']['id'];
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SC 不正', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all', 'scheduled_at' => 'あした',
+], 'operator');
+check($r['code'] === 400, 'SC-2: 日時として読めない予約を拒否する');
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SC 逆転', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all',
+    'scheduled_at' => '2030-04-20 09:00', 'deadline' => '2030-04-15',
+], 'operator');
+check($r['code'] === 400, 'SC-3: 締切が予約の日時より前なら拒否する');
+$r = call_handler('edu_d_handle_update', ['id' => $scheduledId, 'scheduled_at' => '2030-04-10 09:00'], 'operator');
+check($r['code'] === 200 && ($r['payload']['delivery']['scheduled_at'] ?? '') === '2030-04-10 09:00:00', 'SC-4: 予約中の配信は日時を変えられる');
+$r = call_handler('edu_d_handle_update', ['id' => $scheduledId, 'scheduled_at' => '2030-05-01 10:00'], 'operator');
+check($r['code'] === 400, 'SC-4: 締切より後へ予約を動かすことは拒否する');
+$r = call_handler('edu_d_handle_update', ['id' => $scheduledId, 'scheduled_at' => '2030-05-01 10:00', 'deadline' => '2030-05-15'], 'operator');
+check($r['code'] === 200 && ($r['payload']['delivery']['scheduled_at'] ?? '') === '2030-05-01 10:00:00',
+    'SC-4: 予約中の配信は日時を変えられる');
+$r = call_handler('edu_d_handle_create', [
+    'title' => 'SC 下書き', 'delivery_type' => 'awareness_quiz', 'target_type' => 'all',
+], 'operator');
+$draftId = (int) $r['payload']['delivery']['id'];
+$r = call_handler('edu_d_handle_update', ['id' => $draftId, 'scheduled_at' => '2030-06-01 09:00'], 'operator');
+check(($r['payload']['delivery']['status'] ?? '') === 'scheduled', 'SC-5: 下書きに予約の日時を入れると予約になる');
+$r = call_handler('edu_d_handle_update', ['id' => $draftId, 'send_invites' => true], 'operator');
+check((int) ($r['payload']['delivery']['send_invites'] ?? 0) === 1, 'SC-6: 案内メールの設定を編集で変えられる');
+$mails = [];
+$r = call_handler('edu_d_handle_launch', ['id' => $scheduledId], 'operator');
+check($r['code'] === 200 && ($r['payload']['status'] ?? '') === 'running', 'SC-7: 予約中の配信を画面から今すぐ開始できる');
+check($mails === [], 'SC-7: 案内メールなしの予約の配信はメールを送らない');
 $launchedAssignments = Db::all(
     'SELECT target_id, status, token_expiry FROM edu_assignments WHERE delivery_id = ? ORDER BY target_id',
     [$ed7Id]
@@ -264,4 +328,5 @@ $r = call_handler('edu_d_handle_create', [
 ], 'operator');
 check($r['code'] === 400, 'ER-5: 未知の triggered_by を拒否する');
 
+EduMailer::useTransport(null);
 echo "ALL TESTS PASSED\n";

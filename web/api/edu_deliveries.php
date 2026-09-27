@@ -1,4 +1,5 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
+require_once __DIR__ . '/../lib/EduDeliveryLauncher.php';
 
 /**
  * 教育配信(edu_deliveries)管理 + launch(受講割当の採番)API。
@@ -103,16 +104,7 @@ function edu_d_target_type(array $body): string
  */
 function edu_d_token_expiry(array $delivery): ?string
 {
-    $deadline = $delivery['deadline'] ?? null;
-    if (!is_string($deadline) || trim($deadline) === '') {
-        return null;
-    }
-    $deadline = trim($deadline);
-    // 日付のみ(YYYY-MM-DD)なら、その日いっぱいを有効にする。
-    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $deadline) === 1) {
-        return $deadline . ' 23:59:59';
-    }
-    return $deadline;
+    return EduDeliveryLauncher::tokenExpiry($delivery);
 }
 
 /** triggered_by。未指定は manual。 */
@@ -180,106 +172,14 @@ function edu_d_assert_targets_owned(array $targetIds, int $tenantId): void
     }
 }
 
-/** access_token: 32桁hex。受講者URLに露出するため campaign の10桁より長く、推測困難に。 */
-function edu_d_generate_token(): string
-{
-    for ($i = 0; $i < 10; $i++) {
-        $token = bin2hex(random_bytes(16));
-        if (Db::one('SELECT 1 FROM edu_assignments WHERE access_token = ?', [$token]) === null) {
-            return $token;
-        }
-    }
-    throw new RuntimeException('access_token を生成できません');
-}
-
-/** target_type に応じて対象 target_id を確定する(全てテナント内)。 */
+/** target_type に応じて対象 target_id を確定する(全てテナント内)。規則は EduDeliveryLauncher にある。 */
 function edu_d_resolve_targets(array $delivery, int $tenantId): array
 {
-    $type = (string) $delivery['target_type'];
-    if ($type === 'all') {
-        $rows = Db::all(
-            "SELECT id FROM targets
-             WHERE tenant_id = ? AND status = 'active' AND is_test = 0 ORDER BY id",
-            [$tenantId]
-        );
-    } elseif ($type === 'group') {
-        $groupId = $delivery['target_group_id'] !== null ? (int) $delivery['target_group_id'] : 0;
-        if ($groupId < 1) {
-            json_error('group 配信には target_group_id が必要です', 400);
-        }
-        edu_d_assert_group_owned($groupId, $tenantId);
-        $rows = Db::all(
-            'SELECT t.id
-             FROM targets t
-             INNER JOIN target_group tg ON tg.target_id = t.id
-             WHERE t.tenant_id = ? AND tg.group_id = ? AND t.status = \'active\'
-             ORDER BY t.id',
-            [$tenantId, $groupId]
-        );
-    } elseif ($type === 'individual') {
-        $rows = Db::all(
-            "SELECT t.id FROM edu_delivery_targets dt
-             INNER JOIN targets t ON t.id = dt.target_id
-             WHERE dt.delivery_id = ? AND t.tenant_id = ? AND t.status = 'active'
-             ORDER BY t.id",
-            [(int) $delivery['id'], $tenantId]
-        );
-    } else { // risk: 訓練で失敗(auth or click)した実対象者
-        $campaignId = $delivery['phish_campaign_id'] !== null ? (int) $delivery['phish_campaign_id'] : 0;
-        // phish_campaign_id 指定時はそのキャンペーン、未指定時はテナント全体の失敗者
-        if ($campaignId > 0) {
-            assert_campaign_owned($campaignId, $tenantId);
-            $rows = Db::all(
-                "SELECT DISTINCT ct.target_id AS id
-                 FROM events e
-                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
-                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
-                 INNER JOIN targets t ON t.id = ct.target_id
-                 WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('auth','click')
-                   AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
-                 ORDER BY ct.target_id",
-                [$tenantId, $campaignId, $tenantId]
-            );
-        } else {
-            $rows = Db::all(
-                "SELECT DISTINCT ct.target_id AS id
-                 FROM events e
-                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
-                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
-                 INNER JOIN targets t ON t.id = ct.target_id
-                 WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')
-                   AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
-                 ORDER BY ct.target_id",
-                [$tenantId, $tenantId]
-            );
-        }
+    try {
+        return EduDeliveryLauncher::resolveTargets($delivery, $tenantId);
+    } catch (EduDeliveryError $e) {
+        json_error($e->getMessage(), $e->getCode());
     }
-    $ids = [];
-    foreach ($rows as $r) {
-        $ids[] = (int) $r['id'];
-    }
-    return $ids;
-}
-
-/** 配信の設問を確定する。question_ids 明示優先、なければ条件抽出。テナント所有を厳格確認。 */
-function edu_d_resolve_questions(array $delivery, int $tenantId): array
-{
-    // 明示指定(edu_delivery_questions に既に積まれている)を優先
-    $explicit = Db::all(
-        'SELECT question_id FROM edu_delivery_questions WHERE delivery_id = ? ORDER BY sort_order, id',
-        [(int) $delivery['id']]
-    );
-    if ($explicit !== []) {
-        $ids = [];
-        foreach ($explicit as $r) {
-            $ids[] = (int) $r['question_id'];
-        }
-        return $ids;
-    }
-
-    // 条件抽出。規則は EduQuestionPicker に一本化してある(EduAutoEnroll と共通)。
-    require_once __DIR__ . '/../lib/EduQuestionPicker.php';
-    return EduQuestionPicker::pick($delivery, $tenantId);
 }
 
 function edu_d_handle_list(array $actor): never
@@ -333,30 +233,78 @@ function edu_d_feedback_mode(array $body, ?string $deliveryType): ?string
     return $body['feedback_mode'];
 }
 
-function edu_d_handle_create(array $actor): never
+/** 真偽値の項目(true/false か 0/1)。未指定なら既定値。 */
+function edu_d_flag(array $body, string $key, int $default): int
 {
-    tet2_require_csrf();
-    $body = json_body();
-    $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
-    $title = edu_d_string($body, 'title');
+    if (!array_key_exists($key, $body) || $body[$key] === null) {
+        return $default;
+    }
+    $v = $body[$key];
+    if ($v === true || $v === 1) {
+        return 1;
+    }
+    if ($v === false || $v === 0) {
+        return 0;
+    }
+    json_error($key . ' は true か false で指定してください', 400);
+}
+
+/** 日時の項目。画面の 'YYYY-MM-DDTHH:MM' も受け付け、'YYYY-MM-DD HH:MM:SS' に揃える。 */
+function edu_d_datetime(array $body, string $key): ?string
+{
+    if (!array_key_exists($key, $body) || $body[$key] === null || $body[$key] === '') {
+        return null;
+    }
+    $value = is_string($body[$key]) ? EduDeliveryLauncher::normalizeDateTime($body[$key]) : null;
+    if ($value === null) {
+        json_error($key . ' は日時(YYYY-MM-DD HH:MM)で指定してください', 400);
+    }
+    return $value;
+}
+
+/** 締切。日付だけ(その日いっぱい)か日時。 */
+function edu_d_deadline(array $body): ?string
+{
+    if (!array_key_exists('deadline', $body) || $body['deadline'] === null || $body['deadline'] === '') {
+        return null;
+    }
+    $raw = is_string($body['deadline']) ? trim($body['deadline']) : '';
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) === 1 && DateTimeImmutable::createFromFormat('!Y-m-d', $raw) !== false) {
+        return $raw;
+    }
+    return edu_d_datetime($body, 'deadline');
+}
+
+/** 締切が予約の日時より前になっていないか。 */
+function edu_d_assert_schedule_order(?string $scheduledAt, ?string $deadline): void
+{
+    if ($scheduledAt === null || $deadline === null) {
+        return;
+    }
+    $expiry = EduDeliveryLauncher::tokenExpiry(['deadline' => $deadline]);
+    if ($expiry !== null && $expiry <= $scheduledAt) {
+        json_error('締切は予約の日時より後にしてください', 400);
+    }
+}
+
+/**
+ * 配信の設定を検証し、edu_deliveries の列の値に揃える。配信の作成と毎月の配信の系列の作成が使う。
+ *
+ * @return array{columns: array<string,mixed>, target_ids: list<int>}
+ */
+function edu_d_parse_config(array $body, int $tenantId): array
+{
     $deliveryType = edu_d_type($body);
     $targetType = edu_d_target_type($body);
-
-    // 任意項目
     $questionCount = edu_d_body_optional_int($body, 'question_count');
     $categoryIds = edu_d_int_array($body, 'category_ids');
-    $randomize = array_key_exists('randomize', $body) ? ($body['randomize'] ? 1 : 0) : 1;
     $passScore = edu_d_body_optional_int($body, 'pass_score');
     $targetGroupId = edu_d_body_optional_int($body, 'target_group_id');
     $phishCampaignId = edu_d_body_optional_int($body, 'phish_campaign_id');
     $materialId = edu_d_body_optional_int($body, 'material_id');
-    $targetIds = edu_d_int_array($body, 'target_ids') ?? [];
-    if ($targetType !== 'individual') {
-        $targetIds = [];
-    }
+    $targetIds = $targetType === 'individual' ? (edu_d_int_array($body, 'target_ids') ?? []) : [];
     $triggeredBy = edu_d_triggered_by($body);
     edu_d_assert_trigger_consistency($triggeredBy, $targetType);
-    $feedbackMode = edu_d_feedback_mode($body, $deliveryType);
 
     // difficulty_range: [min,max] 各1-3
     $diffRange = null;
@@ -390,32 +338,62 @@ function edu_d_handle_create(array $actor): never
         edu_d_assert_material_owned($materialId, $tenantId);
     }
     // category_ids 所有確認(他テナントのカテゴリ混入=IDOR防止)
-    if ($categoryIds !== null && $categoryIds !== []) {
-        foreach ($categoryIds as $cid) {
-            if (Db::one('SELECT 1 FROM edu_categories WHERE id = ? AND (tenant_id = ? OR tenant_id IS NULL)', [$cid, $tenantId]) === null) {
-                json_error('カテゴリが見つかりません', 404);
-            }
+    foreach ($categoryIds ?? [] as $cid) {
+        if (Db::one('SELECT 1 FROM edu_categories WHERE id = ? AND (tenant_id = ? OR tenant_id IS NULL)', [$cid, $tenantId]) === null) {
+            json_error('カテゴリが見つかりません', 404);
         }
     }
     if ($phishCampaignId !== null) {
         assert_campaign_owned($phishCampaignId, $tenantId);
     }
 
+    return [
+        'columns' => [
+            'title' => edu_d_string($body, 'title'),
+            'delivery_type' => $deliveryType,
+            'question_count' => $questionCount,
+            'category_ids' => $categoryIds !== null ? json_encode($categoryIds) : null,
+            'difficulty_range' => $diffRange !== null ? json_encode($diffRange) : null,
+            'randomize' => array_key_exists('randomize', $body) ? ($body['randomize'] ? 1 : 0) : 1,
+            'pass_score' => $passScore,
+            'material_id' => $materialId,
+            'target_type' => $targetType,
+            'target_group_id' => $targetGroupId,
+            'triggered_by' => $triggeredBy,
+            'phish_campaign_id' => $phishCampaignId,
+            'feedback_mode' => edu_d_feedback_mode($body, $deliveryType),
+            'send_invites' => edu_d_flag($body, 'send_invites', 0),
+        ],
+        'target_ids' => $targetIds,
+    ];
+}
+
+function edu_d_handle_create(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
+    $config = edu_d_parse_config($body, $tenantId);
+    // 予約の日時があれば予約(scheduled)で作る。その日時に edu_scheduler.php が開始する。
+    $scheduledAt = edu_d_datetime($body, 'scheduled_at');
+    $deadline = edu_d_deadline($body);
+    edu_d_assert_schedule_order($scheduledAt, $deadline);
+
+    $columns = $config['columns'] + [
+        'tenant_id' => $tenantId,
+        'status' => $scheduledAt !== null ? 'scheduled' : 'draft',
+        'scheduled_at' => $scheduledAt,
+        'deadline' => $deadline,
+        'created_by' => $actor['id'],
+    ];
+    $names = array_keys($columns);
     $id = Db::insert(
-        'INSERT INTO edu_deliveries
-         (tenant_id, title, status, delivery_type, question_count, category_ids, difficulty_range,
-          randomize, pass_score, material_id, target_type, target_group_id, triggered_by, phish_campaign_id, created_by, feedback_mode)
-         VALUES (?, ?, \'draft\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-            $tenantId, $title, $deliveryType, $questionCount,
-            $categoryIds !== null ? json_encode($categoryIds) : null,
-            $diffRange !== null ? json_encode($diffRange) : null,
-            $randomize, $passScore, $materialId, $targetType, $targetGroupId, $triggeredBy, $phishCampaignId,
-            $actor['id'], $feedbackMode,
-        ]
+        'INSERT INTO edu_deliveries (' . implode(', ', $names) . ')
+         VALUES (' . implode(', ', array_fill(0, count($names), '?')) . ')',
+        array_values($columns)
     );
 
-    foreach ($targetIds as $targetId) {
+    foreach ($config['target_ids'] as $targetId) {
         Db::run(
             'INSERT OR IGNORE INTO edu_delivery_targets (delivery_id, target_id) VALUES (?, ?)',
             [$id, $targetId]
@@ -450,21 +428,16 @@ function edu_d_handle_update(array $actor): never
     $id = edu_d_id_body($body);
     $delivery = edu_d_assert_owned($id, $tenantId);
 
-    // 起動済み(draft以外)は編集不可
-    if ((string) $delivery['status'] !== 'draft') {
-        json_error('draft 以外の配信は編集できません', 409);
+    // 開始前(下書きと予約)だけ編集できる
+    if (!in_array((string) $delivery['status'], ['draft', 'scheduled'], true)) {
+        json_error('開始済みの配信は編集できません', 409);
     }
 
     $title = array_key_exists('title', $body) ? edu_d_string($body, 'title') : null;
     $passScore = edu_d_body_optional_int($body, 'pass_score');
-    $scheduledAt = null;
-    if (array_key_exists('scheduled_at', $body) && is_string($body['scheduled_at']) && trim($body['scheduled_at']) !== '') {
-        $scheduledAt = trim($body['scheduled_at']);
-    }
-    $deadline = null;
-    if (array_key_exists('deadline', $body) && is_string($body['deadline']) && trim($body['deadline']) !== '') {
-        $deadline = trim($body['deadline']);
-    }
+    $scheduledAt = edu_d_datetime($body, 'scheduled_at');
+    $deadline = edu_d_deadline($body);
+    edu_d_assert_schedule_order($scheduledAt ?? $delivery['scheduled_at'], $deadline ?? $delivery['deadline']);
     // draft のうちに手動配信⇄自動連携を切り替えられるようにする。
     $triggeredBy = null;
     if (array_key_exists('triggered_by', $body) && $body['triggered_by'] !== null) {
@@ -473,11 +446,14 @@ function edu_d_handle_update(array $actor): never
     }
 
     $feedbackMode = edu_d_feedback_mode($body, null);
+    $sendInvites = array_key_exists('send_invites', $body) ? edu_d_flag($body, 'send_invites', 0) : null;
 
     if ($title === null && $passScore === null && $scheduledAt === null && $deadline === null
-        && $triggeredBy === null && $feedbackMode === null) {
+        && $triggeredBy === null && $feedbackMode === null && $sendInvites === null) {
         json_error('更新項目がありません', 400);
     }
+    // 下書きに予約の日時を入れたら予約にする(その日時に edu_scheduler.php が開始する)。
+    $status = $scheduledAt !== null ? 'scheduled' : null;
 
     Db::run(
         'UPDATE edu_deliveries
@@ -486,14 +462,20 @@ function edu_d_handle_update(array $actor): never
              scheduled_at = COALESCE(?, scheduled_at),
              deadline = COALESCE(?, deadline),
              triggered_by = COALESCE(?, triggered_by),
-             feedback_mode = COALESCE(?, feedback_mode)
-         WHERE id = ? AND tenant_id = ?',
-        [$title, $passScore, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $id, $tenantId]
+             feedback_mode = COALESCE(?, feedback_mode),
+             send_invites = COALESCE(?, send_invites),
+             status = COALESCE(?, status)
+         WHERE id = ? AND tenant_id = ? AND status IN (\'draft\',\'scheduled\')',
+        [$title, $passScore, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $status, $id, $tenantId]
     );
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
 }
 
+/**
+ * 配信を開始する。処理は EduDeliveryLauncher に切り出してあり、予約の配信を開始する
+ * CLI(db/edu_scheduler.php)も同じ処理を呼ぶ。案内メールは配信の send_invites=1 のときだけ送る。
+ */
 function edu_d_handle_launch(array $actor): never
 {
     tet2_require_csrf();
@@ -502,106 +484,20 @@ function edu_d_handle_launch(array $actor): never
     $id = edu_d_id_body($body);
     $delivery = edu_d_assert_owned($id, $tenantId);
 
-    if (!in_array((string) $delivery['status'], ['draft', 'scheduled'], true)) {
-        json_error('この配信は開始できません(status=' . $delivery['status'] . ')', 409);
+    try {
+        $result = EduDeliveryLauncher::launch($delivery, $tenantId);
+    } catch (EduDeliveryError $e) {
+        json_error($e->getMessage(), $e->getCode());
     }
 
-    // 対象者と設問を確定
-    $targetIds = edu_d_resolve_targets($delivery, $tenantId);
-    if ($targetIds === []) {
-        json_error('対象者がいません', 400);
-    }
-    $questionIds = edu_d_resolve_questions($delivery, $tenantId);
-    if ($questionIds === []) {
-        json_error('出題する設問がありません', 400);
-    }
-
-    // トランザクションで割当採番 + 設問確定。新規割当者の (token) を集め、commit後にメール送信する
-    // (SMTP送信をtx内でやると送信遅延/失敗がcommitをブロック・巻き戻すため、必ずtx外で送る)。
-    $newTokens = [];
-    $result = Db::tx(function () use ($id, $tenantId, $targetIds, $questionIds, $delivery, &$newTokens) {
-        // 設問が未確定(条件抽出)なら edu_delivery_questions に積む
-        $existing = Db::one('SELECT 1 FROM edu_delivery_questions WHERE delivery_id = ?', [$id]);
-        if ($existing === null) {
-            $sort = 0;
-            foreach ($questionIds as $qid) {
-                Db::run(
-                    'INSERT OR IGNORE INTO edu_delivery_questions (delivery_id, question_id, sort_order) VALUES (?, ?, ?)',
-                    [$id, $qid, $sort]
-                );
-                $sort++;
-            }
-        }
-        // 受講割当を採番(既存 target は UNIQUE(delivery_id,target_id) でスキップ=再launch安全)
-        $assigned = 0;
-        foreach ($targetIds as $targetId) {
-            $dup = Db::one('SELECT 1 FROM edu_assignments WHERE delivery_id = ? AND target_id = ?', [$id, $targetId]);
-            if ($dup !== null) {
-                continue;
-            }
-            $token = edu_d_generate_token();
-            Db::run(
-                'INSERT INTO edu_assignments (tenant_id, delivery_id, target_id, access_token, status, token_expiry)
-                 VALUES (?, ?, ?, ?, \'assigned\', ?)',
-                [$tenantId, $id, $targetId, $token, edu_d_token_expiry($delivery)]
-            );
-            $newTokens[] = $token;
-            $assigned++;
-        }
-        Db::run("UPDATE edu_deliveries SET status = 'running' WHERE id = ?", [$id]);
-        return $assigned;
-    });
-
-    // commit 済み。新規割当者へ受講依頼メールを送る(tx外)。送信失敗しても launch 自体は成功扱い
-    // (未達分は後で remind で再送できる)。
-    $mailSent = 0;
-    if ($newTokens !== []) {
-        $mailSent = edu_d_send_invites($id, $tenantId, (string) $delivery['title'], $newTokens);
-    }
-
-    audit('edu_delivery.launch', 'delivery_id=' . $id . ',assigned=' . $result . ',mail=' . $mailSent);
+    audit('edu_delivery.launch', 'delivery_id=' . $id . ',assigned=' . $result['assigned'] . ',mail=' . $result['mail_sent']);
     json_out([
         'success' => true,
         'status' => 'running',
-        'assigned' => $result,
-        'mail_sent' => $mailSent,
-        'question_count' => count($questionIds),
+        'assigned' => $result['assigned'],
+        'mail_sent' => $result['mail_sent'],
+        'question_count' => $result['question_count'],
     ]);
-}
-
-/**
- * 新規割当者へ受講依頼メールを送る。access_token 群から宛先を引き当てて送信。送信成功数を返す。
- * tx 外で呼ぶこと(SMTP はブロッキング)。
- */
-function edu_d_send_invites(int $deliveryId, int $tenantId, string $title, array $tokens): int
-{
-    require_once __DIR__ . '/../lib/EduMailer.php';
-    $sent = 0;
-    foreach ($tokens as $token) {
-        $row = Db::one(
-            'SELECT t.email, t.name
-             FROM edu_assignments a
-             INNER JOIN targets t ON t.id = a.target_id
-             WHERE a.access_token = ? AND a.tenant_id = ?',
-            [$token, $tenantId]
-        );
-        if ($row === null) {
-            continue;
-        }
-        $name = trim((string) ($row['name'] ?? ''));
-        $greeting = $name !== '' ? ($name . ' 様') : 'ご担当者 様';
-        $url = EduMailer::takeUrl($token);
-        $subject = '【受講のご案内】' . $title;
-        $body = $greeting . "\n\n"
-            . 'セキュリティ教育「' . $title . "」が配信されました。\n"
-            . "下記URLよりご受講ください（所要5〜10分・ログイン不要）。\n\n"
-            . $url . "\n\n"
-            . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
-        if (EduMailer::send((string) $row['email'], $subject, $body)) {
-            $sent++;
-        }
-    }
-    return $sent;
 }
 
 /**

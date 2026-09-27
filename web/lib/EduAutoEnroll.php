@@ -97,7 +97,7 @@ final class EduAutoEnroll
     }
 
     /**
-     * 新規割当者へ受講案内メールを送る。
+     * 新規割当者へ受講案内メールを送る(配信の send_invites=1 のときだけ)。
      *
      * 送信できた分だけ last_reminded_at を立てる。この列は EduReminder の再送間隔にも
      * 使われるため、案内直後に催促メールが飛ぶ二重送信も同時に防げる(専用列を足さない理由)。
@@ -107,8 +107,12 @@ final class EduAutoEnroll
         if ($assignmentIds === []) {
             return;
         }
-        $delivery = Db::one('SELECT title FROM edu_deliveries WHERE id = ?', [$deliveryId]);
-        $title = $delivery !== null ? (string) $delivery['title'] : 'セキュリティ教育';
+        $delivery = Db::one('SELECT title, send_invites FROM edu_deliveries WHERE id = ?', [$deliveryId]);
+        // 教育のメールは既定で送らない。配信で「案内メールを送る」を選んだときだけ送る。
+        if ($delivery === null || (int) $delivery['send_invites'] !== 1) {
+            return;
+        }
+        $title = (string) $delivery['title'];
 
         foreach ($assignmentIds as $assignmentId) {
             $row = Db::one(
