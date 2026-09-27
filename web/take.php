@@ -275,7 +275,9 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
     const n = material.pages.length;
     const out = [];
     if (!isTwoUp()) { for (let i = 1; i <= n; i++) out.push([i]); return out; }
-    for (let i = 1; i <= n; i += 2) out.push(i + 1 <= n ? [i, i + 1] : [i]);
+    // 印刷された本と同じく、1ページ目(表紙)は単独で見せ、2ページ目から左右の見開きに組む
+    out.push([1]);
+    for (let i = 2; i <= n; i += 2) out.push(i + 1 <= n ? [i, i + 1] : [i]);
     return out;
   }
   function openPages() { spread = 0; firstPage = 1; zoom = 1; only('pagesView'); renderPages(); $('stage').focus(); }
@@ -284,7 +286,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
     const at = gs.findIndex((grp) => grp.includes(firstPage));
     spread = at === -1 ? Math.min(spread, gs.length - 1) : at;
     const g = gs[spread];
-    firstPage = g[0];
+    if (!g.includes(firstPage)) firstPage = g[0];   // 見開きに組み直しても、見ていたページを覚えておく(1ページ表示へ戻すとそのページを出す)
     const box = $('pageBox');
     box.className = 'viewer-pages' + (g.length === 2 ? ' two' : '') + (zoom > 1 ? ' zoomed' : '');
     box.innerHTML = '';

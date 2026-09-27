@@ -49,8 +49,8 @@ try {
     await page.locator('#startBtn').click();
     await page.locator('#pagesView:not(.d-none)').waitFor();
     await imagesLoaded(page, '#pageBox img');
-    assert.equal(await page.locator('#pageBox img').count(), 2);
-    ok('PC: 教材のページ画像を見開きで表示する');
+    assert.equal(await page.locator('#pageBox img').count(), 1);
+    ok('PC: 1ページ目(表紙)は単独で表示する');
     assert.ok((await page.locator('#pageBox img').first().getAttribute('alt')).length > 0);
     ok('PC: ページ画像に代替テキストがある');
     await shot(page, '02-viewer-spread');
@@ -63,8 +63,13 @@ try {
     assert.ok((await page.locator('#pageText').innerText()).includes('ページ'));
     ok('PC: 拡大と縮小、文字で読むが動く');
     await page.locator('#textToggle').click();
-    const spreads = Math.ceil(pageCount / 2);
-    for (let i = 1; i < spreads; i += 1) {
+    await page.keyboard.press('ArrowRight');
+    await imagesLoaded(page, '#pageBox img');
+    assert.equal(await page.locator('#pageBox img').count(), 2);
+    assert.match(await page.locator('#pageLabel').innerText(), /^2-3 \//);
+    ok('PC: 2ページ目からは見開きで表示する');
+    const spreads = 1 + Math.ceil((pageCount - 1) / 2);
+    for (let i = 2; i < spreads; i += 1) {
       await page.keyboard.press('ArrowRight');
     }
     await imagesLoaded(page, '#pageBox img');
@@ -131,13 +136,13 @@ try {
     assert.ok(overflow <= 1, `横にはみ出していない(${overflow}px)`);
     ok('スマホ: 画面が横にはみ出さない');
     await shot(page, '08-mobile-viewer');
-    // 画面の幅が変わっても同じページを表示する(1ページ表示の5ページ目 → 見開きなら5ページを含む組)
+    // 画面の幅が変わっても同じページを表示する(1ページ表示の5ページ目 → 見開きなら5ページを含む組 4-5)
     for (let i = 1; i < 5; i += 1) {
       await page.locator('#pageNext').click();
     }
     assert.match(await page.locator('#pageLabel').innerText(), /^5 \//);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.waitForFunction(() => /^5-6 \//.test(document.getElementById('pageLabel').textContent));
+    await page.waitForFunction(() => /^4-5 \//.test(document.getElementById('pageLabel').textContent));
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForFunction(() => /^5 \//.test(document.getElementById('pageLabel').textContent));
     ok('スマホ: 画面の幅が変わっても同じページを表示する');
