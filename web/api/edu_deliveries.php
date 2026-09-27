@@ -1,5 +1,6 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/EduDeliveryLauncher.php';
+require_once __DIR__ . '/../lib/EduDeliverySeries.php';
 
 /**
  * 教育配信(edu_deliveries)管理 + launch(受講割当の採番)API。
@@ -472,6 +473,109 @@ function edu_d_handle_update(array $actor): never
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
 }
 
+/** 毎月の配信の規則(毎月の日、時刻、締切までの日数、終了日)を検証する。 */
+function edu_d_series_rule(array $body): array
+{
+    $day = $body['day_of_month'] ?? null;
+    if (!is_int($day) || $day < 1 || $day > 28) {
+        json_error('day_of_month は 1〜28 で指定してください', 400);
+    }
+    $time = $body['time_of_day'] ?? null;
+    if (!is_string($time) || preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $time) !== 1) {
+        json_error('time_of_day は HH:MM で指定してください', 400);
+    }
+    $deadlineDays = $body['deadline_days'] ?? 14;
+    if (!is_int($deadlineDays) || $deadlineDays < 1 || $deadlineDays > 90) {
+        json_error('deadline_days は 1〜90 で指定してください', 400);
+    }
+    $endDate = $body['end_date'] ?? null;
+    if ($endDate === '') {
+        $endDate = null;
+    }
+    if ($endDate !== null && (!is_string($endDate) || preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate) !== 1
+        || DateTimeImmutable::createFromFormat('!Y-m-d', $endDate) === false)) {
+        json_error('end_date は YYYY-MM-DD で指定してください', 400);
+    }
+    return ['day_of_month' => $day, 'time_of_day' => $time, 'deadline_days' => $deadlineDays, 'end_date' => $endDate];
+}
+
+function edu_d_assert_series_owned(int $id, int $tenantId): array
+{
+    $row = Db::one('SELECT * FROM edu_delivery_series WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
+    if ($row === null) {
+        json_error('毎月の配信が見つかりません', 404);
+    }
+    return $row;
+}
+
+/**
+ * 毎月の配信(系列)を作る。配信の設定は作成と同じ検証を通し、settings に保存する。
+ * 回ごとの配信は edu_scheduler.php が予約の状態で作り、予約の日時に開始する。
+ */
+function edu_d_handle_series_create(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
+    $config = edu_d_parse_config($body, $tenantId);
+    $columns = $config['columns'];
+    // 訓練の結果は特定のキャンペーンの後に1回だけ意味を持つ。自動の投入の配信は開始後に投入し続けるので、系列にしない。
+    if ($columns['target_type'] === 'risk' || $columns['triggered_by'] !== 'manual') {
+        json_error('毎月の配信は、全員・グループ・役職・個別の対象の手動の配信だけにできます', 400);
+    }
+    // 設問は回ごとに条件から選び直す(過去の回で出した設問を外すため)。
+    if (!empty($body['question_ids'])) {
+        json_error('毎月の配信では設問を明示で指定できません。カテゴリと問題数で指定してください', 400);
+    }
+    $rule = edu_d_series_rule($body);
+    $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
+    $next = EduDeliverySeries::nextOccurrence($rule['day_of_month'], $rule['time_of_day'], $now);
+    if ($rule['end_date'] !== null && $rule['end_date'] < $next->format('Y-m-d')) {
+        json_error('終了日が最初の回(' . $next->format('Y-m-d') . ')より前です', 400);
+    }
+    $settings = $columns;
+    unset($settings['title']);
+    $settings['target_ids'] = $config['target_ids'];
+
+    $id = Db::insert(
+        'INSERT INTO edu_delivery_series
+         (tenant_id, title, settings, day_of_month, time_of_day, deadline_days, next_run_at, end_date, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [$tenantId, $columns['title'], json_encode($settings, JSON_UNESCAPED_UNICODE), $rule['day_of_month'],
+         $rule['time_of_day'], $rule['deadline_days'], $next->format('Y-m-d H:i:s'), $rule['end_date'], $actor['id']]
+    );
+    audit('edu_delivery_series.create', 'series_id=' . $id);
+    json_out(['success' => true, 'series' => edu_d_assert_series_owned($id, $tenantId)], 201);
+}
+
+function edu_d_handle_series_list(array $actor): never
+{
+    $tenantId = effective_tenant_id($actor, edu_d_query_int('tenant_id'));
+    $rows = Db::all(
+        'SELECT s.id, s.title, s.day_of_month, s.time_of_day, s.deadline_days, s.next_run_at, s.end_date,
+                s.is_active, s.created_at, s.settings,
+                (SELECT COUNT(*) FROM edu_deliveries d WHERE d.series_id = s.id) AS delivery_count
+         FROM edu_delivery_series s
+         WHERE s.tenant_id = ?
+         ORDER BY s.id DESC',
+        [$tenantId]
+    );
+    json_out(['success' => true, 'series' => $rows]);
+}
+
+/** 系列を止める。作成済みの予約の配信は残る(不要なら配信の一覧から削除する)。 */
+function edu_d_handle_series_stop(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
+    $id = edu_d_id_body($body);
+    edu_d_assert_series_owned($id, $tenantId);
+    Db::run('UPDATE edu_delivery_series SET is_active = 0 WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
+    audit('edu_delivery_series.stop', 'series_id=' . $id);
+    json_out(['success' => true, 'series' => edu_d_assert_series_owned($id, $tenantId)]);
+}
+
 /**
  * 配信を開始する。処理は EduDeliveryLauncher に切り出してあり、予約の配信を開始する
  * CLI(db/edu_scheduler.php)も同じ処理を呼ぶ。案内メールは配信の send_invites=1 のときだけ送る。
@@ -608,6 +712,15 @@ try {
     }
     if ($action === 'delete' && $method === 'POST') {
         edu_d_handle_delete($actor);
+    }
+    if ($action === 'series_list' && $method === 'GET') {
+        edu_d_handle_series_list($actor);
+    }
+    if ($action === 'series_create' && $method === 'POST') {
+        edu_d_handle_series_create($actor);
+    }
+    if ($action === 'series_stop' && $method === 'POST') {
+        edu_d_handle_series_stop($actor);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

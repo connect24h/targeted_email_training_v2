@@ -14,6 +14,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/EduDeliveryLauncher.php';
+require_once __DIR__ . '/EduDeliverySeries.php';
 
 final class EduScheduler
 {
@@ -23,7 +24,12 @@ final class EduScheduler
     public static function run(?DateTimeImmutable $now = null): array
     {
         $now = $now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
-        return self::launchDue($now);
+        $launch = self::launchDue($now);
+        $series = EduDeliverySeries::runDue($now);
+        return $launch + [
+            'series_created' => $series['created'],
+            'series_ended' => $series['ended'],
+        ];
     }
 
     /** 結果を1行にする(CLI の出力と timer のログ用)。 */

@@ -19,11 +19,13 @@ final class EduQuestionPicker
     /**
      * 配信条件から出題設問IDを決定する。
      *
-     * @param array $delivery edu_deliveries の1行(category_ids/difficulty_range/question_count/randomize を参照)
-     * @param int   $tenantId 配信先テナント
+     * @param array     $delivery    edu_deliveries の1行(category_ids/difficulty_range/question_count/randomize を参照)
+     * @param int       $tenantId    配信先テナント
+     * @param list<int> $recentlyUsed 候補から外す設問(毎月の配信の過去の回で出したもの)。候補が問題数に
+     *                                足りないときは、この並びの先頭(古い回で出したもの)から順に戻す
      * @return list<int> question_id の配列(sort 順)
      */
-    public static function pick(array $delivery, int $tenantId): array
+    public static function pick(array $delivery, int $tenantId, array $recentlyUsed = []): array
     {
         $categoryIds = isset($delivery['category_ids']) && $delivery['category_ids'] !== null
             ? (json_decode((string) $delivery['category_ids'], true) ?: [])
@@ -55,14 +57,37 @@ final class EduQuestionPicker
         // テナント固有(tenant_id IS NULL = 0)を先に。その中での並びは randomize 次第。
         $order = '(tenant_id IS NULL) ASC, ' . ($randomize ? 'RANDOM()' : 'id');
         $sql = 'SELECT id FROM edu_questions WHERE ' . implode(' AND ', $where) . " ORDER BY $order";
-        if ($count > 0) {
+        $exclude = $count > 0 && $recentlyUsed !== [];
+        if ($count > 0 && !$exclude) {
             $sql .= ' LIMIT ' . $count;
         }
 
-        $ids = [];
-        foreach (Db::all($sql, $params) as $r) {
-            $ids[] = (int) $r['id'];
+        $ids = array_map(static fn(array $r): int => (int) $r['id'], Db::all($sql, $params));
+        return $exclude ? self::preferUnused($ids, $recentlyUsed, $count) : $ids;
+    }
+
+    /**
+     * 出題済みを外した候補から $count 問を取る。足りなければ、出題済みのうち候補の条件に合うものを
+     * $recentlyUsed の先頭(古い回で出したもの)から順に足す。
+     *
+     * @param list<int> $candidates
+     * @param list<int> $recentlyUsed
+     * @return list<int>
+     */
+    private static function preferUnused(array $candidates, array $recentlyUsed, int $count): array
+    {
+        $used = array_flip($recentlyUsed);
+        $picked = array_values(array_filter($candidates, static fn(int $id): bool => !isset($used[$id])));
+        $picked = array_slice($picked, 0, $count);
+        $eligible = array_flip($candidates);
+        foreach ($recentlyUsed as $id) {
+            if (count($picked) >= $count) {
+                break;
+            }
+            if (isset($eligible[$id])) {
+                $picked[] = $id;
+            }
         }
-        return $ids;
+        return $picked;
     }
 }

@@ -11,6 +11,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/EduDeliverySeries.php';
 
 /** 開始できない理由。code は API がそのまま返す HTTP の状態コード(400/404/409)。 */
 final class EduDeliveryError extends RuntimeException
@@ -199,7 +200,12 @@ final class EduDeliveryLauncher
         if ($explicit !== []) {
             return array_map(static fn(array $r): int => (int) $r['question_id'], $explicit);
         }
-        return EduQuestionPicker::pick($delivery, $tenantId);
+        // 毎月の配信は、同じ系列の過去の回で出した設問を外す(足りなければ古い回から戻す)。
+        $seriesId = isset($delivery['series_id']) ? (int) $delivery['series_id'] : 0;
+        $used = $seriesId > 0
+            ? EduDeliverySeries::usedQuestionIds($seriesId, $tenantId, (int) ($delivery['id'] ?? 0))
+            : [];
+        return EduQuestionPicker::pick($delivery, $tenantId, $used);
     }
 
     /**
