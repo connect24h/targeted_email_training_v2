@@ -192,7 +192,13 @@ final class EventIngest
 
     private static function insertEvent(array $ref, string $tid, string $type, ?string $variant, string $occurred, string $source, string $raw): int
     {
-        // UNIQUE(tracking_id, event_type, occurred_at) で冪等
+        // UNIQUE(tracking_id, event_type, occurred_at) で冪等。
+        // 取込は毎回ログを先頭から読み直すので、取り込み済みの行は読むだけで確かめて書き込まない。
+        // INSERT OR IGNORE は無視される行でも書き込みの鍵を取り、数千行の取込の間ずっと鍵が取られ続けて
+        // 受講画面の書き込みが busy_timeout を超えて失敗した(2026-09-27)。
+        if (Db::one('SELECT 1 FROM events WHERE tracking_id = ? AND event_type = ? AND occurred_at = ?', [$tid, $type, $occurred]) !== null) {
+            return 0;
+        }
         return Db::run(
             'INSERT OR IGNORE INTO events (tenant_id, campaign_id, tracking_id, event_type, auth_variant, occurred_at, source, raw)
              VALUES (?,?,?,?,?,?,?,?)',
