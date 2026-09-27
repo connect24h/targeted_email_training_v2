@@ -26,10 +26,51 @@ final class EduScheduler
         $now = $now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
         $launch = self::launchDue($now);
         $series = EduDeliverySeries::runDue($now);
+        $newcomers = self::enrollNewTargets($now);
+        $launch['mail_sent'] += $newcomers['mail_sent'];
         return $launch + [
             'series_created' => $series['created'],
             'series_ended' => $series['ended'],
+            'new_target_assigned' => $newcomers['assigned'],
         ];
+    }
+
+    /**
+     * 新入社員の配信(triggered_by='new_target' かつ running)に、登録から N 日以内で
+     * まだ割当のない対象者を入れる。EduAutoEnroll と同じく、割当は tx で作り、メールは tx の外で送る。
+     *
+     * @return array{assigned:int, mail_sent:int}
+     */
+    public static function enrollNewTargets(DateTimeImmutable $now): array
+    {
+        $result = ['assigned' => 0, 'mail_sent' => 0];
+        $current = $now->format('Y-m-d H:i:s');
+        $rows = Db::all("SELECT * FROM edu_deliveries WHERE triggered_by = 'new_target' AND status = 'running' ORDER BY id");
+        foreach ($rows as $delivery) {
+            $id = (int) $delivery['id'];
+            $tenantId = (int) $delivery['tenant_id'];
+            $expiry = EduDeliveryLauncher::tokenExpiry($delivery);
+            if ($expiry !== null && $expiry <= $current) {
+                continue;
+            }
+            try {
+                $targetIds = EduDeliveryLauncher::resolveTargets($delivery, $tenantId, $now);
+            } catch (EduDeliveryError $e) {
+                self::auditOnce($tenantId, 'edu_scheduler.new_target_failed', $id, 'reason=' . $e->getMessage());
+                continue;
+            }
+            $tokens = Db::txImmediate(static fn(): array => EduDeliveryLauncher::assign($id, $tenantId, $targetIds, $expiry));
+            if ($tokens === []) {
+                continue;
+            }
+            $mailSent = (int) $delivery['send_invites'] === 1
+                ? EduDeliveryLauncher::sendInvites($id, $tenantId, (string) $delivery['title'], $tokens)
+                : 0;
+            self::audit($tenantId, 'edu_scheduler.new_target_enroll', $id, 'assigned=' . count($tokens) . ',mail=' . $mailSent);
+            $result['assigned'] += count($tokens);
+            $result['mail_sent'] += $mailSent;
+        }
+        return $result;
     }
 
     /** 結果を1行にする(CLI の出力と timer のログ用)。 */

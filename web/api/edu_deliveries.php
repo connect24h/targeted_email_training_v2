@@ -16,9 +16,10 @@ const EDU_TARGET_TYPES   = ['all', 'group', 'risk', 'individual', 'position'];
 const EDU_DELIVERY_STATUSES = ['draft', 'scheduled', 'running', 'done', 'cancelled'];
 /**
  * 配信の起動契機。phishing_failure は EduAutoEnroll(tet2-edu-enroll.timer)が
- * 訓練失敗者を継続的に自動投入する。manual は launch 操作でのみ対象を確定する。
+ * 訓練失敗者を継続的に自動投入する。new_target は edu_scheduler.php が、登録から
+ * new_target_days 日以内の対象者を継続的に自動投入する。manual は launch 操作でのみ対象を確定する。
  */
-const EDU_TRIGGERED_BY = ['manual', 'phishing_failure'];
+const EDU_TRIGGERED_BY = ['manual', 'phishing_failure', 'new_target'];
 
 function edu_d_query_int(string $key): ?int
 {
@@ -129,6 +130,23 @@ function edu_d_assert_trigger_consistency(string $triggeredBy, string $targetTyp
     if ($triggeredBy === 'phishing_failure' && $targetType !== 'risk') {
         json_error('phishing_failure トリガーは target_type=risk と組み合わせてください', 400);
     }
+    // 新入社員の配信は、全員・グループ・役職のうち登録から N 日以内の人を入れる。
+    if ($triggeredBy === 'new_target' && !in_array($targetType, ['all', 'group', 'position'], true)) {
+        json_error('new_target トリガーは target_type=all / group / position と組み合わせてください', 400);
+    }
+}
+
+/** 新入社員の配信の「登録から N 日以内」(1〜365)。new_target 以外では保存しない。 */
+function edu_d_new_target_days(array $body, string $triggeredBy): ?int
+{
+    if ($triggeredBy !== 'new_target') {
+        return null;
+    }
+    $days = $body['new_target_days'] ?? null;
+    if (!is_int($days) || $days < 1 || $days > 365) {
+        json_error('新入社員の配信には new_target_days(1〜365)が必要です', 400);
+    }
+    return $days;
 }
 
 function edu_d_assert_owned(int $id, int $tenantId): array
@@ -418,6 +436,7 @@ function edu_d_parse_config(array $body, int $tenantId): array
             'send_invites' => edu_d_flag($body, 'send_invites', 0),
             'target_positions' => edu_d_target_positions($body, $targetType),
             'risk_results' => edu_d_risk_results($body, $targetType, $triggeredBy, $phishCampaignId, $tenantId),
+            'new_target_days' => edu_d_new_target_days($body, $triggeredBy),
         ],
         'target_ids' => $targetIds,
     ];
@@ -498,6 +517,9 @@ function edu_d_handle_update(array $actor): never
     if (array_key_exists('triggered_by', $body) && $body['triggered_by'] !== null) {
         $triggeredBy = edu_d_triggered_by($body);
         edu_d_assert_trigger_consistency($triggeredBy, (string) $delivery['target_type']);
+        if ($triggeredBy === 'new_target' && $delivery['new_target_days'] === null) {
+            json_error('新入社員の配信は、作成時に new_target_days を指定してください', 400);
+        }
     }
 
     $feedbackMode = edu_d_feedback_mode($body, null);

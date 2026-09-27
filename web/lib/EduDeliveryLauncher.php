@@ -46,7 +46,8 @@ final class EduDeliveryLauncher
             throw new EduDeliveryError('この配信は開始できません(status=' . $delivery['status'] . ')', 409);
         }
         $targetIds = self::resolveTargets($delivery, $tenantId, $now);
-        if ($targetIds === []) {
+        // 新入社員の配信は、開始の時点で該当者がいなくても開始する(以後は edu_scheduler が投入する)。
+        if ($targetIds === [] && ($delivery['triggered_by'] ?? '') !== 'new_target') {
             throw new EduDeliveryError('対象者がいません', 400);
         }
         $questionIds = self::resolveQuestions($delivery, $tenantId);
@@ -146,6 +147,36 @@ final class EduDeliveryLauncher
         } else {
             throw new EduDeliveryError('target_type が不正です', 400);
         }
+        $ids = array_map(static fn(array $r): int => (int) $r['id'], $rows);
+        if (($delivery['triggered_by'] ?? '') === 'new_target') {
+            return self::newcomers($ids, (int) ($delivery['new_target_days'] ?? 0), $tenantId, $now);
+        }
+        return $ids;
+    }
+
+    /**
+     * 新入社員の配信: 対象のうち、登録(targets.created_at)から $days 日以内で、在籍中の実対象者。
+     *
+     * @param list<int> $ids
+     * @return list<int>
+     */
+    private static function newcomers(array $ids, int $days, int $tenantId, ?DateTimeImmutable $now): array
+    {
+        if ($days < 1) {
+            throw new EduDeliveryError('新入社員の配信には登録からの日数(new_target_days)が必要です', 400);
+        }
+        if ($ids === []) {
+            return [];
+        }
+        $now = $now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
+        $since = $now->modify('-' . $days . ' days')->format('Y-m-d H:i:s');
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $rows = Db::all(
+            "SELECT id FROM targets
+             WHERE tenant_id = ? AND status = 'active' AND is_test = 0 AND created_at >= ? AND id IN ($placeholders)
+             ORDER BY id",
+            array_merge([$tenantId, $since], $ids)
+        );
         return array_map(static fn(array $r): int => (int) $r['id'], $rows);
     }
 
