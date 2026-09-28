@@ -29,6 +29,8 @@ function seedTenant(int $t, string $tag): void
     $id = static fn(string $sql, array $params = []): int => Db::insert($sql, $params);
     $userId = $id("INSERT INTO users (tenant_id, email, password_hash, name, role, status, last_login_at)
         VALUES (?, ?, 'x', ?, 'tenant_admin', 'active', '2026-09-01 10:00:00')", [$t, "admin-{$tag}@purge.test", "Admin {$tag}"]);
+    Db::run("INSERT INTO user_password_tokens (user_id, token_hash, purpose, expires_at) VALUES (?, ?, 'invite', '2026-12-01 00:00:00')",
+        [$userId, hash('sha256', "pw-{$tag}")]);
     $target = $id("INSERT INTO targets (tenant_id, tenant_no, email, name, status) VALUES (?, 99, ?, 'T', 'active')", [$t, "t-{$tag}@purge.test"]);
     $group = $id("INSERT INTO groups (tenant_id, name, kind) VALUES (?, ?, 'custom')", [$t, "G {$tag}"]);
     Db::run('INSERT INTO target_group (target_id, group_id) VALUES (?, ?)', [$target, $group]);

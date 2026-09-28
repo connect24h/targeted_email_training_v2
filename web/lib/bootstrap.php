@@ -155,6 +155,13 @@ function current_user(): ?array
             $GLOBALS['__TET2_TENANT_SESSION_BLOCKED'] = true;
             return null;
         }
+        // パスワードが変わった(再設定、パスワード設定のページ、管理者の変更)ユーザの、それより前のセッションを切る。
+        // ログインの時の session_epoch と今の値を比べる。値のない古いセッションは 0 とみなす。
+        $row = Db::one('SELECT session_epoch FROM users WHERE id = ?', [$user['id']]);
+        if ($row !== null && (int) $row['session_epoch'] !== (int) ($_SESSION['pw_epoch'] ?? 0)) {
+            $_SESSION = [];
+            return null;
+        }
         $checkedKey = $key;
     }
     return $user;

@@ -6,6 +6,8 @@
  *
  * 受講URLのベースは環境変数 TET2_EDU_BASE_URL で上書き可。既定は受講者ポータル sat.cojp.online。
  * 差出人は TET2_EDU_MAIL_FROM で上書き可。既定は no-reply@cojp.online。
+ * 管理画面ユーザの招待・パスワード再設定のメール(UserPasswordTokens)もこの送信口を使う。
+ * テストでは useTransport() か TET2_EDU_MAIL_DISABLE=1、ブラウザの E2E では TET2_MAIL_OUTBOX_DIR で投函を止める。
  */
 declare(strict_types=1);
 
@@ -60,6 +62,18 @@ final class EduMailer
 
         if (self::$transport !== null) {
             return (bool) (self::$transport)($toEmail, $subject, $body);
+        }
+
+        // ブラウザの E2E 用の出口。SMTP へ投函せず、1通を1つの JSON ファイルに書く(本番では設定しない)。
+        // E2E はここから招待メールの URL を取り出す。
+        $outbox = getenv('TET2_MAIL_OUTBOX_DIR');
+        if (is_string($outbox) && $outbox !== '') {
+            if (!is_dir($outbox) || !is_writable($outbox)) {
+                return false;
+            }
+            $file = rtrim($outbox, '/') . '/' . date('YmdHis') . '-' . bin2hex(random_bytes(4)) . '.json';
+            $json = json_encode(['to' => $toEmail, 'from' => $from, 'subject' => $subject, 'body' => $body], JSON_UNESCAPED_UNICODE);
+            return $json !== false && file_put_contents($file, $json, LOCK_EX) !== false;
         }
 
         // テストから localhost:25 へ実送信しないための逃がし口。

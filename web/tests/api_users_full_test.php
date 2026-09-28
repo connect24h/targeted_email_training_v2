@@ -24,6 +24,8 @@ VALUES
 SQL;
 
 tet2_test_boot($seedSql);
+require_once __DIR__ . '/../lib/PasswordPolicy.php';
+require_once __DIR__ . '/../lib/UserPasswordTokens.php';
 load_api('users');
 
 // ---------- ヘルパー ----------
@@ -70,7 +72,7 @@ echo "=== CREATE ===\n";
 // UC-1: viewer ロールを tenant_admin が作成 → 201
 $r = call_handler('users_handle_create', [
     'email'    => 'uc1@test.local',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC1',
     'role'     => 'viewer',
 ], 'tenant_admin');
@@ -80,7 +82,7 @@ check($r['payload']['user']['role'] === 'viewer', 'UC-1: 返却ユーザの role
 // UC-2: operator ロールを tenant_admin が作成 → 201
 $r = call_handler('users_handle_create', [
     'email'    => 'uc2@test.local',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC2',
     'role'     => 'operator',
 ], 'tenant_admin');
@@ -89,7 +91,7 @@ check($r['code'] === 201, 'UC-2: operator ロール作成 → 201');
 // UC-3: tenant_admin ロールを tenant_admin が作成 → 201
 $r = call_handler('users_handle_create', [
     'email'    => 'uc3@test.local',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC3',
     'role'     => 'tenant_admin',
 ], 'tenant_admin');
@@ -98,7 +100,7 @@ check($r['code'] === 201, 'UC-3: tenant_admin ロール作成 → 201');
 // UC-4: superadmin ロールを tenant_admin が作成 → 400(role が不正)
 $r = call_handler('users_handle_create', [
     'email'    => 'uc4@test.local',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC4',
     'role'     => 'superadmin',
 ], 'tenant_admin');
@@ -108,7 +110,7 @@ check($r['code'] === 400, 'UC-4: tenant_admin が superadmin ロール作成 →
 // superadmin 作成時は tenant_id 不要(NULL になる)
 $r = call_handler('users_handle_create', [
     'email'    => 'uc5@test.local',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC5',
     'role'     => 'superadmin',
 ], 'superadmin');
@@ -121,25 +123,25 @@ check($r['payload']['user']['tenant_id'] === null, 'UC-5: superadmin の tenant_
 // try/catch が担うため、call_users_handler(ラッパー付き)で呼ぶ。
 $r = call_users_handler('users_handle_create', [
     'email'    => 'uc1@test.local',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC8',
     'role'     => 'viewer',
 ], 'tenant_admin');
 check($r['code'] === 409, 'UC-8: 重複 email → 409');
 
-// UC-9: 7文字パスワード → 400
+// UC-9: パスワードの決まり(12文字以上)に合わない → 400
 $r = call_handler('users_handle_create', [
     'email'    => 'uc9@test.local',
     'password' => '1234567',
     'name'     => 'UC9',
     'role'     => 'viewer',
 ], 'tenant_admin');
-check($r['code'] === 400, 'UC-9: 7文字パスワード → 400');
+check($r['code'] === 400, 'UC-9: 12文字未満のパスワード → 400');
 
 // UC-10: 不正 email → 400
 $r = call_handler('users_handle_create', [
     'email'    => 'not-an-email',
-    'password' => '12345678',
+    'password' => 'Passw0rd-Test',
     'name'     => 'UC10',
     'role'     => 'viewer',
 ], 'tenant_admin');
@@ -186,7 +188,7 @@ $targetOp = uid('target_op@test.local');
 Db::run('UPDATE users SET failed_count = 3, locked_until = "2099-01-01" WHERE id = ?', [$targetOp]);
 $r = call_handler('users_handle_update', [
     'id'       => $targetOp,
-    'password' => 'newpassword123',
+    'password' => 'NewPassw0rd123',
 ], 'tenant_admin');
 check($r['code'] === 200, 'UU-4: パスワード変更 → 200');
 $afterPw = Db::one('SELECT failed_count, locked_until FROM users WHERE id = ?', [$targetOp]);
@@ -254,7 +256,7 @@ $r = call_users_dispatch('users_handle_list', [], 'viewer');
 check($r['code'] === 403, 'ROLE: viewer → list → 403');
 
 $r = call_users_dispatch('users_handle_create', [
-    'email' => 'viewercreate@test.local', 'password' => '12345678', 'name' => 'x', 'role' => 'viewer',
+    'email' => 'viewercreate@test.local', 'password' => 'Passw0rd-Test', 'name' => 'x', 'role' => 'viewer',
 ], 'viewer');
 check($r['code'] === 403, 'ROLE: viewer → create → 403');
 
@@ -269,7 +271,7 @@ $r = call_users_dispatch('users_handle_list', [], 'operator');
 check($r['code'] === 403, 'ROLE: operator → list → 403');
 
 $r = call_users_dispatch('users_handle_create', [
-    'email' => 'opcreate@test.local', 'password' => '12345678', 'name' => 'x', 'role' => 'viewer',
+    'email' => 'opcreate@test.local', 'password' => 'Passw0rd-Test', 'name' => 'x', 'role' => 'viewer',
 ], 'operator');
 check($r['code'] === 403, 'ROLE: operator → create → 403');
 
@@ -284,7 +286,7 @@ $r = call_users_dispatch('users_handle_list', [], 'tenant_admin');
 check($r['code'] === 200, 'ROLE: tenant_admin → list → 200');
 
 $r = call_users_dispatch('users_handle_create', [
-    'email' => 'ta_new@test.local', 'password' => '12345678', 'name' => 'TANew', 'role' => 'viewer',
+    'email' => 'ta_new@test.local', 'password' => 'Passw0rd-Test', 'name' => 'TANew', 'role' => 'viewer',
 ], 'tenant_admin');
 check($r['code'] === 201, 'ROLE: tenant_admin → create → 201');
 
@@ -301,7 +303,7 @@ check($r['code'] === 200, 'ROLE: superadmin → list → 200');
 
 $r = call_users_dispatch('users_handle_create', [
     'email'     => 'sa_new@test.local',
-    'password'  => '12345678',
+    'password'  => 'Passw0rd-Test',
     'name'      => 'SANew',
     'role'      => 'viewer',
     'tenant_id' => 1,

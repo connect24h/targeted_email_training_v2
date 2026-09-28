@@ -71,6 +71,8 @@ final class TenantPurge
         ['templates', 'tenant_id = ?'],
         ['position_masters', 'tenant_id = ?'],
         ['integration_idempotency_keys', 'tenant_id = ?'],
+        // パスワード設定のトークン(外部キーの CASCADE でも消えるが、消した行数を数えるため明示する)
+        ['user_password_tokens', 'user_id IN (SELECT id FROM users WHERE tenant_id = ?)'],
         ['users', 'tenant_id = ?'],
     ];
 

@@ -9,6 +9,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
 require_once __DIR__ . '/../lib/TenantPurge.php';
+require_once __DIR__ . '/../lib/PasswordPolicy.php';
 load_api('tenants');
 load_api('targets');
 
@@ -52,14 +53,14 @@ check(tenantRow($created)['data_dir'] === TenantStatus::dataRoot() . '/create-co
 $r = call_handler('tenants_handle_create', ['name' => '管理者なし', 'slug' => 'no-admin'], SA, []);
 check($r['code'] === 201 && $r['payload']['admin_user_id'] === null, 'T7-2: 管理者なしでも作成できる');
 
-$r = call_handler('tenants_handle_create', ['name' => '重複', 'slug' => 'dup-admin', 'admin_email' => 'admin@create-co.test', 'admin_name' => 'x', 'admin_password' => 'Password1'], SA, []);
+$r = call_handler('tenants_handle_create', ['name' => '重複', 'slug' => 'dup-admin', 'admin_email' => 'admin@create-co.test', 'admin_name' => 'x', 'admin_password' => 'Password1234'], SA, []);
 check($r['code'] === 409 && Db::one("SELECT 1 FROM tenants WHERE slug = 'dup-admin'") === null,
     'T7-3: 管理者のメールが既にあれば 409 で、テナントも作らない');
 $r = call_handler('tenants_handle_create', ['name' => '短い', 'slug' => 'short-pw', 'admin_email' => 'a@short.test', 'admin_name' => 'x', 'admin_password' => 'short'], SA, []);
-check($r['code'] === 400 && Db::one("SELECT 1 FROM tenants WHERE slug = 'short-pw'") === null, 'T7-4: 初期パスワードが8文字未満なら 400');
-$r = call_handler('tenants_handle_create', ['name' => '名前なし', 'slug' => 'no-name', 'admin_email' => 'a@noname.test', 'admin_password' => 'Password1'], SA, []);
+check($r['code'] === 400 && Db::one("SELECT 1 FROM tenants WHERE slug = 'short-pw'") === null, 'T7-4: 初期パスワードがパスワードの決まり(12文字以上)に合わなければ 400');
+$r = call_handler('tenants_handle_create', ['name' => '名前なし', 'slug' => 'no-name', 'admin_email' => 'a@noname.test', 'admin_password' => 'Password1234'], SA, []);
 check($r['code'] === 400, 'T7-5: 管理者の名前がなければ 400');
-$r = call_handler('tenants_handle_create', ['name' => 'メール不正', 'slug' => 'bad-mail', 'admin_email' => 'not-mail', 'admin_name' => 'x', 'admin_password' => 'Password1'], SA, []);
+$r = call_handler('tenants_handle_create', ['name' => 'メール不正', 'slug' => 'bad-mail', 'admin_email' => 'not-mail', 'admin_name' => 'x', 'admin_password' => 'Password1234'], SA, []);
 check($r['code'] === 400, 'T7-6: 管理者のメールの形が不正なら 400');
 
 // トランザクション: ユーザの作成が DB で失敗したら、テナントも残さない
@@ -67,7 +68,7 @@ Db::run("CREATE TRIGGER fail_admin_insert BEFORE INSERT ON users WHEN NEW.email 
          BEGIN SELECT RAISE(ABORT, 'forced failure'); END");
 $failed = false;
 try {
-    call_handler('tenants_handle_create', ['name' => 'Tx', 'slug' => 'tx-co', 'admin_email' => 'boom@tx.test', 'admin_name' => 'x', 'admin_password' => 'Password1'], SA, []);
+    call_handler('tenants_handle_create', ['name' => 'Tx', 'slug' => 'tx-co', 'admin_email' => 'boom@tx.test', 'admin_name' => 'x', 'admin_password' => 'Password1234'], SA, []);
 } catch (PDOException) {
     $failed = true;
 }

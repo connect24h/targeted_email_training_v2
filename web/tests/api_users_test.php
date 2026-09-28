@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
+require_once __DIR__ . '/../lib/PasswordPolicy.php';
+require_once __DIR__ . '/../lib/UserPasswordTokens.php';
 load_api('users');
 
 $tenantId = current_user()['tenant_id'];

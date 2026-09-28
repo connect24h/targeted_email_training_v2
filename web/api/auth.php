@@ -100,6 +100,8 @@ function auth_handle_login(): never
     $_SESSION['tenant_id'] = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null;
     $_SESSION['role'] = (string) $user['role'];
     $_SESSION['email'] = (string) $user['email'];
+    // パスワードが変わったらこのセッションを切るための値(bootstrap.php の current_user() が比べる)
+    $_SESSION['pw_epoch'] = (int) ($user['session_epoch'] ?? 0);
     $csrf = tet2_csrf_token();
     audit('login', 'email=' . $email);
 

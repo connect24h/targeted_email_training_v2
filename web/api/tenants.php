@@ -1,5 +1,6 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/TenantPurge.php';
+require_once __DIR__ . '/../lib/PasswordPolicy.php';
 
 /**
  * テナントの管理(superadmin だけ)。
@@ -185,7 +186,7 @@ function tenants_handle_get(): never
 
 /**
  * 作成。任意で最初の管理者(tenant_admin)も同じトランザクションで作る。
- * 初期パスワードの扱いは既存のユーザ作成(users.php)と同じ: 画面で入力し、8文字以上。メールは送らない。
+ * 初期パスワードの扱いは既存のユーザ作成(users.php)と同じ: 画面で入力し、PasswordPolicy の決まりに従う。メールは送らない。
  */
 function tenants_handle_create(): never
 {
@@ -209,8 +210,9 @@ function tenants_handle_create(): never
             json_error('管理者の名前を入力してください', 400);
         }
         $adminPassword = isset($body['admin_password']) && is_string($body['admin_password']) ? $body['admin_password'] : '';
-        if (strlen($adminPassword) < 8) {
-            json_error('管理者の初期パスワードは8文字以上です', 400);
+        $violation = PasswordPolicy::violation($adminPassword);
+        if ($violation !== null) {
+            json_error('管理者の初期' . $violation, 400);
         }
         $admin = ['email' => $adminEmail, 'name' => $adminName, 'password' => $adminPassword];
     }
