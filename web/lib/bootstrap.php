@@ -131,6 +131,9 @@ function tet2_require_csrf(): void
 }
 
 // ---- 認証・ロール・テナント ----
+/** 多要素認証が必須の組織で、未登録のユーザが登録以外の API を呼んだ時の文言(画面はこれを見て登録の画面へ移す)。 */
+const TET2_MFA_ENROLLMENT_REQUIRED_MESSAGE = '多要素認証の登録が必要です。登録を済ませてから操作してください';
+
 /** このリクエストでテナントの停止によりセッションを切ったか(require_auth が理由を返すため)。 */
 $GLOBALS['__TET2_TENANT_SESSION_BLOCKED'] = false;
 
@@ -153,6 +156,7 @@ function current_user(): ?array
     // 所属テナントが停止・削除されたら、ログイン中のセッションも次の操作で切る(superadmin は除く)。
     // 1リクエストの中で何度も呼ばれるので、判定はリクエストごとに1回にする。
     static $checkedKey = null;
+    static $mfaState = ['mfa_enabled' => false, 'mfa_enrollment_required' => false];
     $key = $user['id'] . ':' . ($user['tenant_id'] ?? '') . ':' . $user['role'];
     if ($checkedKey !== $key) {
         if (!TenantStatus::userAllowed($user['tenant_id'], $user['role'])) {
@@ -162,17 +166,43 @@ function current_user(): ?array
         }
         // パスワードが変わった(再設定、パスワード設定のページ、管理者の変更)ユーザの、それより前のセッションを切る。
         // ログインの時の session_epoch と今の値を比べる。値のない古いセッションは 0 とみなす。
-        $row = Db::one('SELECT session_epoch FROM users WHERE id = ?', [$user['id']]);
+        // 同じ行で多要素認証の状態と、所属テナント(と全体)の方針が多要素認証を必須にしているかも読む(段階1)。
+        $row = Db::one(
+            'SELECT u.session_epoch, u.mfa_enabled_at,
+                    (SELECT MAX(p.require_mfa) FROM tenant_security_policies p
+                      WHERE p.tenant_id IS NULL OR p.tenant_id = u.tenant_id) AS require_mfa
+             FROM users u WHERE u.id = ?',
+            [$user['id']]
+        );
         if ($row !== null && (int) $row['session_epoch'] !== (int) ($_SESSION['pw_epoch'] ?? 0)) {
             $_SESSION = [];
             return null;
         }
+        $enabled = $row !== null && $row['mfa_enabled_at'] !== null;
+        $mfaState = [
+            'mfa_enabled' => $enabled,
+            'mfa_enrollment_required' => !$enabled && $row !== null && (int) $row['require_mfa'] === 1,
+        ];
         $checkedKey = $key;
     }
-    return $user;
+    return $user + $mfaState;
 }
 
+/**
+ * ログイン済みのユーザを返す。多要素認証が必須の組織で未登録のユーザは、登録の API 以外を 403 で止める。
+ * (パスワードだけを確かめて多要素認証のコードを待っているセッションは、$_SESSION['uid'] を持たないので current_user() が null)
+ */
 function require_auth(): array
+{
+    $u = require_auth_for_mfa_enrollment();
+    if (!empty($u['mfa_enrollment_required'])) {
+        json_error(TET2_MFA_ENROLLMENT_REQUIRED_MESSAGE, 403);
+    }
+    return $u;
+}
+
+/** 多要素認証の登録の API だけが使う入口。必須化で止められているユーザも通す(ほかは require_auth と同じ)。 */
+function require_auth_for_mfa_enrollment(): array
 {
     $u = current_user();
     if ($u === null) {

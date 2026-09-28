@@ -57,7 +57,7 @@ function pwset_handle(string $action, array $body, string $ip): array
                 'purpose' => (string) $row['purpose'],
                 'email' => pwset_mask_email((string) $user['email']),
                 'expires_at' => substr((string) $row['expires_at'], 0, 16),
-                'policy' => PasswordPolicy::DESCRIPTION,
+                'policy' => UserPasswordTokens::policyDescription($user),
             ]];
         }
         $password = isset($body['password']) && is_string($body['password']) ? $body['password'] : '';
