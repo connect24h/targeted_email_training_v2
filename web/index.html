@@ -4,9 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TET v2 — 標的型メール訓練システム</title>
+  <meta name="description" content="標的型メール訓練と教育の配信、結果の集計を行う管理画面">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=f546171b" rel="stylesheet">
+  <link href="assets/app.css?v=2fc0231b" rel="stylesheet">
 </head>
 <body>
 
@@ -16,7 +18,7 @@
     <div class="text-center mb-4">
       <i class="bi bi-shield-lock-fill login-logo"></i>
       <h4 class="mt-2 mb-0">TET v2</h4>
-      <div class="text-muted small">標的型メール訓練システム</div>
+      <div class="text-muted small">標的型メール訓練と教育の配信、結果の集計を行う管理画面</div>
     </div>
     <form id="loginForm" autocomplete="off">
       <div class="mb-3">
@@ -38,50 +40,51 @@
 
 <!-- ========== アプリ本体 ========== -->
 <div id="appView" class="d-none">
-  <nav class="navbar navbar-dark app-navbar px-3">
-    <div class="d-flex align-items-center">
-      <button class="btn btn-sm btn-outline-light me-2 d-md-none" id="sidebarToggle"><i class="bi bi-list"></i></button>
-      <span class="navbar-brand mb-0"><i class="bi bi-shield-lock-fill me-1"></i>TET v2</span>
+  <header class="app-navbar">
+    <div class="d-flex align-items-center gap-2">
+      <button type="button" class="app-icon-btn d-md-none" id="sidebarToggle" aria-controls="sidebar" aria-expanded="false" aria-label="メニューを開く"><i class="bi bi-list"></i></button>
+      <span class="app-brand"><span class="app-brand-mark"><i class="bi bi-shield-lock-fill"></i></span>TET v2<span class="app-brand-sub d-none d-lg-inline">標的型メール訓練</span></span>
     </div>
     <div class="d-flex align-items-center gap-2">
-      <select id="tenantSwitcher" class="form-select form-select-sm d-none" style="width:auto"></select>
-      <button type="button" class="btn btn-sm btn-outline-light" id="helpToggle" aria-controls="contextHelp" aria-expanded="false"><i class="bi bi-question-circle me-1"></i>HELP</button>
-      <span class="text-light small d-none d-sm-inline" id="userLabel"></span>
-      <button class="btn btn-sm btn-outline-light" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
+      <select id="tenantSwitcher" class="form-select form-select-sm d-none" style="width:auto" aria-label="テナントの切り替え"></select>
+      <button type="button" class="app-icon-btn" id="helpToggle" aria-controls="contextHelp" aria-expanded="false" aria-label="HELP"><i class="bi bi-question-circle"></i><span class="d-none d-sm-inline">HELP</span></button>
+      <span class="app-user d-none d-sm-inline" id="userLabel"></span>
+      <button type="button" class="app-icon-btn" id="logoutBtn" aria-label="ログアウト" title="ログアウト"><i class="bi bi-box-arrow-right"></i></button>
     </div>
-  </nav>
+  </header>
 
   <div class="app-body">
     <aside class="app-sidebar" id="sidebar">
       <ul class="nav flex-column">
-        <li><a class="nav-link" data-view="dashboard"><i class="bi bi-speedometer2"></i>運用ホーム</a></li>
+        <li><a class="nav-link" href="#dashboard" data-view="dashboard"><i class="bi bi-speedometer2"></i>運用ホーム</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">訓練</li>
-        <li><a class="nav-link" data-view="campaigns"><i class="bi bi-envelope-paper"></i>単発キャンペーン</a></li>
-        <li><a class="nav-link" data-view="campaignAutomations"><i class="bi bi-calendar2-repeat"></i>定期キャンペーン</a></li>
-        <li><a class="nav-link" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
-        <li><a class="nav-link" data-view="masters"><i class="bi bi-window"></i>到達画面</a></li>
+        <li><a class="nav-link" href="#campaigns" data-view="campaigns"><i class="bi bi-envelope-paper"></i>単発キャンペーン</a></li>
+        <li><a class="nav-link" href="#campaignAutomations" data-view="campaignAutomations"><i class="bi bi-arrow-repeat"></i>定期キャンペーン</a></li>
+        <li><a class="nav-link" href="#templates" data-view="templates"><i class="bi bi-file-earmark-text"></i>テンプレート</a></li>
+        <li><a class="nav-link" href="#masters" data-view="masters"><i class="bi bi-window"></i>到達画面</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">教育</li>
-        <li><a class="nav-link" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
-        <li><a class="nav-link" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
-        <li><a class="nav-link" data-view="eduReport"><i class="bi bi-mortarboard"></i>教育レポート</a></li>
-        <li><a class="nav-link" data-view="surveys"><i class="bi bi-ui-checks"></i>アンケート</a></li>
+        <li><a class="nav-link" href="#eduDeliveries" data-view="eduDeliveries"><i class="bi bi-send"></i>教育配信</a></li>
+        <li><a class="nav-link" href="#eduQuestions" data-view="eduQuestions"><i class="bi bi-collection"></i>教材バンク</a></li>
+        <li><a class="nav-link" href="#eduReport" data-view="eduReport"><i class="bi bi-mortarboard"></i>教育レポート</a></li>
+        <li><a class="nav-link" href="#surveys" data-view="surveys"><i class="bi bi-ui-checks"></i>アンケート</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">報告受付</li>
-        <li><a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i>訓練報告・ログ</a></li>
-        <li data-perm="operator"><a class="nav-link" data-view="suspiciousMails"><i class="bi bi-envelope-exclamation"></i>不審メール</a></li>
+        <li><a class="nav-link" href="#logs" data-view="logs"><i class="bi bi-journal-text"></i>訓練報告・ログ</a></li>
+        <li data-perm="operator"><a class="nav-link" href="#suspiciousMails" data-view="suspiciousMails"><i class="bi bi-envelope-exclamation"></i>不審メール</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">対象者・組織</li>
-        <li><a class="nav-link" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
-        <li><a class="nav-link" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
+        <li><a class="nav-link" href="#groups" data-view="groups"><i class="bi bi-diagram-3"></i>グループ</a></li>
+        <li><a class="nav-link" href="#positions" data-view="positions"><i class="bi bi-person-vcard"></i>役職マスタ</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">成果・レポート</li>
-        <li><a class="nav-link" data-view="reports"><i class="bi bi-bar-chart"></i>訓練レポート</a></li>
-        <li><a class="nav-link" data-view="riskDashboard"><i class="bi bi-shield-exclamation"></i>支援優先度</a></li>
-        <li><a class="nav-link" data-view="targetStats"><i class="bi bi-pie-chart"></i>対象者集計</a></li>
+        <li><a class="nav-link" href="#reports" data-view="reports"><i class="bi bi-bar-chart"></i>訓練レポート</a></li>
+        <li><a class="nav-link" href="#riskDashboard" data-view="riskDashboard"><i class="bi bi-shield-exclamation"></i>支援優先度</a></li>
+        <li><a class="nav-link" href="#targetStats" data-view="targetStats"><i class="bi bi-pie-chart"></i>対象者集計</a></li>
         <li class="sidebar-section text-muted small px-3 mt-3 mb-1">設定</li>
-        <li><a class="nav-link" data-view="users"><i class="bi bi-person-badge"></i>ユーザ管理</a></li>
-        <li data-role="superadmin"><a class="nav-link" data-view="tenants"><i class="bi bi-building"></i>テナント管理</a></li>
+        <li><a class="nav-link" href="#users" data-view="users"><i class="bi bi-person-badge"></i>ユーザ管理</a></li>
+        <li data-role="superadmin"><a class="nav-link" href="#tenants" data-view="tenants"><i class="bi bi-building"></i>テナント管理</a></li>
       </ul>
     </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
 
-    <main class="app-main">
+    <main class="app-main" id="appMain">
       <div id="toast" class="toast-box"></div>
 
       <!-- ダッシュボード -->
@@ -90,6 +93,7 @@
           <h5 class="mb-0"><i class="bi bi-speedometer2 me-1"></i>運用ホーム</h5>
           <div id="dashFilterBar"></div>
         </div>
+        <p class="view-lead">訓練と教育の配信の状況と、対応が要る項目をまとめて確認できます。</p>
         <h6 class="mb-2">要対応と予定</h6>
         <div id="dashWorkItems" class="mb-4" aria-live="polite"></div>
         <div class="row g-3 mb-4" id="kpiRow"></div>
@@ -123,7 +127,7 @@
       <!-- 定期キャンペーン -->
       <section data-panel="campaignAutomations" class="view-panel d-none">
         <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-calendar2-repeat me-1"></i>定期キャンペーン</h5>
+          <h5 class="mb-0"><i class="bi bi-arrow-repeat me-1"></i>定期キャンペーン</h5>
           <button class="btn btn-primary btn-sm" data-perm="operator" id="newAutomationBtn"><i class="bi bi-plus-lg"></i> 新規</button>
         </div>
         <div class="alert alert-info py-2 small" role="status">
@@ -677,17 +681,18 @@
         </table></div>
       </section>
     </main>
+
+    <aside id="contextHelp" class="context-help d-none" aria-label="この画面のHELP">
+      <div class="context-help-header"><strong>HELP</strong><button type="button" class="btn-close" id="helpClose" aria-label="HELPを閉じる"></button></div>
+      <label class="form-label small" for="helpSearch">記事を検索</label>
+      <input id="helpSearch" class="form-control form-control-sm mb-3" type="search" data-help-search placeholder="用語・操作で検索">
+      <div class="small text-muted mb-2">この画面に関連する記事を先に表示します。</div>
+      <nav data-help-list aria-label="HELP記事一覧"></nav>
+      <article class="context-help-article"><h6 data-help-title></h6><div data-help-body></div></article>
+    </aside>
   </div>
 </div>
 
-<aside id="contextHelp" class="context-help d-none" aria-label="この画面のHELP">
-  <div class="context-help-header"><strong>HELP</strong><button type="button" class="btn-close" id="helpClose" aria-label="HELPを閉じる"></button></div>
-  <label class="form-label small" for="helpSearch">記事を検索</label>
-  <input id="helpSearch" class="form-control form-control-sm mb-3" type="search" data-help-search placeholder="用語・操作で検索">
-  <div class="small text-muted mb-2">この画面に関連する記事を先に表示します。</div>
-  <nav data-help-list aria-label="HELP記事一覧"></nav>
-  <article class="context-help-article"><h6 data-help-title></h6><div data-help-body></div></article>
-</aside>
 
 <!-- 汎用モーダル -->
 <div class="modal fade" id="appModal" tabindex="-1">
@@ -719,10 +724,10 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=6d434252"></script>
+<script src="app.js?v=59125e6f"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=ffb3eb27"></script>
-<script src="assets/context-help.js?v=f0af67ac"></script>
+<script src="assets/context-help.js?v=f2e1099c"></script>
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
 <script src="assets/suspicious-mails.js?v=54af2ebb"></script>

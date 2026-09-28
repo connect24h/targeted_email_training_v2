@@ -284,14 +284,29 @@ function navigate(view) {
   // ビュー切替時に一覧自動更新タイマーを止める(campaigns に戻れば renderCampaigns が再設定)。
   if (campaignsRefreshTimer) { clearTimeout(campaignsRefreshTimer); campaignsRefreshTimer = null; }
   if (State.view === 'riskDashboard' && view !== 'riskDashboard') riskDashboard?.invalidate();
+  const previousView = State.view;
   State.view = view;
   const hash = view === 'campaignWorkspace' ? `#campaignWorkspace/${State.campaignWorkspaceId}` : `#${view}`;
   if (window.location.hash !== hash) window.location.hash = hash;
   $$('.view-panel').forEach((p) => p.classList.toggle('d-none', p.dataset.panel !== view));
-  $$('.app-sidebar .nav-link').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
-  $('#sidebar').classList.remove('open');
+  $$('.app-sidebar .nav-link').forEach((a) => {
+    const current = a.dataset.view === view;
+    a.classList.toggle('active', current);
+    if (current) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
+  const viewLabel = $(`.app-sidebar .nav-link[data-view="${view}"]`)?.textContent.trim();
+  document.title = viewLabel ? `${viewLabel} | TET v2` : 'TET v2 — 標的型メール訓練システム';
+  setSidebarOpen(false);
+  // 中央だけがスクロールするので、別の画面に移ったら中央を先頭に戻す
+  if (State.view !== previousView) $('#appMain').scrollTop = 0;
   if (contextHelp && !$('#contextHelp').classList.contains('d-none')) contextHelp.render(view);
   renderCurrentView();
+}
+// モバイルの引き出し式の一覧。開閉の状態を aria-expanded にも反映する
+function setSidebarOpen(open) {
+  $('#sidebar').classList.toggle('open', open);
+  $('#sidebarToggle').setAttribute('aria-expanded', String(open));
+  $('#sidebarToggle').setAttribute('aria-label', open ? 'メニューを閉じる' : 'メニューを開く');
 }
 function renderCurrentView() { const fn = VIEWS[State.view]; if (fn) fn().catch((e) => toast(e.message, 'err')); }
 
@@ -314,7 +329,7 @@ async function renderDashboard() {
   if (State.view !== 'dashboard' || State.activeTenantId !== tenantId) return;
   const filterBar = document.getElementById('dashFilterBar');
   if (filterBar) {
-    const btn = (v, label) => `<button class="btn btn-sm ${dashTestFilter === v ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setDashTestFilter('${v}')">${label}</button>`;
+    const btn = (v, label) => `<button class="btn btn-sm btn-outline-secondary${dashTestFilter === v ? ' active' : ''}" aria-pressed="${dashTestFilter === v}" onclick="setDashTestFilter('${v}')">${label}</button>`;
     filterBar.innerHTML = `<div class="btn-group btn-group-sm">${btn('prod', '本番のみ')}${btn('test', 'テストのみ')}${btn('all', '全部')}</div>`;
   }
   const campaigns = allCampaigns.filter((c) => {
@@ -360,7 +375,7 @@ async function renderDashboard() {
   const ctx = $('#dashChart');
   dashChart = new Chart(ctx, {
     type: 'bar',
-    data: { labels, datasets: [{ label: '対象者数', data: counts, backgroundColor: '#2c6fbb' }] },
+    data: { labels, datasets: [{ label: '対象者数', data: counts, backgroundColor: '#2563eb', borderRadius: 4 }] },
     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
   });
 }
@@ -394,7 +409,7 @@ async function renderCampaigns() {
   // フィルタUI(全部/本番のみ/テストのみ)をツールバーに描画(レポートと同じ btn-group)。
   const filterBar = document.getElementById('campaignFilterBar');
   if (filterBar) {
-    const fbtn = (v, label) => `<button class="btn btn-sm ${campaignTestFilter === v ? 'btn-primary' : 'btn-outline-primary'}" onclick="setCampaignTestFilter('${v}')">${label}</button>`;
+    const fbtn = (v, label) => `<button class="btn btn-sm btn-outline-secondary${campaignTestFilter === v ? ' active' : ''}" aria-pressed="${campaignTestFilter === v}" onclick="setCampaignTestFilter('${v}')">${label}</button>`;
     filterBar.innerHTML = `<div class="btn-group btn-group-sm">${fbtn('all', '全部')}${fbtn('prod', '本番のみ')}${fbtn('test', 'テストのみ')}</div>`;
   }
   // 並び順トグルUI(ヘッダの#列に矢印ボタン)。
@@ -413,11 +428,11 @@ async function renderCampaigns() {
       <td class="small text-muted">${fmtDate(c.start_at)}</td>
       <td><div class="d-flex flex-wrap gap-1">
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
-          ? `<button class="btn btn-sm btn-outline-primary" onclick="editCampaign(${c.id})" title="修正（下書きを編集）"><i class="bi bi-pencil"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="editCampaign(${c.id})" title="修正（下書きを編集）"><i class="bi bi-pencil"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
-          ? `<button class="btn btn-sm btn-outline-info" onclick="generateCampaign(${c.id})" title="生成確認"><i class="bi bi-file-earmark-check"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="generateCampaign(${c.id})" title="生成確認"><i class="bi bi-file-earmark-check"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && (c.status === 'scheduled' || c.status === 'paused')
-          ? `<button class="btn btn-sm btn-outline-warning" onclick="toDraftCampaign(${c.id})" title="下書きに戻す（送信予約を取り消して編集可能に）"><i class="bi bi-arrow-counterclockwise"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="toDraftCampaign(${c.id})" title="下書きに戻す（送信予約を取り消して編集可能に）"><i class="bi bi-arrow-counterclockwise"></i></button>` : ''}
         ${['scheduled','running','paused','done'].includes(c.status)
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="showCampaignData(${c.id})" title="データ確認"><i class="bi bi-table"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
@@ -427,15 +442,15 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator') && (c.status === 'running' || c.status === 'scheduled')
           ? `<button class="btn btn-sm btn-danger" onclick="stopCampaign(${c.id})" title="緊急停止"><i class="bi bi-stop-circle"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'paused'
-          ? `<button class="btn btn-sm btn-success" onclick="resumeCampaign(${c.id})" title="停止点から再開"><i class="bi bi-play-circle"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-primary" onclick="resumeCampaign(${c.id})" title="停止点から再開"><i class="bi bi-play-circle"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && ['done','paused','cancelled'].includes(c.status)
-          ? `<button class="btn btn-sm btn-outline-success" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
-          ? `<button class="btn btn-sm btn-outline-primary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && !c.closed_at
-          ? `<button class="btn btn-sm btn-outline-info" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
-          ? `<button class="btn btn-sm btn-outline-primary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
       </div></td>
@@ -1506,7 +1521,7 @@ async function viewMaster(kind, file) {
     </ul>
     <div id="mvPreview">
       <div class="small text-muted mb-1">実際の表示イメージ（スクリプトは無効化して安全に表示）。</div>
-      <iframe sandbox srcdoc="${esc(html)}" style="width:100%;height:55vh;border:1px solid #dee2e6;border-radius:.375rem;background:#fff"></iframe>
+      <iframe sandbox srcdoc="${esc(html)}" style="width:100%;height:55vh;border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);background:#fff"></iframe>
     </div>
     <div id="mvSource" class="d-none">
       <pre class="border rounded p-2 bg-light" style="max-height:55vh;overflow:auto"><code>${esc(html)}</code></pre>
@@ -1543,7 +1558,7 @@ async function editMaster(kind, file) {
     <div id="emEdit"><textarea class="form-control" id="masterHtml" rows="14">${esc(cur)}</textarea></div>
     <div id="emPreview" class="d-none">
       <div class="small text-muted mb-1">現在の編集内容の表示イメージ（スクリプト無効）。プレビュータブに切り替えるたび最新化されます。</div>
-      <iframe sandbox id="emPreviewFrame" style="width:100%;height:50vh;border:1px solid #dee2e6;border-radius:.375rem;background:#fff"></iframe>
+      <iframe sandbox id="emPreviewFrame" style="width:100%;height:50vh;border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);background:#fff"></iframe>
     </div>`;
   showModal(`編集: ${label}`, body, async () => {
     const html = $('#masterHtml').value;
@@ -2225,7 +2240,7 @@ async function renderReports() {
   // フィルタUI(本番/テスト/全部)を一覧上部に描画。
   const filterBar = document.getElementById('reportFilterBar');
   if (filterBar) {
-    const btn = (v, label) => `<button class="btn btn-sm ${reportTestFilter === v ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setReportFilter('${v}')">${label}</button>`;
+    const btn = (v, label) => `<button class="btn btn-sm btn-outline-secondary${reportTestFilter === v ? ' active' : ''}" aria-pressed="${reportTestFilter === v}" onclick="setReportFilter('${v}')">${label}</button>`;
     filterBar.innerHTML = `<div class="btn-group btn-group-sm">${btn('prod', '本番のみ')}${btn('test', 'テストのみ')}${btn('all', '全部')}</div>`;
   }
   // #列は作成順(古い順)で固定の通し番号。表示は降順(最新が上)。onclick は内部ID(c.id)を保持。
@@ -2265,7 +2280,7 @@ async function showReportDetail(id) {
       // メール開封を本当に測るには HTML メール化が必要(2026-08-19 時点では見送り)。
       labels: ['送信', 'サイト表示', '認証'],
       datasets: [{ label: '件数', data: [s.sent_count, s.click_count, s.auth_count],
-        backgroundColor: ['#4a90d9', '#e0a136', '#d64545'] }],
+        backgroundColor: ['#2563eb', '#b54708', '#d92d20'] }],
     },
     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
   });
@@ -2338,8 +2353,8 @@ async function renderReportDetail(campaignId) {
     data: {
       labels: tl.map((t) => t.date),
       datasets: [
-        { label: '累積サイト表示', data: tl.map((t) => t.cum_beacon), borderColor: '#3a9d5d', backgroundColor: 'rgba(58,157,93,.1)', tension: .2, fill: true },
-        { label: '累積認証', data: tl.map((t) => t.cum_auth), borderColor: '#d64545', backgroundColor: 'rgba(214,69,69,.1)', tension: .2, fill: true },
+        { label: '累積サイト表示', data: tl.map((t) => t.cum_beacon), borderColor: '#067647', backgroundColor: 'rgba(6,118,71,.1)', tension: .2, fill: true },
+        { label: '累積認証', data: tl.map((t) => t.cum_auth), borderColor: '#d92d20', backgroundColor: 'rgba(217,45,32,.1)', tension: .2, fill: true },
       ],
     },
     options: { responsive: true, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
@@ -2641,8 +2656,8 @@ async function renderGroups() {
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-primary" onclick="manageGroupMembers(${g.id})" title="メンバー管理（対象者の追加・削除）"><i class="bi bi-people"></i> メンバー</button>
         ${roleAtLeast(State.user.role,'operator')?`
-        <button class="btn btn-sm btn-outline-secondary" onclick="editGroup(${g.id})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteGroup(${g.id})"><i class="bi bi-trash"></i></button>`:''}
+        <button class="btn btn-sm btn-outline-secondary" onclick="editGroup(${g.id})" title="グループを編集" aria-label="グループを編集"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteGroup(${g.id})" title="グループを削除" aria-label="グループを削除"><i class="bi bi-trash" aria-hidden="true"></i></button>`:''}
       </td></tr>`;
   }).join('') : emptyRow(5);
 }
@@ -2700,7 +2715,7 @@ async function manageGroupMembers(groupId) {
     <p class="small text-muted mb-2">グループ「${esc(g ? g.name : '')}」のメンバーを選びます。チェックした対象者がメンバーになります（現メンバーは初期選択済み）。</p>
     <div class="mb-2"><button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.gm-chk').forEach(c=>c.checked=true)">全選択</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.gm-chk').forEach(c=>c.checked=false)">全解除</button></div>
-    <div style="max-height:340px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:8px">${rows}</div>`;
+    <div style="max-height:340px;overflow-y:auto;border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);padding:8px">${rows}</div>`;
   showModal(`メンバー管理: ${g ? g.name : ''}`, body, async () => {
     const checked = new Set(Array.from(document.querySelectorAll('.gm-chk')).filter((c) => c.checked).map((c) => Number(c.value)));
     // 追加 = チェックあり かつ 元メンバーでない / 削除 = チェックなし かつ 元メンバー
@@ -2875,7 +2890,7 @@ function bindTemplateForm() {
     const format = document.querySelector('#tplForm [name=format]').value;
     if (format === 'html') {
       area.innerHTML = `<div class="small text-muted mb-1">差込をサンプル値で置換した表示（スクリプトは無効化）。</div>
-        <iframe sandbox srcdoc="${esc(content)}" style="width:100%;height:40vh;border:1px solid #dee2e6;border-radius:.375rem;background:#fff"></iframe>`;
+        <iframe sandbox srcdoc="${esc(content)}" style="width:100%;height:40vh;border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);background:#fff"></iframe>`;
     } else {
       area.innerHTML = `<div class="small text-muted mb-1">差込をサンプル値で置換した表示。</div>
         <pre class="border rounded p-2 bg-light" style="max-height:40vh;overflow:auto;white-space:pre-wrap">${esc(content)}</pre>`;
@@ -3004,7 +3019,7 @@ function tplApplyPlaceholders(content) {
 function tplPreviewHtml(content, format, height = '40vh') {
   const c = tplApplyPlaceholders(content);
   if (format === 'html') {
-    return `<iframe sandbox srcdoc="${esc(c)}" style="width:100%;height:${height};border:1px solid #dee2e6;border-radius:.375rem;background:#fff"></iframe>`;
+    return `<iframe sandbox srcdoc="${esc(c)}" style="width:100%;height:${height};border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);background:#fff"></iframe>`;
   }
   return `<pre class="border rounded p-2 bg-light" style="max-height:${height};overflow:auto;white-space:pre-wrap">${esc(c)}</pre>`;
 }
@@ -4072,7 +4087,7 @@ async function renderEduTrend() {
       datasets: [{
         label: 'リテラシースコア（%）',
         data: company.map((p) => p.average_score),
-        borderColor: '#4a90d9', backgroundColor: 'rgba(74,144,217,.15)',
+        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)',
         fill: true, tension: 0.25, pointRadius: 3,
       }],
     },
@@ -4101,8 +4116,8 @@ async function renderAdminUsers() {
     <tr><td>${i + 1}</td><td>${esc(u.email)}</td><td>${esc(u.name)}</td><td>${roleLabel(u.role)}</td>
       <td>${u.status==='active'?'<span class="badge bg-success">有効</span>':'<span class="badge bg-secondary">停止</span>'}</td>
       <td class="text-nowrap">
-        <button class="btn btn-sm btn-outline-secondary" onclick="editUser(${u.id})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id})"><i class="bi bi-trash"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="editUser(${u.id})" title="ユーザを編集" aria-label="ユーザを編集"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id})" title="ユーザを削除" aria-label="ユーザを削除"><i class="bi bi-trash" aria-hidden="true"></i></button>
       </td></tr>`).join('') : emptyRow(6);
 }
 function userRoleOptions(cur) {
@@ -4242,7 +4257,9 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#helpToggle').focus();
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('#contextHelp').classList.contains('d-none')) $('#helpClose').click();
+    if (event.key !== 'Escape') return;
+    if ($('#sidebar').classList.contains('open')) { setSidebarOpen(false); $('#sidebarToggle').focus(); return; }
+    if (!$('#contextHelp').classList.contains('d-none')) $('#helpClose').click();
   });
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -4253,7 +4270,8 @@ document.addEventListener('DOMContentLoaded', () => {
     finally { btn.disabled = false; spin.classList.add('d-none'); }
   });
   $('#logoutBtn').addEventListener('click', () => logout());
-  $('#sidebarToggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+  $('#sidebarToggle').addEventListener('click', () => setSidebarOpen(!$('#sidebar').classList.contains('open')));
+  $('#sidebarBackdrop').addEventListener('click', () => setSidebarOpen(false));
   $$('.app-sidebar .nav-link').forEach((a) => a.addEventListener('click', () => navigate(a.dataset.view)));
   // 引数なしで呼ぶ(click Event が campaignId に渡ると編集モードと誤判定されるため)。
   $('#newCampaignBtn').addEventListener('click', () => openCampaignModal());

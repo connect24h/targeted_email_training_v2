@@ -72,7 +72,23 @@ function createContextHelp(root, getView) {
     body.append(summary, detail, reviewed);
   }
   input.addEventListener('input', () => render());
-  return { render, open() { root.classList.remove('d-none'); render(); input.focus(); }, close() { root.classList.add('d-none'); } };
+  // 閉じる時は短い動きのあとで隠す(動きを止める設定でも animationend か時間切れで必ず隠す)
+  let closeTimer = null;
+  function hide() {
+    clearTimeout(closeTimer);
+    root.classList.remove('is-closing');
+    root.classList.add('d-none');
+  }
+  root.addEventListener('animationend', (event) => { if (event.animationName === 'helpOut') hide(); });
+  return {
+    render,
+    open() { clearTimeout(closeTimer); root.classList.remove('is-closing', 'd-none'); render(); input.focus(); },
+    close() {
+      if (root.classList.contains('d-none')) return;
+      root.classList.add('is-closing');
+      closeTimer = setTimeout(hide, 250);
+    },
+  };
 }
 
 window.TET2_HELP_ARTICLES = TET2_HELP_ARTICLES;

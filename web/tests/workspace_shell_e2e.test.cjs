@@ -82,7 +82,7 @@ test('運用ホーム、画面URL、文脈HELPをブラウザで操作できる'
     await page.locator('#helpSearch').fill('全件転送');
     await page.locator('[data-help-list]').getByText('テスト送信と通数').waitFor();
     await page.keyboard.press('Escape');
-    assert.equal(await page.locator('#contextHelp').isVisible(), false);
+    await page.locator('#contextHelp').waitFor({ state: 'hidden', timeout: 2000 });
 
     await page.locator('.app-sidebar [data-view="campaigns"]').click();
     await page.waitForURL('**/#campaigns');
