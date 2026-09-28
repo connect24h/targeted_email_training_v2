@@ -214,14 +214,18 @@ async function setupTenantSwitcher() {
   }
   const data = await api('api/tenants.php', { query: { action: 'list' } });
   State.tenants = data.tenants || [];
-  sw.innerHTML = State.tenants.map((t) => `<option value="${t.id}">${esc(tenantSwitcherLabel(t))}</option>`).join('');
-  if (State.tenants.length) {
-    // 初期選択は「そのsuperadminの所属テナント(users.tenant_id)」を優先する。
-    // 該当テナントが一覧にあればそれを、なければ一覧の先頭を既定にする。
-    const preferred = State.tenants.find((t) => Number(t.id) === Number(State.user.tenant_id));
-    State.activeTenantId = preferred ? Number(preferred.id) : Number(State.tenants[0].id);
+  const choices = tenantSwitcherChoices();
+  sw.innerHTML = tenantSwitcherOptions(choices);
+  if (choices.length) {
+    // 作り直した時は、見ていたテナントが候補に残っていればそのままにする。
+    // 初めての時は「そのsuperadminの所属テナント(users.tenant_id)」を優先し、なければ候補の先頭にする。
+    const current = choices.find((t) => Number(t.id) === Number(State.activeTenantId));
+    const preferred = choices.find((t) => Number(t.id) === Number(State.user.tenant_id));
+    State.activeTenantId = Number((current || preferred || choices[0]).id);
     sw.value = State.activeTenantId;
     sw.classList.remove('d-none');
+  } else {
+    sw.classList.add('d-none');
   }
   sw.onchange = () => {
     if ($('#appModal').classList.contains('show') && !window.confirm('編集中の内容が失われる可能性があります。顧客を切り替えますか？')) {
@@ -4320,13 +4324,19 @@ function renderTenantRows() {
       <td class="text-nowrap">${tenantActionButtons(t)}</td>
     </tr>`).join('') : emptyRow(12);
 }
-// 上のバーのテナントの切り替えの表示名に、停止中・削除済みを添える
+// 上のバーのテナントの切り替えの候補。削除済みは出さない(復元と完全削除はテナント管理の画面で行う)
+function tenantSwitcherChoices() { return (State.tenants || []).filter((t) => t.status !== 'deleted'); }
+function tenantSwitcherOptions(choices) {
+  return choices.map((t) => `<option value="${t.id}">${esc(tenantSwitcherLabel(t))}</option>`).join('');
+}
+// 上のバーのテナントの切り替えの表示名に、停止中を添える(一覧を読み直した時)
 function refreshTenantSwitcherLabels() {
   const sw = $('#tenantSwitcher');
   if (!sw || State.user?.role !== 'superadmin') return;
   const current = State.activeTenantId;
-  sw.innerHTML = State.tenants.map((t) => `<option value="${t.id}">${esc(tenantSwitcherLabel(t))}</option>`).join('');
-  if (current && State.tenants.some((t) => Number(t.id) === Number(current))) sw.value = current;
+  const choices = tenantSwitcherChoices();
+  sw.innerHTML = tenantSwitcherOptions(choices);
+  if (current && choices.some((t) => Number(t.id) === Number(current))) sw.value = current;
 }
 function showTenantArea(area) {
   $('#tenantListArea').classList.toggle('d-none', area !== 'list');
@@ -4375,7 +4385,7 @@ async function openTenantDetail(id) {
         <h5 class="mb-0" id="tenantDetailTitle">${esc(t.name)}</h5><code>${esc(t.slug)}</code>${tenantStatusBadge(t.status)}
       </div>
       <div class="d-flex gap-2 flex-wrap">${actions.join('')}
-        <button type="button" class="btn btn-sm btn-primary" onclick="switchToTenant(${t.id})"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> このテナントに切り替えて開く</button>
+        ${t.status === 'deleted' ? '' : `<button type="button" class="btn btn-sm btn-primary" onclick="switchToTenant(${t.id})"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> このテナントに切り替えて開く</button>`}
       </div>
     </div>
     ${notice}
@@ -4468,7 +4478,8 @@ function editTenant(id) {
     const f = $('#tenantForm');
     await api('api/tenants.php', { method: 'POST', query: { action: 'update' },
       body: { id: t.id, name: f.name.value.trim(), status: f.status.value, ...collectTenantManagedFields(f) } });
-    toast('更新しました', 'ok'); renderTenants();
+    toast('更新しました', 'ok');
+    await setupTenantSwitcher(); renderTenants();
   }, { size: 'lg' });
 }
 // slug を入力させて確認する(API 側でも一致を確かめる)
@@ -4494,7 +4505,7 @@ function deleteTenant(id) {
     const confirmSlug = readConfirmSlug(t);
     await api('api/tenants.php', { method: 'POST', query: { action: 'delete' }, body: { id: t.id, confirm_slug: confirmSlug } });
     toast('削除しました（「削除済み」から復元できます）', 'ok');
-    renderTenants();
+    await setupTenantSwitcher(); renderTenants();
   }, { saveLabel: '削除する', saveClass: 'btn-danger' });
 }
 async function restoreTenant(id) {
@@ -4503,7 +4514,8 @@ async function restoreTenant(id) {
   if (!confirm(`${t.name} を復元します。復元すると停止中に戻ります（有効にするのは編集から行います）。よろしいですか？`)) return;
   try {
     await api('api/tenants.php', { method: 'POST', query: { action: 'restore' }, body: { id } });
-    toast('復元しました（停止中）', 'ok'); renderTenants();
+    toast('復元しました（停止中）', 'ok');
+    await setupTenantSwitcher(); renderTenants();
   } catch (e) { toast(e.message, 'err'); }
 }
 function purgeTenant(id) {

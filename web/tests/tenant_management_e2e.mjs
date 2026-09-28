@@ -131,13 +131,23 @@ try {
   assert.match(await row(admin, 'e2e-new').innerText(), /完全削除まで あと 90 日/);
   assert.equal(await row(admin, 'e2e-new').locator('[aria-label="テナントを完全削除"]').count(), 0);
   ok('削除は slug の入力で確認し、違えば削除しない。削除済みに移り、保持期間の残り(90日)を出し、完全削除はまだ出さない');
+  const switcherHas = (name) => admin.locator('#tenantSwitcher option', { hasText: name }).count();
+  assert.equal(await switcherHas('E2E 新規社'), 0);
+  assert.equal(await switcherHas('Old Co'), 0);
+  await row(admin, 'e2e-new').locator('.tenant-name-link').click();
+  await admin.locator('#tenantDetailArea:not(.d-none) #tenantDetailTitle').waitFor();
+  assert.equal(await admin.locator('#tenantDetailArea').getByRole('button', { name: /切り替えて開く/ }).count(), 0);
+  await admin.locator('#tenantDetailArea').getByRole('button', { name: /一覧に戻る/ }).click();
+  await filter(admin, 'deleted');
+  ok('削除済みのテナントは、上の切り替えに出さず、詳細にも「切り替えて開く」を出さない');
 
   // 5. 復元(停止中に戻る)
   await row(admin, 'e2e-new').locator('[aria-label^="テナントを復元"]').click();
   await admin.waitForFunction(() => !/e2e-new/.test(document.querySelector('#tenantsBody')?.innerText || ''));
   await filter(admin, 'suspended');
   assert.equal(await row(admin, 'e2e-new').count(), 1);
-  ok('復元すると停止中に戻る');
+  assert.equal(await switcherHas('E2E 新規社'), 1);
+  ok('復元すると停止中に戻り、上の切り替えにも戻る');
 
   // 6. 完全削除(保持期間を過ぎた Old Co)
   await filter(admin, 'deleted');
