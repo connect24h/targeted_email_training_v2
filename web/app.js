@@ -4692,6 +4692,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#individualsBtn')?.addEventListener('click', toggleIndividuals);
   $('#individualsRefreshBtn')?.addEventListener('click', renderIndividuals);
   $('#toGroupBtn').addEventListener('click', openToGroupModal);
+  // 非表示のタブの中のグラフは大きさ0で描かれるので、タブを開いた時に描き直す
+  $$('#reportTabs [data-bs-toggle="tab"]').forEach((tab) => tab.addEventListener('shown.bs.tab', () => {
+    reportChart?.resize();
+    reportTimelineChart?.resize();
+  }));
   $('#reportPeriodBtn')?.addEventListener('click', () => { if (reportSelectedId) renderReportDetail(reportSelectedId); });
   $('#reportPeriodClearBtn')?.addEventListener('click', () => {
     $('#reportStartDate').value = ''; $('#reportEndDate').value = '';

@@ -8,7 +8,7 @@
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=bed66af3" rel="stylesheet">
+  <link href="assets/app.css?v=92adbb6f" rel="stylesheet">
 </head>
 <body>
 
@@ -174,34 +174,10 @@
           </table></div>
         </div>
         <div id="reportDetail" class="d-none">
-          <div class="d-flex justify-content-end mb-2 gap-2">
-            <button class="btn btn-sm btn-outline-success" id="reportExportBtn"><i class="bi bi-file-earmark-spreadsheet"></i> Excel出力</button>
-          </div>
-          <div class="row g-3">
-            <div class="col-lg-6">
-              <div class="card h-100"><div class="card-header" id="reportDetailTitle">詳細</div>
-                <div class="card-body"><canvas id="reportChart" height="160"></canvas></div></div>
-            </div>
-            <div class="col-lg-6">
-              <div class="card h-100">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                  <span><i class="bi bi-exclamation-triangle me-1"></i>防衛失敗者</span>
-                  <button class="btn btn-sm btn-warning d-none" data-perm="operator" id="toGroupBtn"><i class="bi bi-folder-plus"></i> グループ化</button>
-                </div>
-                <div class="table-responsive" style="max-height:min(70vh,640px);overflow:auto">
-                  <table class="table table-sm mb-0"><thead><tr><th>メール</th><th>氏名</th><th>部署</th><th>重度</th></tr></thead>
-                    <tbody id="failuresBody"></tbody></table>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- P7: v1同等 詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン) -->
-          <div class="row g-3 mt-1">
-            <div class="col-12">
-              <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                  <span><i class="bi bi-bar-chart-line me-1"></i>詳細レポート <span id="reportCommitBadge"></span></span>
-                  <div class="d-flex align-items-center gap-2">
+          <!-- 詳細はタブで分ける。期間、確定、出力はどのタブにも効くので、タブの外に置く。 -->
+          <div class="report-toolbar card mb-3"><div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div class="fw-semibold"><span id="reportDetailTitle">詳細</span> <span id="reportCommitBadge"></span></div>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
                     <input type="datetime-local" class="form-control form-control-sm" id="reportStartDate" style="width:auto">
                     <span class="text-muted">〜</span>
                     <input type="datetime-local" class="form-control form-control-sm" id="reportEndDate" style="width:auto">
@@ -211,39 +187,62 @@
                     <button class="btn btn-sm btn-outline-danger d-none" data-perm="tenant_admin" id="reportUncommitBtn"><i class="bi bi-unlock"></i> 確定解除</button>
                     <button class="btn btn-sm btn-outline-danger d-none" data-perm="superadmin" id="reportCloseBtn" title="確定統計を保持し、保存済み入力本文を消去します"><i class="bi bi-archive"></i> クローズ</button>
                   </div>
+            <button class="btn btn-sm btn-outline-secondary" id="reportExportBtn"><i class="bi bi-file-earmark-spreadsheet"></i> Excel出力</button>
+          </div></div>
+          <ul class="nav nav-tabs report-tabs" id="reportTabs" role="tablist">
+            <li class="nav-item" role="presentation"><button class="nav-link active" id="reportTab-overview" data-bs-toggle="tab" data-bs-target="#reportPane-overview" type="button" role="tab" aria-controls="reportPane-overview" aria-selected="true"><i class="bi bi-graph-up me-1" aria-hidden="true"></i>概要</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-failures" data-bs-toggle="tab" data-bs-target="#reportPane-failures" type="button" role="tab" aria-controls="reportPane-failures" aria-selected="false"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>防衛失敗者</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-attributes" data-bs-toggle="tab" data-bs-target="#reportPane-attributes" type="button" role="tab" aria-controls="reportPane-attributes" aria-selected="false"><i class="bi bi-building me-1" aria-hidden="true"></i>会社・役職別</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-contents" data-bs-toggle="tab" data-bs-target="#reportPane-contents" type="button" role="tab" aria-controls="reportPane-contents" aria-selected="false"><i class="bi bi-files me-1" aria-hidden="true"></i>コンテンツ別</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-beacons" data-bs-toggle="tab" data-bs-target="#reportPane-beacons" type="button" role="tab" aria-controls="reportPane-beacons" aria-selected="false"><i class="bi bi-upc-scan me-1" aria-hidden="true"></i>ビーコン明細</button></li>
+          </ul>
+          <div class="tab-content report-tab-content">
+            <div class="tab-pane fade show active" id="reportPane-overview" role="tabpanel" aria-labelledby="reportTab-overview" tabindex="0">
+              <div class="row g-3">
+                <div class="col-lg-5"><div class="card h-100"><div class="card-header">反応の内訳</div>
+                  <div class="card-body"><canvas id="reportChart" height="200"></canvas></div></div></div>
+                <div class="col-lg-7"><div class="card h-100"><div class="card-header">日別の推移（累積）</div>
+                  <div class="card-body"><canvas id="reportTimelineChart" height="120"></canvas></div></div></div>
+              </div>
+            </div>
+            <div class="tab-pane fade" id="reportPane-failures" role="tabpanel" aria-labelledby="reportTab-failures" tabindex="0">
+              <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                  <span>防衛失敗者（認証まで進んだ人）</span>
+                  <button class="btn btn-sm btn-outline-secondary d-none" data-perm="operator" id="toGroupBtn"><i class="bi bi-folder-plus"></i> グループ化</button>
                 </div>
-                <div class="card-body">
-                  <div class="mb-3"><canvas id="reportTimelineChart" height="90"></canvas></div>
-                  <div class="row g-3">
-                    <div class="col-lg-4">
-                      <h6 class="text-muted"><i class="bi bi-building me-1"></i>会社別</h6>
-                      <div class="table-responsive" style="max-height:300px;overflow:auto">
+                <div class="table-responsive">
+                  <table class="table table-sm mb-0"><thead><tr><th>メール</th><th>氏名</th><th>部署</th><th>重度</th></tr></thead>
+                    <tbody id="failuresBody"></tbody></table>
+                </div>
+              </div>
+            </div>
+            <div class="tab-pane fade" id="reportPane-attributes" role="tabpanel" aria-labelledby="reportTab-attributes" tabindex="0">
+              <div class="row g-3">
+                <div class="col-xl-6"><h6 class="text-muted"><i class="bi bi-building me-1"></i>会社別</h6>
+                  <div class="table-responsive">
                         <table class="table table-sm mb-0"><thead><tr><th>会社</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByCompany"></tbody></table>
-                      </div>
-                    </div>
-                    <div class="col-lg-4">
-                      <h6 class="text-muted"><i class="bi bi-person-badge me-1"></i>役職別</h6>
-                      <div class="table-responsive" style="max-height:300px;overflow:auto">
+                      </div></div>
+                <div class="col-xl-6"><h6 class="text-muted"><i class="bi bi-person-badge me-1"></i>役職別</h6>
+                  <div class="table-responsive">
                         <table class="table table-sm mb-0"><thead><tr><th>役職</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByPosition"></tbody></table>
-                      </div>
-                    </div>
-                    <div class="col-lg-4">
-                      <h6 class="text-muted"><i class="bi bi-files me-1"></i>コンテンツ別</h6>
-                      <div class="table-responsive" style="max-height:300px;overflow:auto">
+                      </div></div>
+              </div>
+            </div>
+            <div class="tab-pane fade" id="reportPane-contents" role="tabpanel" aria-labelledby="reportTab-contents" tabindex="0">
+              <div class="table-responsive">
                         <table class="table table-sm mb-0"><thead><tr><th>No</th><th>件名</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByContent"></tbody></table>
                       </div>
-                    </div>
-                  </div>
-                  <!-- ビーコン(tracking_id)単位の明細。all配信で1人×Nコンテンツを個別に確認する。 -->
-                  <div class="mt-3">
-                    <h6 class="text-muted d-flex justify-content-between align-items-center">
-                      <span><i class="bi bi-upc-scan me-1"></i>ビーコン別 サイト表示明細（tracking_id 単位・全パターン）</span>
-                      <span class="small" id="reportBeaconSummary"></span>
-                    </h6>
-                    <div class="table-responsive" style="max-height:420px;overflow:auto">
+            </div>
+            <div class="tab-pane fade" id="reportPane-beacons" role="tabpanel" aria-labelledby="reportTab-beacons" tabindex="0">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="small text-muted">tracking_id 単位の全パターン。表示は偽サイトの表示で、メールの開封ではありません。</span>
+                <span class="small" id="reportBeaconSummary"></span>
+              </div>
+              <div class="table-responsive">
                       <table class="table table-sm table-hover mb-0">
                         <thead><tr>
                           <th>対象者</th><th>会社</th><th>ｺﾝﾃﾝﾂ</th><th>tracking_id</th>
@@ -252,9 +251,6 @@
                         <tbody id="reportBeaconsBody"></tbody>
                       </table>
                     </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -731,7 +727,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=1552cc68"></script>
+<script src="app.js?v=42c8401c"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

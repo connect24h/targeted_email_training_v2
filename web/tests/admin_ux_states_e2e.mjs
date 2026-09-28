@@ -139,6 +139,29 @@ try {
   ok('キャンペーンの対象者が空なら、対象者の手順へ移って欄の下に理由を出す');
   await closeModal();
 
+  // --- B5 訓練レポートの詳細のタブ ---
+  await go('reports');
+  // 読み込み中の行ではなく、押すと詳細を開く行が出るのを待つ
+  await page.locator('#reportsBody tr[onclick]').first().click();
+  await page.locator('#reportDetail:not(.d-none)').waitFor();
+  assert.equal(await page.locator('#reportTabs [role="tab"]').count(), 5);
+  assert.equal(await page.locator('#reportPane-overview').isVisible(), true);
+  assert.equal(await page.locator('#reportBeaconsBody').isVisible(), false);
+  assert.ok(await page.locator('#reportChart').evaluate((c) => c.getBoundingClientRect().width) > 100, '概要のグラフが描かれる');
+  assert.equal(await page.locator('#reportPeriodBtn').isVisible(), true);
+  await page.locator('#reportTab-beacons').click();
+  await page.locator('#reportPane-beacons.show').waitFor();
+  assert.equal(await page.locator('#reportTab-beacons').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#reportPane-overview').isVisible(), false);
+  assert.equal(await page.locator('#reportPeriodBtn').isVisible(), true);
+  await page.locator('#reportTab-beacons').focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.locator('#reportPane-contents.show').waitFor();
+  await page.locator('#reportTab-overview').click();
+  await page.locator('#reportPane-overview.show').waitFor();
+  assert.ok(await page.locator('#reportTimelineChart').evaluate((c) => c.getBoundingClientRect().width) > 100, '戻った時もグラフが描かれている');
+  ok('訓練レポートの詳細は5つのタブに分かれ、期間と確定の操作はどのタブでも使え、矢印キーでも移れる');
+
   await page.locator('#logoutBtn').click();
   await page.locator('#loginView:not(.d-none)').waitFor();
   assert.equal(new URL(page.url()).hash, '');
