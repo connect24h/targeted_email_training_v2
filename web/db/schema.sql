@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS users (
   password_pending INTEGER NOT NULL DEFAULT 0,  -- 1 = パスワード未設定(招待を送った、または CSV で作った)。password_hash は使えない乱数
   session_epoch INTEGER NOT NULL DEFAULT 0,     -- パスワードを変えるたびに増やす。ログイン時の値と違うセッションは切る
   target_id     INTEGER REFERENCES targets(id), -- role='learner' だけ: つながる対象者(同じテナント、1対象者に1つ。schema-learner.sql の索引)
+  mfa_secret    TEXT DEFAULT NULL,              -- TOTP の秘密鍵の暗号文(AdminMfa、鍵は secrets.ini の [mfa] secret_key)。登録の途中から入る
+  mfa_enabled_at TEXT DEFAULT NULL,             -- 多要素認証を有効にした日時。NULL = 未登録(登録の途中を含む)
+  mfa_last_step INTEGER DEFAULT NULL,           -- 最後に通した TOTP の時刻窓(30秒ごとの番号)。これ以前のコードは受け付けない
   created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );

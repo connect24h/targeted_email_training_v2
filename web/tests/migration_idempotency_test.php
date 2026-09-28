@@ -57,8 +57,8 @@ $pdo->exec("INSERT INTO groups (tenant_id, name, kind) VALUES (1, '全職員', '
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 23, '未適用migrationが23件ある');
-check($runner->migrate() === 23, '初回はmigrationを23件適用する');
+check(count($runner->pending()) === 24, '未適用migrationが24件ある');
+check($runner->migrate() === 24, '初回はmigrationを24件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
@@ -201,10 +201,47 @@ $pdo->exec('DELETE FROM edu_questions WHERE id = 901');
 $pdo->exec('DELETE FROM edu_categories WHERE id = 901');
 $pdo->exec('DELETE FROM edu_deliveries WHERE id = 901');
 
+// 管理画面の多要素認証とパスワードの方針(段階1)。既存のユーザは多要素認証なしのまま、方針の行も作らない。
+$pdo->exec("INSERT INTO users (tenant_id, email, password_hash, name, role, status, last_login_at)
+    VALUES (1, 'mfa-migration@example.test', 'existing-hash', '既存', 'tenant_admin', 'active', '2026-09-01 09:00:00')");
+$pdo->exec('DROP TABLE user_mfa_recovery_codes');
+$pdo->exec('DROP TABLE tenant_security_policies');
+$pdo->exec('ALTER TABLE users DROP COLUMN mfa_secret');
+$pdo->exec('ALTER TABLE users DROP COLUMN mfa_enabled_at');
+$pdo->exec('ALTER TABLE users DROP COLUMN mfa_last_step');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261015-admin-mfa'");
+check($runner->pending() === ['20261015-admin-mfa'], '多要素認証のmigrationだけがpending');
+check($runner->migrate() === 1, '既存DBへ多要素認証の列と表を追加できる');
+$mfaCols = array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');
+check(count(array_intersect(['mfa_secret', 'mfa_enabled_at', 'mfa_last_step'], $mfaCols)) === 3, '既存usersへ多要素認証の列を追加する');
+$mfaUser = $pdo->query("SELECT password_hash, mfa_secret, mfa_enabled_at, last_login_at FROM users WHERE email = 'mfa-migration@example.test'")->fetch(PDO::FETCH_ASSOC);
+check($mfaUser['password_hash'] === 'existing-hash' && $mfaUser['mfa_secret'] === null && $mfaUser['mfa_enabled_at'] === null
+    && $mfaUser['last_login_at'] === '2026-09-01 09:00:00', '既存のユーザは多要素認証なしのまま(パスワードとログインの記録も変えない)');
+check((int) $pdo->query('SELECT COUNT(*) FROM tenant_security_policies')->fetchColumn() === 0, '方針の行は作らない(従来どおりの決まり)');
+$weak = false;
+try {
+    $pdo->exec('INSERT INTO tenant_security_policies (tenant_id, min_length) VALUES (1, 8)');
+} catch (PDOException) {
+    $weak = true;
+}
+check($weak, '方針の表は12文字より弱い最小の文字数を拒む');
+$pdo->exec('INSERT INTO tenant_security_policies (tenant_id) VALUES (NULL)');
+$dupGlobal = false;
+try {
+    $pdo->exec('INSERT INTO tenant_security_policies (tenant_id) VALUES (NULL)');
+} catch (PDOException) {
+    $dupGlobal = true;
+}
+check($dupGlobal, '全体の方針(tenant_id NULL)は1行だけ');
+$pdo->exec('DELETE FROM tenant_security_policies');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261015-admin-mfa'");
+check($runner->migrate() === 1 && $runner->migrate() === 0, '多要素認証のmigrationも冪等');
+$pdo->exec("DELETE FROM users WHERE email = 'mfa-migration@example.test'");
+
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 23,
-    'schema_migrationsへ23件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 24,
+    'schema_migrationsへ24件だけ記録される');
 check(in_array('credential_capture_approval_ref', array_column(
     $pdo->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name'
 ), true), 'campaignsへ顧客承認参照を追加する');
@@ -278,8 +315,9 @@ check($currentRunner->pending() === [
     '20261005-tenant-management',
     '20261008-user-password-tokens',
     '20261012-learner-portal',
-], '現行DBは22件の後続migrationがpending');
-check($currentRunner->migrate() === 22, '現行DBへ残りのmigrationを適用する');
+    '20261015-admin-mfa',
+], '現行DBは23件の後続migrationがpending');
+check($currentRunner->migrate() === 23, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
@@ -307,7 +345,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 21, '既存automation DBへ21件の後続migrationを適用する');
+check($rotationRunner->migrate() === 22, '既存automation DBへ22件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -331,9 +369,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 23, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 23,
-    'version tableを作成して23件記録する');
+check($unversionedRunner->migrate() === 24, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 24,
+    'version tableを作成して24件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -346,7 +384,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 23, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 24, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets

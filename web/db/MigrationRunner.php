@@ -27,6 +27,7 @@ final class MigrationRunner
         '20261005-tenant-management',
         '20261008-user-password-tokens',
         '20261012-learner-portal',
+        '20261015-admin-mfa',
     ];
 
     /**
@@ -241,6 +242,13 @@ final class MigrationRunner
             $this->backfillEduAttempts($pdo);
             return;
         }
+        if ($version === '20261015-admin-mfa') {
+            // 管理画面の多要素認証とパスワードの方針(段階1、G43 と G44)。users に列を足し、回復コードと方針の表を作るだけ。
+            // 既存のユーザは多要素認証なし(mfa_enabled_at NULL)のままで、方針の行も作らない(従来どおりパスワードだけで入れる)。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-admin-mfa.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -433,6 +441,9 @@ final class MigrationRunner
                 'password_pending' => 'INTEGER NOT NULL DEFAULT 0',
                 'session_epoch' => 'INTEGER NOT NULL DEFAULT 0',
                 'target_id' => 'INTEGER REFERENCES targets(id)',
+                'mfa_secret' => 'TEXT DEFAULT NULL',
+                'mfa_enabled_at' => 'TEXT DEFAULT NULL',
+                'mfa_last_step' => 'INTEGER DEFAULT NULL',
             ],
             'tenants' => [
                 'deleted_at' => 'TEXT DEFAULT NULL',
