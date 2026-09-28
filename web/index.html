@@ -8,7 +8,7 @@
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=2fc0231b" rel="stylesheet">
+  <link href="assets/app.css?v=bed66af3" rel="stylesheet">
 </head>
 <body>
 
@@ -671,14 +671,21 @@
 
       <!-- テナント管理 -->
       <section data-panel="tenants" class="view-panel d-none">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-building me-1"></i>テナント管理</h5>
-          <button class="btn btn-primary btn-sm" id="newTenantBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+        <div id="tenantListArea">
+          <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h5 class="mb-0"><i class="bi bi-building me-1" aria-hidden="true"></i>テナント管理</h5>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+              <div class="btn-group btn-group-sm" role="group" aria-label="状態で絞り込み" id="tenantStatusFilter"></div>
+              <button class="btn btn-primary btn-sm" id="newTenantBtn"><i class="bi bi-plus-lg" aria-hidden="true"></i> 新規</button>
+            </div>
+          </div>
+          <p class="small text-muted mb-3">停止・削除したテナントのユーザはログインできず、自動の処理と送信の操作も止まります。送信 worker が処理中の送信は止まりません（止めるにはキャンペーンの緊急停止を使います）。削除したテナントは 90 日間は復元でき、その後に完全削除できます。</p>
+          <div class="table-responsive"><table class="table table-hover align-middle">
+            <thead><tr><th>#</th><th>名称</th><th>slug</th><th>状態</th><th class="text-end">ユーザ</th><th class="text-end" title="有効な対象者（検証用を除く）/ 上限">対象者</th><th class="text-end">キャンペーン</th><th class="text-end">教育配信</th><th>最後の送信</th><th>最後のログイン</th><th>契約の終了日</th><th>操作</th></tr></thead>
+            <tbody id="tenantsBody"></tbody>
+          </table></div>
         </div>
-        <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead><tr><th>#</th><th>名称</th><th>slug</th><th>状態</th><th>操作</th></tr></thead>
-          <tbody id="tenantsBody"></tbody>
-        </table></div>
+        <div id="tenantDetailArea" class="d-none" aria-live="polite"></div>
       </section>
     </main>
 
@@ -724,7 +731,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=839a06c7"></script>
+<script src="app.js?v=1552cc68"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

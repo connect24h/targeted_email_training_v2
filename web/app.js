@@ -44,7 +44,12 @@ async function api(path, { method = 'GET', body = null, query = {}, timeout = 30
   }
   let data;
   try { data = await res.json(); } catch { data = { success: false, error: 'レスポンス解析失敗' }; }
-  if (res.status === 401 && State.user) { logout(true); throw new Error('セッション切れ'); }
+  // セッションが切れた時は、サーバの理由(テナントの停止など)をログイン画面に出す
+  if (res.status === 401 && State.user) {
+    logout(true);
+    showLoginNotice(data.error || 'セッションが切れました。もう一度ログインしてください');
+    throw new Error(data.error || 'セッション切れ');
+  }
   if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -55,12 +60,12 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
-function toast(msg, kind = 'info') {
+function toast(msg, kind = 'info', ms = 3500) {
   const el = document.createElement('div');
   el.className = `app-toast ${kind}`;
   el.textContent = msg;
   $('#toast').appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  setTimeout(() => el.remove(), ms);
 }
 function fmtDate(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
 
@@ -138,6 +143,13 @@ function showProgress(msg) {
 }
 
 /* ========== 認証 ========== */
+// ログイン画面のエラー欄に、ログアウトした理由を出す(次のログインの送信で消える)
+function showLoginNotice(message) {
+  const err = $('#loginError');
+  if (!err) return;
+  err.textContent = message;
+  err.classList.remove('d-none');
+}
 async function login(email, password) {
   const data = await api('api/auth.php', { method: 'POST', query: { action: 'login' }, body: { email, password } });
   State.user = data.user;
@@ -163,6 +175,7 @@ async function checkSession() {
   try {
     const data = await api('api/auth.php', { query: { action: 'me' } });
     if (data.user) { State.user = data.user; State.csrf = data.csrf; await afterLogin(); return; }
+    if (data.notice) showLoginNotice(data.notice);
   } catch {}
   $('#loginView').classList.remove('d-none');
 }
@@ -201,7 +214,7 @@ async function setupTenantSwitcher() {
   }
   const data = await api('api/tenants.php', { query: { action: 'list' } });
   State.tenants = data.tenants || [];
-  sw.innerHTML = State.tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  sw.innerHTML = State.tenants.map((t) => `<option value="${t.id}">${esc(tenantSwitcherLabel(t))}</option>`).join('');
   if (State.tenants.length) {
     // 初期選択は「そのsuperadminの所属テナント(users.tenant_id)」を優先する。
     // 該当テナントが一覧にあればそれを、なければ一覧の先頭を既定にする。
@@ -216,11 +229,7 @@ async function setupTenantSwitcher() {
       return;
     }
     modalInstance?.hide();
-    riskDashboard?.invalidate();
-    State.activeTenantId = Number(sw.value);
-    clearTenantCache();
-    reportSelectedId = null;
-    State.workspaceReview = null;
+    applyActiveTenant(Number(sw.value));
     if (State.view === 'campaignWorkspace') {
       State.campaignWorkspaceId = null;
       navigate('dashboard');
@@ -228,6 +237,15 @@ async function setupTenantSwitcher() {
     }
     renderCurrentView();
   };
+}
+
+// 見ているテナントを切り替える(上のバーの切り替えと、テナントの詳細の「切り替えて開く」で共通)
+function applyActiveTenant(id) {
+  riskDashboard?.invalidate();
+  State.activeTenantId = id;
+  clearTenantCache();
+  reportSelectedId = null;
+  State.workspaceReview = null;
 }
 
 /* ========== ルーティング ========== */
@@ -287,6 +305,8 @@ function navigate(view) {
   // ビュー切替時に一覧自動更新タイマーを止める(campaigns に戻れば renderCampaigns が再設定)。
   if (campaignsRefreshTimer) { clearTimeout(campaignsRefreshTimer); campaignsRefreshTimer = null; }
   if (State.view === 'riskDashboard' && view !== 'riskDashboard') riskDashboard?.invalidate();
+  // ほかの画面からテナント管理へ来た時は、詳細ではなく一覧から出す
+  if (view === 'tenants' && State.view !== 'tenants') tenantDetailId = null;
   const previousView = State.view;
   State.view = view;
   const hash = view === 'campaignWorkspace' ? `#campaignWorkspace/${State.campaignWorkspaceId}` : `#${view}`;
@@ -2590,8 +2610,9 @@ async function renderTargets() {
 async function restoreTarget(id) {
   if (!confirm('この対象者を在籍に戻しますか？')) return;
   try {
-    await api('api/targets.php', { method: 'POST', query: { action: 'restore' }, body: { id } });
+    const r = await api('api/targets.php', { method: 'POST', query: { action: 'restore' }, body: { id } });
     toast('在籍に戻しました', 'ok'); renderTargets();
+    if (r.limit_warning) toast(r.limit_warning, 'warn', 8000);
   } catch (e) { toast(e.message, 'err'); }
 }
 function targetForm(t = {}) {
@@ -2622,8 +2643,9 @@ function collectTarget() {
 }
 function newTarget() {
   showModal('新規対象者', targetForm(), async () => {
-    await api('api/targets.php', { method: 'POST', query: { action: 'create' }, body: collectTarget() });
+    const r = await api('api/targets.php', { method: 'POST', query: { action: 'create' }, body: collectTarget() });
     toast('追加しました', 'ok'); renderTargets();
+    if (r.limit_warning) toast(r.limit_warning, 'warn', 8000);
   });
 }
 function editTarget(id) {
@@ -2647,6 +2669,7 @@ function importCsv() {
     if (!csv) throw new Error('CSV を入力してください');
     const r = await api('api/targets.php', { method: 'POST', query: { action: 'import_csv' }, body: { csv } });
     toast(`取込 ${r.imported} / 更新 ${r.updated} / スキップ ${r.skipped}`, 'ok'); renderTargets();
+    if (r.limit_warning) toast(r.limit_warning, 'warn', 8000);
   });
 }
 // 現対象者を CSV でダウンロード。CSV(非JSON)なので api() は使わず直接 fetch → blob 保存。
@@ -4208,40 +4231,297 @@ async function deleteUser(id) {
 }
 
 /* ========== テナント管理 ========== */
+// 状態の絞り込み。current = 削除済みを除く全部(既定)。削除済みは一覧から分けて出す。
+let tenantStatusFilter = 'current';
+let tenantDetailId = null;
+let tenantDetailRequest = 0;
+// 論理削除から完全削除できるまでの日数(サーバの TenantStatus::RETENTION_DAYS。一覧の API の retention_days で上書きする)
+let tenantRetentionDays = 90;
+const TENANT_STATUS_LABEL = { active: '有効', suspended: '停止中', deleted: '削除済み' };
+function tenantStatusBadge(status) {
+  const cls = { active: 'bg-success', suspended: 'bg-secondary', deleted: 'bg-danger' }[status] || 'bg-secondary';
+  return `<span class="badge ${cls}">${esc(TENANT_STATUS_LABEL[status] || status)}</span>`;
+}
+function tenantSwitcherLabel(t) {
+  return t.status === 'active' ? t.name : `${t.name}（${TENANT_STATUS_LABEL[t.status] || t.status}）`;
+}
+function tenantRetentionNote(t) {
+  if (t.status !== 'deleted') return '';
+  if (t.purge_available) return '<div class="small tenant-note-danger">保持期間が過ぎました。完全削除できます</div>';
+  return `<div class="small text-muted">完全削除まで あと ${Number(t.retention_days_left ?? 0)} 日</div>`;
+}
+function tenantContractCell(t) {
+  if (!t.contract_end_date) return '<span class="text-muted">—</span>';
+  let mark = '';
+  if (t.contract_expiring) {
+    const left = Number(t.contract_days_left);
+    mark = ` <span class="badge tenant-badge-warning" title="契約の終了日が近い、または過ぎています">${left < 0 ? '終了済み' : `あと ${left} 日`}</span>`;
+  }
+  return `${esc(t.contract_end_date)}${mark}`;
+}
+function tenantTargetCell(t) {
+  const limit = t.target_limit ? ` / ${Number(t.target_limit)}` : '';
+  const over = t.over_target_limit ? ' <span class="badge tenant-badge-warning" title="対象者数が上限を超えています">上限超え</span>' : '';
+  return `${Number(t.target_count)}${limit}${over}`;
+}
+function tenantActionButtons(t) {
+  const btn = (fn, icon, label, cls = 'btn-outline-secondary') =>
+    `<button type="button" class="btn btn-sm ${cls}" onclick="${fn}(${t.id})" title="${label}" aria-label="${label}"><i class="bi ${icon}" aria-hidden="true"></i></button>`;
+  if (t.status === 'deleted') {
+    return btn('restoreTenant', 'bi-arrow-counterclockwise', 'テナントを復元（停止中に戻す）')
+      + (t.purge_available ? ' ' + btn('purgeTenant', 'bi-x-octagon', 'テナントを完全削除', 'btn-outline-danger') : '');
+  }
+  return btn('editTenant', 'bi-pencil', 'テナントを編集')
+    + (t.status === 'suspended' ? ' ' + btn('deleteTenant', 'bi-trash', 'テナントを削除', 'btn-outline-danger') : '');
+}
+function setTenantStatusFilter(value) {
+  tenantStatusFilter = value;
+  renderTenantRows();
+}
 async function renderTenants() {
-  const { tenants } = await api('api/tenants.php', { query: { action: 'list' } });
-  State.tenants = tenants;
-  cacheRows('tenants', tenants);
-  // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
-  const tenantsAsc = tenants.slice().sort((a, b) => a.id - b.id);
-  $('#tenantsBody').innerHTML = tenantsAsc.length ? tenantsAsc.map((t, i) => `
-    <tr><td>${i + 1}</td><td>${esc(t.name)}</td><td><code>${esc(t.slug)}</code></td>
-      <td>${t.status==='active'?'<span class="badge bg-success">有効</span>':'<span class="badge bg-secondary">停止</span>'}</td>
-      <td><button class="btn btn-sm btn-outline-secondary" onclick="editTenant(${t.id})"><i class="bi bi-pencil"></i></button></td>
-    </tr>`).join('') : emptyRow(5);
+  const data = await api('api/tenants.php', { query: { action: 'list' } });
+  if (State.view !== 'tenants') return;
+  State.tenants = data.tenants;
+  if (data.retention_days) tenantRetentionDays = Number(data.retention_days);
+  cacheRows('tenants', data.tenants);
+  refreshTenantSwitcherLabels();
+  if (tenantDetailId !== null && Cache.tenants[tenantDetailId]) { await openTenantDetail(tenantDetailId); return; }
+  tenantDetailId = null;
+  showTenantArea('list');
+  renderTenantRows();
+}
+function renderTenantRows() {
+  const counts = { current: 0, active: 0, suspended: 0, deleted: 0 };
+  for (const t of State.tenants) {
+    counts[t.status] = (counts[t.status] || 0) + 1;
+    if (t.status !== 'deleted') counts.current++;
+  }
+  const filters = [['current', '全部（削除済みを除く）'], ['active', '有効'], ['suspended', '停止中'], ['deleted', '削除済み']];
+  $('#tenantStatusFilter').innerHTML = filters.map(([v, label]) => {
+    const on = tenantStatusFilter === v;
+    return `<button type="button" class="btn btn-outline-secondary${on ? ' active' : ''}" aria-pressed="${on}" data-tenant-filter="${v}" onclick="setTenantStatusFilter('${v}')">${label} <span class="tenant-filter-count">${counts[v] || 0}</span></button>`;
+  }).join('');
+  const rows = State.tenants
+    .filter((t) => (tenantStatusFilter === 'current' ? t.status !== 'deleted' : t.status === tenantStatusFilter))
+    .sort((a, b) => a.id - b.id);
+  $('#tenantsBody').innerHTML = rows.length ? rows.map((t, i) => `
+    <tr data-tenant-id="${t.id}">
+      <td>${i + 1}</td>
+      <td><button type="button" class="btn btn-link p-0 text-start tenant-name-link" onclick="openTenantDetail(${t.id})">${esc(t.name)}</button>${tenantRetentionNote(t)}</td>
+      <td><code>${esc(t.slug)}</code></td>
+      <td>${tenantStatusBadge(t.status)}</td>
+      <td class="text-end">${Number(t.user_count)}</td>
+      <td class="text-end text-nowrap">${tenantTargetCell(t)}</td>
+      <td class="text-end text-nowrap">${Number(t.campaign_count)}${t.campaign_active_count ? ` <span class="small text-muted">（実行・予約 ${Number(t.campaign_active_count)}）</span>` : ''}</td>
+      <td class="text-end text-nowrap">${Number(t.edu_delivery_count)}${t.edu_active_count ? ` <span class="small text-muted">（実行・予約 ${Number(t.edu_active_count)}）</span>` : ''}</td>
+      <td class="text-nowrap">${esc(fmtDate(t.last_sent_at))}</td>
+      <td class="text-nowrap">${esc(fmtDate(t.last_login_at))}</td>
+      <td class="text-nowrap">${tenantContractCell(t)}</td>
+      <td class="text-nowrap">${tenantActionButtons(t)}</td>
+    </tr>`).join('') : emptyRow(12);
+}
+// 上のバーのテナントの切り替えの表示名に、停止中・削除済みを添える
+function refreshTenantSwitcherLabels() {
+  const sw = $('#tenantSwitcher');
+  if (!sw || State.user?.role !== 'superadmin') return;
+  const current = State.activeTenantId;
+  sw.innerHTML = State.tenants.map((t) => `<option value="${t.id}">${esc(tenantSwitcherLabel(t))}</option>`).join('');
+  if (current && State.tenants.some((t) => Number(t.id) === Number(current))) sw.value = current;
+}
+function showTenantArea(area) {
+  $('#tenantListArea').classList.toggle('d-none', area !== 'list');
+  $('#tenantDetailArea').classList.toggle('d-none', area !== 'detail');
+}
+function closeTenantDetail() {
+  tenantDetailId = null;
+  tenantDetailRequest++;
+  showTenantArea('list');
+  renderTenantRows();
+}
+// 詳細は同じ画面の中で一覧と入れ替えて出す(削除などの確認が共通のモーダルを使うため、詳細はモーダルにしない)
+async function openTenantDetail(id) {
+  tenantDetailId = id;
+  const requestId = ++tenantDetailRequest;
+  const data = await api('api/tenants.php', { query: { action: 'get', id } });
+  if (requestId !== tenantDetailRequest || State.view !== 'tenants') return;
+  const t = data.tenant;
+  Cache.tenants[t.id] = t;
+  const stat = (label, value) => `<div class="tenant-stat"><div class="tenant-stat-label">${label}</div><div class="tenant-stat-value">${value}</div></div>`;
+  const users = data.users.length ? data.users.map((u) => `
+      <tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${roleLabel(u.role)}</td>
+        <td>${u.status === 'active' ? '<span class="badge bg-success">有効</span>' : '<span class="badge bg-secondary">停止</span>'}</td>
+        <td class="text-nowrap">${esc(fmtDate(u.last_login_at))}</td></tr>`).join('') : emptyRow(5);
+  const audit = data.audit.length ? data.audit.map((a) => `
+      <tr><td class="text-nowrap">${esc(fmtDate(a.occurred_at))}</td><td><code>${esc(a.action)}</code></td>
+        <td class="small">${esc(a.user_email || '（自動の処理）')}</td><td class="small text-break">${esc(a.detail)}</td></tr>`).join('') : emptyRow(4);
+  const actions = [];
+  if (t.status !== 'deleted') {
+    actions.push(`<button type="button" class="btn btn-sm btn-outline-secondary" onclick="editTenant(${t.id})"><i class="bi bi-pencil" aria-hidden="true"></i> 編集</button>`);
+  }
+  if (t.status === 'suspended') {
+    actions.push(`<button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteTenant(${t.id})"><i class="bi bi-trash" aria-hidden="true"></i> 削除</button>`);
+  }
+  if (t.status === 'deleted') {
+    actions.push(`<button type="button" class="btn btn-sm btn-outline-secondary" onclick="restoreTenant(${t.id})"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> 復元</button>`);
+    if (t.purge_available) actions.push(`<button type="button" class="btn btn-sm btn-outline-danger" onclick="purgeTenant(${t.id})"><i class="bi bi-x-octagon" aria-hidden="true"></i> 完全削除</button>`);
+  }
+  const notice = t.status === 'active' ? '' : `<div class="tenant-notice mb-3" role="note">${t.status === 'deleted'
+    ? `このテナントは削除済みです（${esc(fmtDate(t.deleted_at))}）。ユーザはログインできず、自動の処理と送信の操作は止まっています。${t.purge_available ? '保持期間が過ぎたため、完全削除できます。' : `完全削除できるのは あと ${Number(t.retention_days_left ?? 0)} 日後です。`}`
+    : 'このテナントは停止中です。ユーザはログインできず、自動の処理と送信の操作は止まっています。送信 worker が処理中の送信は止まりません（止めるにはキャンペーンの緊急停止を使ってください）。'}</div>`;
+  $('#tenantDetailArea').innerHTML = `
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeTenantDetail()"><i class="bi bi-arrow-left" aria-hidden="true"></i> 一覧に戻る</button>
+        <h5 class="mb-0" id="tenantDetailTitle">${esc(t.name)}</h5><code>${esc(t.slug)}</code>${tenantStatusBadge(t.status)}
+      </div>
+      <div class="d-flex gap-2 flex-wrap">${actions.join('')}
+        <button type="button" class="btn btn-sm btn-primary" onclick="switchToTenant(${t.id})"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> このテナントに切り替えて開く</button>
+      </div>
+    </div>
+    ${notice}
+    <div class="card mb-3"><div class="card-header py-2">概要</div><div class="card-body">
+      <div class="tenant-stats">
+        ${stat('ユーザ', Number(t.user_count))}
+        ${stat('対象者（有効、検証用を除く）', tenantTargetCell(t))}
+        ${stat('キャンペーン', `${Number(t.campaign_count)} <span class="small text-muted">（実行・予約 ${Number(t.campaign_active_count)}）</span>`)}
+        ${stat('教育配信', `${Number(t.edu_delivery_count)} <span class="small text-muted">（実行・予約 ${Number(t.edu_active_count)}）</span>`)}
+        ${stat('最後の送信', esc(fmtDate(t.last_sent_at)))}
+        ${stat('最後のログイン', esc(fmtDate(t.last_login_at)))}
+      </div>
+      <dl class="row small mb-0 mt-3">
+        <dt class="col-sm-3">担当者</dt><dd class="col-sm-9">${esc(t.contact_name || '—')}${t.contact_email ? `（${esc(t.contact_email)}）` : ''}</dd>
+        <dt class="col-sm-3">契約の終了日</dt><dd class="col-sm-9">${tenantContractCell(t)}</dd>
+        <dt class="col-sm-3">対象者数の上限</dt><dd class="col-sm-9">${t.target_limit ? `${Number(t.target_limit)} 人` : '上限なし'}</dd>
+        <dt class="col-sm-3">メモ</dt><dd class="col-sm-9 tenant-memo">${esc(t.memo || '—')}</dd>
+        <dt class="col-sm-3">作成日</dt><dd class="col-sm-9">${esc(fmtDate(t.created_at))}</dd>
+      </dl>
+    </div></div>
+    <div class="card mb-3"><div class="card-header py-2">ユーザ</div>
+      <div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+        <thead><tr><th>名前</th><th>メール</th><th>役割</th><th>状態</th><th>最後のログイン</th></tr></thead>
+        <tbody id="tenantDetailUsers">${users}</tbody></table></div></div>
+    <div class="card mb-3"><div class="card-header py-2">最近の操作（20件）</div>
+      <div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+        <thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>内容</th></tr></thead>
+        <tbody id="tenantDetailAudit">${audit}</tbody></table></div></div>`;
+  showTenantArea('detail');
+}
+// 既存のテナントの切り替え(上のバーの tenantSwitcher)と同じ手順で、そのテナントの画面を開く
+function switchToTenant(id) {
+  const sw = $('#tenantSwitcher');
+  if (!sw || ![...sw.options].some((o) => Number(o.value) === Number(id))) { toast('切り替え先のテナントが見つかりません', 'err'); return; }
+  sw.value = String(id);
+  tenantDetailId = null;
+  applyActiveTenant(Number(id));
+  navigate('dashboard');
 }
 function tenantForm(t = {}, isNew = true) {
-  return `<form id="tenantForm">
-    <div class="mb-2"><label class="form-label">組織名</label><input class="form-control" name="name" value="${esc(t.name)}" required></div>
-    <div class="mb-2"><label class="form-label">slug（英数字・ハイフン）</label><input class="form-control" name="slug" value="${esc(t.slug)}" ${isNew?'required':'readonly'}></div>
-    ${!isNew?`<div class="mb-2"><label class="form-label">状態</label><select class="form-select" name="status"><option value="active"${t.status==='active'?' selected':''}>有効</option><option value="suspended"${t.status==='suspended'?' selected':''}>停止</option></select></div>`:''}
+  const v = (key) => esc(t[key] ?? '');
+  return `<form id="tenantForm" novalidate>
+    <div class="mb-2"><label class="form-label" for="tfName">組織名</label><input class="form-control" id="tfName" name="name" value="${v('name')}" required></div>
+    <div class="mb-2"><label class="form-label" for="tfSlug">slug（英小文字・数字・ハイフン）</label><input class="form-control" id="tfSlug" name="slug" value="${v('slug')}" ${isNew ? 'required' : 'readonly'}></div>
+    ${!isNew ? `<div class="mb-2"><label class="form-label" for="tfStatus">状態</label><select class="form-select" id="tfStatus" name="status"><option value="active"${t.status === 'active' ? ' selected' : ''}>有効</option><option value="suspended"${t.status === 'suspended' ? ' selected' : ''}>停止</option></select>
+      <div class="form-text">停止すると、このテナントのユーザはログインできず、自動の処理と送信の操作も止まります。送信 worker が処理中の送信は止まりません（止めるにはキャンペーンの緊急停止を使います）。</div></div>` : ''}
+    <fieldset class="border-top pt-2 mt-3"><legend class="fs-6 fw-semibold">管理の項目（任意）</legend>
+      <div class="row g-2">
+        <div class="col-md-6 mb-2"><label class="form-label" for="tfContactName">担当者の名前</label><input class="form-control" id="tfContactName" name="contact_name" value="${v('contact_name')}" maxlength="100"></div>
+        <div class="col-md-6 mb-2"><label class="form-label" for="tfContactEmail">担当者のメール</label><input class="form-control" id="tfContactEmail" name="contact_email" type="email" value="${v('contact_email')}"></div>
+        <div class="col-md-6 mb-2"><label class="form-label" for="tfContractEnd">契約の終了日</label><input class="form-control" id="tfContractEnd" name="contract_end_date" type="date" value="${v('contract_end_date')}"></div>
+        <div class="col-md-6 mb-2"><label class="form-label" for="tfTargetLimit">対象者数の上限</label><input class="form-control" id="tfTargetLimit" name="target_limit" type="number" min="1" step="1" value="${t.target_limit ?? ''}" placeholder="空なら上限なし">
+          <div class="form-text">超えても登録は止めず、警告を出します。</div></div>
+      </div>
+      <div class="mb-2"><label class="form-label" for="tfMemo">メモ</label><textarea class="form-control" id="tfMemo" name="memo" rows="2" maxlength="2000">${v('memo')}</textarea></div>
+    </fieldset>
+    ${isNew ? `<fieldset class="border-top pt-2 mt-3"><legend class="fs-6 fw-semibold">最初の管理者（任意）</legend>
+      <div class="form-text mb-2">メールを入れると、このテナントの組織管理者を同時に作ります。初期パスワードは、ユーザの作成と同じく、ここで決めてご本人へ伝えてください（メールは送りません）。</div>
+      <div class="row g-2">
+        <div class="col-md-6 mb-2"><label class="form-label" for="tfAdminEmail">管理者のメール</label><input class="form-control" id="tfAdminEmail" name="admin_email" type="email"></div>
+        <div class="col-md-6 mb-2"><label class="form-label" for="tfAdminName">管理者の名前</label><input class="form-control" id="tfAdminName" name="admin_name"></div>
+      </div>
+      <div class="mb-2"><label class="form-label" for="tfAdminPassword">初期パスワード（8文字以上）</label><input class="form-control" id="tfAdminPassword" name="admin_password" type="password" autocomplete="new-password"></div>
+    </fieldset>` : ''}
   </form>`;
+}
+function collectTenantManagedFields(f) {
+  const limit = f.target_limit.value.trim();
+  return {
+    contact_name: f.contact_name.value.trim(), contact_email: f.contact_email.value.trim(),
+    contract_end_date: f.contract_end_date.value, target_limit: limit === '' ? null : Number(limit), memo: f.memo.value.trim(),
+  };
 }
 function newTenant() {
   showModal('新規テナント', tenantForm({}, true), async () => {
     const f = $('#tenantForm');
-    await api('api/tenants.php', { method: 'POST', query: { action: 'create' }, body: { name: f.name.value.trim(), slug: f.slug.value.trim() } });
-    toast('作成しました', 'ok'); renderTenants(); setupTenantSwitcher();
-  });
+    const body = { name: f.name.value.trim(), slug: f.slug.value.trim(), ...collectTenantManagedFields(f) };
+    if (f.admin_email.value.trim()) {
+      Object.assign(body, { admin_email: f.admin_email.value.trim(), admin_name: f.admin_name.value.trim(), admin_password: f.admin_password.value });
+    }
+    const r = await api('api/tenants.php', { method: 'POST', query: { action: 'create' }, body });
+    toast(r.admin_user_id ? '作成しました（最初の管理者も作りました）' : '作成しました', 'ok');
+    await setupTenantSwitcher(); renderTenants();
+  }, { size: 'lg' });
 }
 function editTenant(id) {
   const t = Cache.tenants[id];
   if (!t) return;
   showModal('テナント編集', tenantForm(t, false), async () => {
     const f = $('#tenantForm');
-    await api('api/tenants.php', { method: 'POST', query: { action: 'update' }, body: { id: t.id, name: f.name.value.trim(), status: f.status.value } });
+    await api('api/tenants.php', { method: 'POST', query: { action: 'update' },
+      body: { id: t.id, name: f.name.value.trim(), status: f.status.value, ...collectTenantManagedFields(f) } });
     toast('更新しました', 'ok'); renderTenants();
-  });
+  }, { size: 'lg' });
+}
+// slug を入力させて確認する(API 側でも一致を確かめる)
+function tenantSlugConfirmBody(t, lead) {
+  return `${lead}<div class="mt-3"><label class="form-label" for="tenantConfirmSlug">確認のため、slug（<code>${esc(t.slug)}</code>）を入力してください</label>
+    <input class="form-control" id="tenantConfirmSlug" autocomplete="off" spellcheck="false"></div>`;
+}
+function readConfirmSlug(t) {
+  const value = $('#tenantConfirmSlug').value.trim();
+  if (value !== t.slug) throw new Error('入力した slug が一致しません');
+  return value;
+}
+function deleteTenant(id) {
+  const t = Cache.tenants[id];
+  if (!t) return;
+  const lead = `<p><strong>${esc(t.name)}</strong> を削除します。</p>
+    <ul class="small mb-0">
+      <li>データは消さずに残し、${tenantRetentionDays} 日間は復元できます（復元すると停止中に戻ります）。</li>
+      <li>ユーザはログインできず、自動の処理と送信の操作も止まったままになります。</li>
+      <li>${tenantRetentionDays} 日を過ぎると、システム管理者が「完全削除」でデータを消せるようになります（自動では消しません）。</li>
+    </ul>`;
+  showModal('テナントを削除', tenantSlugConfirmBody(t, lead), async () => {
+    const confirmSlug = readConfirmSlug(t);
+    await api('api/tenants.php', { method: 'POST', query: { action: 'delete' }, body: { id: t.id, confirm_slug: confirmSlug } });
+    toast('削除しました（「削除済み」から復元できます）', 'ok');
+    renderTenants();
+  }, { saveLabel: '削除する', saveClass: 'btn-danger' });
+}
+async function restoreTenant(id) {
+  const t = Cache.tenants[id];
+  if (!t) return;
+  if (!confirm(`${t.name} を復元します。復元すると停止中に戻ります（有効にするのは編集から行います）。よろしいですか？`)) return;
+  try {
+    await api('api/tenants.php', { method: 'POST', query: { action: 'restore' }, body: { id } });
+    toast('復元しました（停止中）', 'ok'); renderTenants();
+  } catch (e) { toast(e.message, 'err'); }
+}
+function purgeTenant(id) {
+  const t = Cache.tenants[id];
+  if (!t) return;
+  const lead = `<p class="tenant-note-danger"><strong>${esc(t.name)}</strong> のデータを完全に削除します。元に戻せません。</p>
+    <ul class="small mb-0">
+      <li>先に DB 全体のバックアップを取ります。</li>
+      <li>このテナントの対象者、キャンペーン、教育、アンケートなどの行をすべて消します。監査ログは残します。</li>
+      <li>テナントのファイルは消さずに、退避のフォルダ（_deleted）へ移します。</li>
+    </ul>`;
+  showModal('テナントを完全削除', tenantSlugConfirmBody(t, lead), async () => {
+    const confirmSlug = readConfirmSlug(t);
+    const r = await api('api/tenants.php', { method: 'POST', query: { action: 'purge' }, body: { id: t.id, confirm_slug: confirmSlug }, timeout: 120000 });
+    toast(`完全削除しました（${Number(r.total)} 行）`, 'ok');
+    tenantDetailId = null;
+    await setupTenantSwitcher(); renderTenants();
+  }, { saveLabel: '完全削除する', saveClass: 'btn-danger' });
 }
 
 /* ========== モーダル ========== */
@@ -4263,7 +4543,9 @@ function showModal(title, bodyHtml, onSave, options = {}) {
   $('#appModalBody').innerHTML = bodyHtml;
   const saveBtn = $('#appModalSave');
   const newBtn = saveBtn.cloneNode(true);
-  newBtn.classList.remove('d-none');
+  // 削除などの確認では、ボタンの文言と色を変える(次に開くモーダルへ持ち越さないよう毎回決め直す)
+  newBtn.textContent = options.saveLabel || '保存';
+  newBtn.className = `btn ${options.saveClass || 'btn-primary'}`;
   saveBtn.parentNode.replaceChild(newBtn, saveBtn);
   newBtn.addEventListener('click', async () => {
     clearModalErrors();
@@ -4537,4 +4819,5 @@ Object.assign(window, {
   launchCampaign, stopCampaign, resumeCampaign, showCampaignProgress, showCampaignData, loadCampaignFile, viewMaster, editMaster, downloadMaster, deleteCampaign, editTarget, deleteTarget, restoreTarget,
   editGroup, deleteGroup, setTplKind, editTemplate, deleteTemplate, tplViewer, scenarioViewer,
   editUser, deleteUser, editTenant, showReportDetail, generateCampaign,
+  openTenantDetail, closeTenantDetail, switchToTenant, setTenantStatusFilter, deleteTenant, restoreTenant, purgeTenant,
 });

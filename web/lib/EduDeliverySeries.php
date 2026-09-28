@@ -9,6 +9,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class EduDeliverySeries
 {
@@ -41,7 +42,9 @@ final class EduDeliverySeries
     {
         $result = ['created' => 0, 'ended' => 0, 'delivery_ids' => []];
         $rows = Db::all(
-            'SELECT * FROM edu_delivery_series WHERE is_active = 1 AND next_run_at <= ? ORDER BY id',
+            // 停止中・削除済みのテナントの系列は回を作らない(有効に戻すと次の実行で作る)
+            'SELECT * FROM edu_delivery_series WHERE is_active = 1 AND next_run_at <= ? AND '
+            . TenantStatus::operationalSql('tenant_id') . ' ORDER BY id',
             [$now->format('Y-m-d H:i:s')]
         );
         foreach ($rows as $series) {

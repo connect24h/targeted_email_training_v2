@@ -95,6 +95,8 @@ h6, .h6 { font-weight: 600; }
 .app-navbar > div { min-width: 0; flex-wrap: nowrap; }
 .app-navbar > div:first-child { flex: 0 1 auto; overflow: hidden; }
 .app-navbar > div:last-child { flex: none; }
+/* テナントの切り替えは、長い名前や「（停止中）」の添え書きで上のバーを押し出さないよう幅を抑える */
+#tenantSwitcher { max-width: min(320px, 38vw); min-width: 0; text-overflow: ellipsis; }
 .app-brand { min-width: 0; white-space: nowrap; }
 .app-user { flex: 0 1 auto; min-width: 0; max-width: min(22rem, 30vw); color: var(--tet-text-2); font-size: .8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-icon-btn {
@@ -326,6 +328,7 @@ h6, .h6 { font-weight: 600; }
 .app-toast.ok { background: var(--tet-success); }
 .app-toast.err { background: var(--tet-danger); }
 .app-toast.info { background: var(--tet-accent); }
+.app-toast.warn { background: var(--tet-warning); }
 
 .card-header { font-weight: 600; background: var(--tet-surface); }
 .view-panel { animation: fade .15s; }
@@ -471,3 +474,24 @@ h6, .h6 { font-weight: 600; }
 
 .view-lead { margin: -.5rem 0 1rem; color: var(--tet-text-2); font-size: .8125rem; }
 .view-panel > .d-flex:first-child { flex-wrap: wrap; gap: .5rem; }
+
+/* ===== テナント管理 ===== */
+.tenant-name-link { font-weight: 500; color: var(--tet-accent); text-decoration: none; }
+.tenant-name-link:hover { color: var(--tet-accent-hover); text-decoration: underline; }
+.tenant-filter-count { color: var(--tet-text-3); font-size: 12px; }
+.btn-group .btn.active .tenant-filter-count { color: inherit; }
+.tenant-badge-warning { background: var(--tet-warning-soft); color: var(--tet-warning); border: 1px solid var(--tet-warning); }
+.tenant-note-danger { color: var(--tet-danger); }
+.tenant-notice {
+  background: var(--tet-warning-soft);
+  border: 1px solid var(--tet-warning);
+  border-radius: var(--tet-radius-sm);
+  color: var(--tet-text);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.tenant-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.tenant-stat { border: 1px solid var(--tet-border); border-radius: var(--tet-radius-sm); padding: 8px 12px; background: var(--tet-surface-2); }
+.tenant-stat-label { font-size: 12px; color: var(--tet-text-2); }
+.tenant-stat-value { font-size: 16px; font-weight: 600; color: var(--tet-text); }
+.tenant-memo { white-space: pre-wrap; }

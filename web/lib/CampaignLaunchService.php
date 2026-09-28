@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/CampaignPreflight.php';
 require_once __DIR__ . '/CampaignLauncher.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 /** 配信前確認と生成の間で内容が変わった場合、scheduleを公開しない。 */
 final class CampaignLaunchService
@@ -11,6 +12,11 @@ final class CampaignLaunchService
     {
         if (!preg_match('/^[a-f0-9]{64}$/D', $expectedRevision)) {
             return self::failure(400, '配信前確認が必要です');
+        }
+        // 停止中・削除済みのテナントでは、superadmin でも開始しない
+        $blocked = TenantStatus::sendBlockReason($tenantId);
+        if ($blocked !== null) {
+            return self::failure(409, $blocked);
         }
         try {
             $before = CampaignPreflight::inspect($campaignId, $tenantId);

@@ -8,8 +8,14 @@ CREATE TABLE IF NOT EXISTS tenants (
   name       TEXT NOT NULL,
   slug       TEXT NOT NULL UNIQUE,              -- 英数字・ハイフンのみ。data_dir 名に使用
   data_dir   TEXT NOT NULL,                     -- /opt/training/tet2-data/{slug}
-  status     TEXT NOT NULL DEFAULT 'active',    -- active / suspended
-  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  status     TEXT NOT NULL DEFAULT 'active',    -- active / suspended / deleted(論理削除。90日後に手動で完全削除できる)
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  deleted_at        TEXT DEFAULT NULL,           -- 論理削除の日時
+  contact_name      TEXT DEFAULT NULL,           -- 担当者の名前
+  contact_email     TEXT DEFAULT NULL,           -- 担当者の連絡先のメール
+  contract_end_date TEXT DEFAULT NULL,           -- 契約の終了日 'YYYY-MM-DD'
+  target_limit      INTEGER DEFAULT NULL,        -- 対象者数の上限(超えても拒否せず警告だけ)
+  memo              TEXT DEFAULT NULL
 );
 
 -- 管理者ユーザ（訓練を運用する側）。tenant_id NULL = superadmin（全テナント）

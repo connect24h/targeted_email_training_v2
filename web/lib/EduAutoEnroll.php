@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class EduAutoEnroll
 {
@@ -27,7 +28,8 @@ final class EduAutoEnroll
         $deliveries = Db::all(
             "SELECT id, tenant_id, phish_campaign_id
              FROM edu_deliveries
-             WHERE triggered_by = 'phishing_failure' AND status = 'running'"
+             WHERE triggered_by = 'phishing_failure' AND status = 'running'
+               AND " . TenantStatus::operationalSql('tenant_id')
         );
 
         $totalAssigned = 0;
