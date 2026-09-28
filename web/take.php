@@ -172,7 +172,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
   <!-- 結果と振り返り -->
   <div class="wrap d-none" id="resultView">
     <div class="card-t p-4 text-center mb-3">
-      <div class="score-ring" id="scoreRing" style="--pct:0"><div><div class="fs-2 fw-bold" id="rPct"></div><div class="small text-muted">正答率</div></div></div>
+      <div class="score-ring" id="scoreRing" style="--pct:0"><div><div class="fs-2 fw-bold" id="rPct"></div><div class="small text-muted">得点</div></div></div>
       <div class="mt-3" id="rBadge"></div>
       <div class="text-muted mt-1" id="rCount"></div>
       <div class="d-flex gap-2 justify-content-center mt-3 flex-wrap">
@@ -446,7 +446,10 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
     $('scoreRing').style.setProperty('--pct', res.percentage);
     $('rPct').textContent = `${res.percentage}%`;
     const correctCount = j.feedback.filter((f) => f.is_correct).length;
-    $('rCount').textContent = `${j.feedback.length} 問中 ${correctCount} 問 正解`;
+    // 得点は問題ごとの配点で計算するので、正解した問題の数の割合と違う時はその旨を添える
+    const countPct = j.feedback.length ? Math.round(correctCount / j.feedback.length * 100) : 0;
+    $('rCount').textContent = `${j.feedback.length} 問中 ${correctCount} 問 正解`
+      + (countPct !== Number(res.percentage) ? '（得点は問題ごとの配点で計算しています）' : '');
     $('rBadge').innerHTML = res.passed === true ? '<span class="badge text-bg-success fs-6"><i class="bi bi-check-circle"></i> 合格</span>'
       : res.passed === false ? `<span class="badge text-bg-danger fs-6"><i class="bi bi-x-circle"></i> 不合格${Number.isFinite(Number(res.pass_score)) ? `（合格は ${Number(res.pass_score)}% 以上）` : ''}</span>`
       : '<span class="badge text-bg-primary fs-6"><i class="bi bi-flag"></i> 受講完了</span>';
