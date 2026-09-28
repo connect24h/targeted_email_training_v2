@@ -119,6 +119,31 @@ sudo deploy/tet2-prune-backups.sh --apply
 
 `.trash/`の物理削除は本scriptの責務外とし、別の承認済み運用で行う。
 
+### 管理画面の多要素認証とパスワードの方針（段階1、G43・G44）
+
+`20261015-admin-mfa` migrationを**コードより先に**適用する。`users`へ列（`mfa_secret`・`mfa_enabled_at`・`mfa_last_step`）を足し、`user_mfa_recovery_codes`と`tenant_security_policies`の2表を作るだけで、既存のユーザは多要素認証なし、方針の行もないまま（従来どおりパスワードだけでログインでき、パスワードの決まりも`PasswordPolicy`のまま）。新しい`bootstrap.php`は毎リクエストで`tenant_security_policies`を読むので、migration前にコードを配備すると管理画面の全APIが失敗する。
+
+TOTPの秘密鍵は、`secrets.ini`（既定`/opt/training/tet2-data/secrets.ini`、`TET2_SECRETS_FILE`で差し替え可）の`[mfa] secret_key`（32バイトの乱数のbase64）で暗号化してDBに置く。鍵はGit・Web root・配備backupに入れず、DB backupとは別の保護された場所に控える。
+
+```ini
+[mfa]
+; php -r 'echo base64_encode(random_bytes(32)), PHP_EOL;' で作る
+secret_key = <44文字のbase64>
+```
+
+- 鍵が未設定の間は、登録の開始が503になり、方針で多要素認証を必須にする保存も409で断る（誰も登録できず全員が止まるのを防ぐ）。
+- 鍵をなくす・変えると、登録済みの全員の確認コードが通らなくなる（回復コードは鍵なしでも使える）。その場合は下のCLIで全員を解除し、登録し直してもらう。
+- 方針（最小の文字数12〜64、文字の種類3か4、多要素認証の必須）は、組織管理者が自組織、システム管理者が全テナント共通（`tenant_id` NULLの1行）を設定する。両方あれば厳しい方が効き、`PasswordPolicy`より弱くはできない。必須にした組織の未登録のユーザは、次の操作から登録の画面とAPI（`users.php`の`mfa_*`）以外が403になる。
+
+**回復手順（システム管理者が端末と回復コードの両方を失い、画面で解除できる管理者もいない時）**：サーバのrootで`web/db/mfa_reset.php`を使う。既定は確認だけで、`--apply`で秘密鍵・時刻窓・回復コードを消し、`--unlock`で5回失敗のロックも外す。監査ログに`user.mfa_reset_cli`を残す。パスワードは変えないので、本人はパスワードでログインし、改めて登録する（方針で必須なら登録の画面になる）。DBを読めるだけでは秘密鍵も回復コードも取り出せない。
+
+```bash
+# 本番のコピーで結果を確かめる
+TET2_DB_PATH=/abs/path/tet2-copy.sqlite php web/db/mfa_reset.php --email=admin@example.test
+# 承認後だけ（本番DBへの書き込み）
+php /var/www/html/tet2/db/mfa_reset.php --email=admin@example.test --apply --unlock
+```
+
 ## 配備後の手動verification
 
 ```bash
