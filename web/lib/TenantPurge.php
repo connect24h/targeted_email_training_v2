@@ -227,6 +227,15 @@ final class TenantPurge
         $pdo->exec('PRAGMA foreign_keys = OFF');
         try {
             return Db::txImmediate(function () use ($tenantId): array {
+                // 退避とバックアップの間に状態が変わっていないかを、書き込みの鍵を取った後にもう一度確かめる
+                $tenant = Db::one('SELECT status FROM tenants WHERE id = ?', [$tenantId]);
+                if ($tenant === null || $tenant['status'] !== 'deleted') {
+                    throw new TenantPurgeError('テナントの状態が変わったため、完全削除を中止しました', 409);
+                }
+                $blockers = TenantStatus::activeWorkBlockers($tenantId);
+                if ($blockers !== []) {
+                    throw new TenantPurgeError(implode('。', $blockers), 409);
+                }
                 $before = $this->foreignKeyViolations();
                 $reportMailIds = array_map('intval', array_column(Db::all(
                     'SELECT report_mail_id AS id FROM report_mail_matches WHERE tenant_id = ?

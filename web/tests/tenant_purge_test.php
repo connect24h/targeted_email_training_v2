@@ -182,6 +182,20 @@ $queued = Db::insert("INSERT INTO send_schedule (campaign_id, scheduled_at, stat
 check($code === 409 && str_contains($msg, 'バッチ'), 'T3-5: 送信待ちのバッチがあれば 409');
 Db::run('DELETE FROM send_schedule WHERE id = ?', [$queued]);
 
+// 事前の確かめの後(退避とバックアップの間)に配信が始まっても、行を消すトランザクションの中で止める
+$deleteRows = new ReflectionMethod(TenantPurge::class, 'deleteRows');
+$race = Db::insert("INSERT INTO campaigns (tenant_id, name, status) VALUES (3, '割り込み', 'running')");
+$countsBeforeRace = tableCounts();
+[$code, $msg] = purgeCode(fn() => $deleteRows->invoke($purger, 3));
+check($code === 409 && str_contains($msg, 'キャンペーン') && tableCounts() === $countsBeforeRace,
+    'T3-5b: 行を消す直前にも実行中の仕事を確かめ、あれば 409 で1行も消さない');
+Db::run('DELETE FROM campaigns WHERE id = ?', [$race]);
+Db::run("UPDATE tenants SET status = 'suspended' WHERE id = 3");
+$countsBeforeRace = tableCounts();
+[$code] = purgeCode(fn() => $deleteRows->invoke($purger, 3));
+check($code === 409 && tableCounts() === $countsBeforeRace, 'T3-5c: 行を消す直前に削除済みでなくなっていれば 409 で1行も消さない');
+Db::run("UPDATE tenants SET status = 'deleted' WHERE id = 3");
+
 Db::run('CREATE TABLE extra_tenant_things (id INTEGER PRIMARY KEY, tenant_id INTEGER)');
 [$code, $msg] = purgeCode(fn() => $purger->purge(3, 'victim-co', $now));
 check($code === 409 && str_contains($msg, 'extra_tenant_things'), 'T3-6: 手順が知らないテーブルがあれば中止する');
