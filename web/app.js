@@ -155,6 +155,9 @@ async function logout(silent = false) {
   $('#appView').classList.add('d-none');
   $('#loginView').classList.remove('d-none');
   $('#loginPassword').value = '';
+  // 前の利用者の画面の位置を URL に残さず、入力欄から始める
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+  $('#loginEmail').focus();
 }
 async function checkSession() {
   try {
@@ -308,7 +311,35 @@ function setSidebarOpen(open) {
   $('#sidebarToggle').setAttribute('aria-expanded', String(open));
   $('#sidebarToggle').setAttribute('aria-label', open ? 'メニューを閉じる' : 'メニューを開く');
 }
-function renderCurrentView() { const fn = VIEWS[State.view]; if (fn) fn().catch((e) => toast(e.message, 'err')); }
+// 一覧の読み込みの状態: 描き始める前に表示中の表を「読み込み中」にし、失敗したら理由と再読み込みを出す。
+// 各画面の描く関数を個別に直さずに済むよう、画面の切り替えの入口で扱う。
+function panelTableBodies(view) {
+  const panel = document.querySelector(`[data-panel="${view}"]`);
+  return panel ? [...panel.querySelectorAll('table > tbody[id]')].filter((tb) => tb.offsetParent !== null) : [];
+}
+function tableColumns(tbody) { return tbody.closest('table')?.querySelectorAll('thead th').length || 1; }
+function loadingRow(cols) {
+  return `<tr class="table-state-row" data-state="loading"><td colspan="${cols}" class="text-center text-muted py-4"><span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>読み込み中…</td></tr>`;
+}
+function errorRow(cols, message) {
+  return `<tr class="table-state-row" data-state="error"><td colspan="${cols}" class="text-center py-4" role="alert">
+    <div class="text-danger mb-2"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>読み込めませんでした。${esc(message)}</div>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="renderCurrentView()"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> 再読み込み</button></td></tr>`;
+}
+function renderCurrentView() {
+  const view = State.view;
+  const fn = VIEWS[view];
+  if (!fn) return;
+  const bodies = panelTableBodies(view);
+  for (const tb of bodies) tb.innerHTML = loadingRow(tableColumns(tb));
+  fn().then(() => {
+    // 描く関数が触らなかった表は、読み込み中のまま残さない
+    for (const tb of bodies) if (tb.querySelector('tr[data-state="loading"]')) tb.innerHTML = '';
+  }).catch((e) => {
+    for (const tb of bodies) if (tb.querySelector('tr[data-state="loading"]')) tb.innerHTML = errorRow(tableColumns(tb), e.message);
+    toast(e.message, 'err');
+  });
+}
 
 /* ========== ダッシュボード ========== */
 let dashChart = null;
@@ -1816,7 +1847,12 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     </div>`;
   let campaignEditorSteps;
   showModal(isEdit ? 'キャンペーン編集' : '新規キャンペーン', body, async () => {
-    if (!campaignEditorSteps.validateBeforeSave()) throw new Error('入力内容を確認してください');
+    if (!campaignEditorSteps.validateBeforeSave()) {
+      // 該当の手順と欄はブラウザの案内で示すので、重ねてエラーを出さない
+      const err = new Error('入力内容を確認してください');
+      err.handled = true;
+      throw err;
+    }
     const f = $('#campaignForm');
     // コンテンツ収集
     const contents = Array.from(document.querySelectorAll('#contentsList .content-row')).map((row) => {
@@ -1860,7 +1896,15 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     if (f.business_start.value.trim()) payload.business_start = f.business_start.value.trim();
     if (f.business_end.value.trim()) payload.business_end = f.business_end.value.trim();
     if (f.beacon_base && f.beacon_base.value.trim()) payload.beacon_base = f.beacon_base.value.trim();
-    if (!payload.target_ids.length && !payload.group_ids.length) throw new Error('対象者かグループを選択してください');
+    if (!payload.target_ids.length && !payload.group_ids.length) {
+      // 対象者の手順へ移り、欄の下に理由を出す(最終確認の手順に留まったままにしない)
+      campaignEditorSteps.openStep('targets');
+      markModalField(f.group_ids, '対象グループか個別対象者を1つ以上選んでください');
+      f.group_ids.focus();
+      const err = new Error('対象者かグループを選択してください');
+      err.handled = true;
+      throw err;
+    }
     if (isEdit) {
       payload.id = campaignId;
       await api('api/campaigns.php', { method: 'POST', query: { action: 'update' }, body: payload });
@@ -4217,7 +4261,13 @@ function setAppModalSize(size = null) {
   dialog.classList.remove('modal-sm', 'modal-lg', 'modal-xl', 'modal-fullscreen');
   if (['sm', 'lg', 'xl', 'fullscreen'].includes(size)) dialog.classList.add(`modal-${size}`);
 }
+let modalOpener = null;
+function rememberModalOpener() {
+  const active = document.activeElement;
+  if (active && active !== document.body && !$('#appModal').contains(active)) modalOpener = active;
+}
 function showModal(title, bodyHtml, onSave, options = {}) {
+  rememberModalOpener();
   setAppModalSize(options.size || null);
   $('#appModalTitle').textContent = title;
   $('#appModalBody').innerHTML = bodyHtml;
@@ -4226,15 +4276,71 @@ function showModal(title, bodyHtml, onSave, options = {}) {
   newBtn.classList.remove('d-none');
   saveBtn.parentNode.replaceChild(newBtn, saveBtn);
   newBtn.addEventListener('click', async () => {
+    clearModalErrors();
+    if (!checkModalRequired()) return;
     newBtn.disabled = true;
+    let failed = false;
     try { await onSave(); modalInstance.hide(); }
-    catch (e) { toast(e.message, 'err'); }
-    finally { newBtn.disabled = false; }
+    catch (e) { failed = true; if (!e.handled) showModalError(e.message); }
+    finally {
+      newBtn.disabled = false;
+      // 失敗した時は、入力欄に移していなければ保存ボタンにフォーカスを戻す(body に落ちると Escape が効かない)
+      if (failed && !$('#appModalBody').contains(document.activeElement)) newBtn.focus();
+    }
   });
   if (!modalInstance) modalInstance = new bootstrap.Modal($('#appModal'));
   modalInstance.show();
 }
+// モーダルのフォームのエラーを、起きた欄の下に出す(B3)。
+function modalFieldLabel(field) {
+  const byFor = field.id ? document.querySelector(`#appModalBody label[for="${CSS.escape(field.id)}"]`) : null;
+  const label = byFor || field.closest('.mb-2, .mb-3, [class*="col-"]')?.querySelector('label');
+  return (label?.textContent || field.name).replace(/（.*?）|\(.*?\)/g, '').trim();
+}
+function markModalField(field, message) {
+  field.classList.add('is-invalid');
+  field.setAttribute('aria-invalid', 'true');
+  const fb = document.createElement('div');
+  fb.className = 'invalid-feedback modal-field-error';
+  fb.textContent = message;
+  fb.id = `${field.name || 'field'}-error-${Date.now()}`;
+  field.setAttribute('aria-describedby', fb.id);
+  field.insertAdjacentElement('afterend', fb);
+  field.addEventListener('input', () => {
+    field.classList.remove('is-invalid');
+    field.removeAttribute('aria-invalid');
+    fb.remove();
+  }, { once: true });
+}
+function clearModalErrors() {
+  $$('#appModalBody .modal-field-error, #appModalBody .modal-form-error').forEach((el) => el.remove());
+  $$('#appModalBody .is-invalid').forEach((el) => { el.classList.remove('is-invalid'); el.removeAttribute('aria-invalid'); });
+}
+function checkModalRequired() {
+  // キャンペーン作成の手順の中の欄は、手順を切り替えて示す専用の確認(validateBeforeSave)に任せる
+  const missing = $$('#appModalBody [required]').filter((f) => !f.disabled && f.offsetParent !== null
+    && !f.closest('[data-campaign-step]') && !String(f.value).trim());
+  for (const f of missing) markModalField(f, `${modalFieldLabel(f)}を入力してください`);
+  if (missing.length) missing[0].focus();
+  return !missing.length;
+}
+function showModalError(message) {
+  // API の「name は必須です」「slug が不正です」の形なら、該当の欄に出す
+  const m = /^([a-z_]+) (は必須です|が不正です|は既に使用されています)$/.exec(String(message));
+  const field = m ? $('#appModalBody').querySelector(`[name="${CSS.escape(m[1])}"]`) : null;
+  if (field && field.offsetParent !== null) {
+    markModalField(field, `${modalFieldLabel(field)}${m[2]}`);
+    field.focus();
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'alert alert-danger py-2 modal-form-error';
+  box.setAttribute('role', 'alert');
+  box.textContent = message;
+  $('#appModalBody').prepend(box);
+}
 function showInfoModal(title, bodyHtml, options = {}) {
+  rememberModalOpener();
   setAppModalSize(options.size || null);
   $('#appModalTitle').textContent = title;
   $('#appModalBody').innerHTML = bodyHtml;
@@ -4269,8 +4375,20 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#helpToggle').setAttribute('aria-expanded', 'false');
     $('#helpToggle').focus();
   });
+  $('#appModal').addEventListener('hidden.bs.modal', () => {
+    // 閉じたら開いたボタンへ戻す。ボタンが消えていれば中央へ(フォーカスを body に落とさない)
+    const target = modalOpener && modalOpener.isConnected && modalOpener.offsetParent !== null ? modalOpener : $('#appMain');
+    modalOpener = null;
+    if (target === $('#appMain')) target.setAttribute('tabindex', '-1');
+    target.focus({ preventScroll: true });
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    // 保存の失敗などでフォーカスがモーダルの外にある時も、Escape でモーダルを閉じる
+    if ($('#appModal').classList.contains('show') && !$('#appModal').contains(document.activeElement) && modalInstance) {
+      modalInstance.hide();
+      return;
+    }
     if ($('#sidebar').classList.contains('open')) { setSidebarOpen(false); $('#sidebarToggle').focus(); return; }
     if (!$('#contextHelp').classList.contains('d-none')) $('#helpClose').click();
   });

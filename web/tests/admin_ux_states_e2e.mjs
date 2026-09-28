@@ -65,6 +65,86 @@ try {
   ok('作った偽ログインがキャンペーンの作成で選べ、案内は消える');
   await closeModal();
 
+  // --- B2 読み込みの状態 ---
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route('**/api/groups.php?action=list*', async (route) => { await gate; await route.continue(); });
+  await go('groups');
+  await page.locator('#groupsBody tr[data-state="loading"]').waitFor();
+  ok('一覧を読み込んでいる間は「読み込み中」の行が出る');
+  release();
+  await page.locator('#groupsBody tr[data-state="loading"]').waitFor({ state: 'detached' });
+  await page.unroute('**/api/groups.php?action=list*');
+  await page.route('**/api/groups.php?action=list*', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ success: false, error: 'サーバエラー' }) }));
+  await go('dashboard');
+  await go('groups');
+  const errorRow = page.locator('#groupsBody tr[data-state="error"]');
+  await errorRow.waitFor();
+  assert.match(await errorRow.innerText(), /読み込めませんでした/);
+  await page.unroute('**/api/groups.php?action=list*');
+  await errorRow.getByRole('button', { name: /再読み込み/ }).click();
+  // 失敗の行は、まず読み込み中の行に替わり、そのあと一覧になる
+  await page.waitForFunction(() => !document.querySelector('#groupsBody tr[data-state]'), null, { timeout: 5000 });
+  ok('読み込みに失敗すると理由と再読み込みが出て、押すと読み直す');
+
+  // --- B3 フォームのエラー ---
+  let createCalls = 0;
+  await page.route('**/api/groups.php?action=create*', (route) => { createCalls += 1; return route.continue(); });
+  await page.locator('#newGroupBtn').click();
+  await page.locator('#groupForm').waitFor();
+  await page.locator('#appModalSave').click();
+  const nameField = page.locator('#groupForm [name=name]');
+  assert.match(await nameField.getAttribute('class'), /is-invalid/);
+  assert.equal(await page.locator('#groupForm .invalid-feedback').innerText(), '名称を入力してください');
+  assert.equal(createCalls, 0);
+  assert.equal(await page.evaluate(() => document.activeElement?.name), 'name');
+  ok('必須の欄が空なら、送らずに欄の下へラベルの名前で理由を出し、その欄に移る');
+  await nameField.fill('E2E グループ');
+  assert.equal(await page.locator('#groupForm .invalid-feedback').count(), 0);
+  await page.unroute('**/api/groups.php?action=create*');
+  await page.route('**/api/groups.php?action=create*', (route) => route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ success: false, error: 'kind が不正です' }) }));
+  await page.locator('#appModalSave').click();
+  await page.locator('#groupForm .invalid-feedback').waitFor();
+  assert.equal(await page.locator('#groupForm .invalid-feedback').innerText(), '種別が不正です');
+  ok('サーバーが項目の名前で返したエラーも、該当の欄の下に画面のラベルで出す');
+
+  // --- B4 フォーカス ---
+  await page.unroute('**/api/groups.php?action=create*');
+  await page.route('**/api/groups.php?action=create*', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ success: false, error: 'サーバエラー' }) }));
+  await page.locator('#appModalSave').click();
+  await page.locator('#appModalBody .modal-form-error').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'appModalSave');
+  ok('保存に失敗すると、モーダルの中に理由が出て、フォーカスは保存ボタンに戻る');
+  await page.evaluate(() => document.activeElement.blur());
+  await page.keyboard.press('Escape');
+  await page.locator('#appModal').waitFor({ state: 'hidden', timeout: 5000 });
+  // 背景の幕が消えてから閉じた合図(hidden.bs.modal)が出るので、フォーカスが移るのを待つ
+  await page.waitForFunction(() => document.activeElement?.id === 'newGroupBtn', null, { timeout: 3000 });
+  ok('フォーカスがモーダルの外でも Escape で閉じ、閉じたら開いたボタンに戻る');
+  await page.unroute('**/api/groups.php?action=create*');
+
+  await go('campaigns');
+  await page.locator('#newCampaignBtn').click();
+  await page.locator('[data-editor-mode]').waitFor();
+  await page.locator('[data-editor-mode]').click();
+  await page.locator('#appModal [name=name]').first().fill('E2E 対象者なし');
+  await page.locator('#appModal [name=start_at]').fill('2030-05-01T09:00');
+  await page.locator('#appModal [name=end_at]').fill('2030-05-02T18:00');
+  await page.locator('#appModal [name=from_address]').fill('info@example.test');
+  await page.locator('#appModalSave').click();
+  await page.locator('#appModal [name=group_ids].is-invalid').waitFor();
+  assert.equal(await page.locator('[data-campaign-step="targets"]').isVisible(), true);
+  assert.equal(await page.locator('[data-campaign-step="review"]').isVisible(), false);
+  assert.equal(await page.evaluate(() => document.activeElement?.name), 'group_ids');
+  ok('キャンペーンの対象者が空なら、対象者の手順へ移って欄の下に理由を出す');
+  await closeModal();
+
+  await page.locator('#logoutBtn').click();
+  await page.locator('#loginView:not(.d-none)').waitFor();
+  assert.equal(new URL(page.url()).hash, '');
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'loginEmail');
+  ok('ログアウトすると URL の画面の位置が消え、メールアドレスの欄から始まる');
+
   assert.deepEqual(errors, []);
   console.log(`\n${passed} passed`);
 } finally {

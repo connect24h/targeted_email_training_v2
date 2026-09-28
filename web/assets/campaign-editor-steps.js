@@ -88,8 +88,18 @@ function createCampaignEditorSteps(form, options = {}) {
     return false;
   }
 
+  // 保存の前の確認で問題があった手順を開く(対象者が空の時など)
+  function openStep(id) {
+    const index = CAMPAIGN_EDITOR_STEPS.findIndex(([stepId]) => stepId === id);
+    if (index < 0) return null;
+    current = index;
+    expert = false;
+    render();
+    return sections.get(id);
+  }
+
   render();
-  return { validateBeforeSave };
+  return { validateBeforeSave, openStep };
 }
 
 window.createCampaignEditorSteps = createCampaignEditorSteps;
