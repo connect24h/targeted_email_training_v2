@@ -20,6 +20,7 @@
 require_once __DIR__ . '/../lib/Db.php';
 require_once __DIR__ . '/../lib/EduMedia.php';
 require_once __DIR__ . '/../lib/TenantStatus.php';
+require_once __DIR__ . '/../lib/EduAttempts.php';
 
 // ---- 最小レスポンスヘルパ(bootstrap を使わないため自前) ----
 function take_json($data, int $code = 200): never
@@ -298,6 +299,16 @@ function take_question_image_file(string $token, int $questionId): array
     return ['path' => $path, 'mime' => EduMedia::mimeOf($name)];
 }
 
+/**
+ * 完了した割当は受け付けない。ただしマイページから受け直しの回を開いた割当は、その回を受け付ける(L5)。
+ */
+function take_reject_if_completed(array $a): void
+{
+    if ((string) $a['status'] === 'completed' && !EduAttempts::retakeOpen($a)) {
+        take_error('この受講は既に完了しています', 409);
+    }
+}
+
 /** 答え合わせ済みの解答(question_id => int[])。 */
 function take_locked_answers(int $assignmentId): array
 {
@@ -316,9 +327,7 @@ function take_handle_answer(): never
 {
     $token = take_token('post');
     $a = take_resolve($token);
-    if ((string) $a['status'] === 'completed') {
-        take_error('この受講は既に完了しています', 409);
-    }
+    take_reject_if_completed($a);
     if ((string) ($a['feedback_mode'] ?? '') !== 'immediate') {
         take_error('この配信は提出後にまとめて答え合わせをします', 409);
     }
@@ -346,6 +355,7 @@ function take_handle_answer(): never
         Db::run("UPDATE edu_assignments SET status='started', started_at=datetime('now','localtime') WHERE id=? AND status='assigned'",
             [(int) $a['id']]);
     }
+    EduAttempts::ensureOpen($a);
     $correct = json_decode((string) $q['correct_answer'], true) ?: [];
     Db::run(
         'INSERT OR IGNORE INTO edu_answer_locks (assignment_id, question_id, answer, is_correct) VALUES (?, ?, ?, ?)',
@@ -381,9 +391,15 @@ function take_upsert_response(array $assignment, array $result): int
     );
 }
 
-function take_save_attempt(array $assignment, array $result, array $questionMeta, bool $completed, bool $clearLocks = false): void
+/**
+ * 提出を保存する。edu_responses と割当は最新の提出の回の結果で上書きし(レポートは最新の回を数える)、
+ * 回ごとの結果は edu_attempts に残す(前の回は消さない)。
+ */
+function take_save_attempt(array $assignment, array $result, array $questionMeta, bool $completed, bool $clearLocks = false,
+    ?bool $passed = null): void
 {
-    Db::tx(function () use ($assignment, $result, $questionMeta, $completed, $clearLocks) {
+    Db::tx(function () use ($assignment, $result, $questionMeta, $completed, $clearLocks, $passed) {
+        EduAttempts::closeWithResult($assignment, $result, $passed);
         if ($clearLocks) {
             // eラーニングで不合格なら、答え合わせの固定を消して受け直せるようにする(採点の保存と同じトランザクション)
             Db::run('DELETE FROM edu_answer_locks WHERE assignment_id = ?', [(int) $assignment['id']]);
@@ -419,10 +435,7 @@ function take_handle_start(): never
 {
     $token = take_token('get');
     $a = take_resolve($token);
-
-    if ((string) $a['status'] === 'completed') {
-        take_error('この受講は既に完了しています', 409);
-    }
+    take_reject_if_completed($a);
 
     $questions = take_delivery_questions((int) $a['delivery_id']);
     if ($questions === []) {
@@ -437,10 +450,10 @@ function take_handle_start(): never
         );
         // token解決後に配信削除が先行した場合、消えた割当で受講成功を返さない。
         $a = take_resolve($token);
-        if ((string) $a['status'] === 'completed') {
-            take_error('この受講は既に完了しています', 409);
-        }
+        take_reject_if_completed($a);
     }
+    // 受講中の回を開く(再開なら今の回のまま。受け直しの回はマイページが開いている)
+    EduAttempts::ensureOpen($a);
 
     // correct_answer / explanation は秘匿(採点前に答えを渡さない)
     $out = [];
@@ -483,10 +496,7 @@ function take_handle_submit(): never
 {
     $token = take_token('post');
     $a = take_resolve($token);
-
-    if ((string) $a['status'] === 'completed') {
-        take_error('この受講は既に完了しています', 409);
-    }
+    take_reject_if_completed($a);
 
     $body = take_body();
     if (!isset($body['answers']) || !is_array($body['answers'])) {
@@ -552,7 +562,7 @@ function take_handle_submit(): never
     $passScore = $a['pass_score'] !== null ? (int) $a['pass_score'] : null;
     $passed = $passScore !== null ? ($result['percentage'] >= $passScore) : null;
     $completed = (string) $a['delivery_type'] !== 'elearning' || $passed === true;
-    take_save_attempt($a, $result, $qMeta, $completed, $immediate && !$completed);
+    take_save_attempt($a, $result, $qMeta, $completed, $immediate && !$completed, $passed);
 
     // 即時結果(解説つき)。ここで初めて correct_answer と explanation を返す。
     $feedback = [];

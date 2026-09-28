@@ -31,6 +31,7 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-media.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-delivery.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-user-password.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-learner.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

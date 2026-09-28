@@ -42,6 +42,8 @@ function tet2_test_boot(?string $seedSql = null): string
     putenv("TET2_DB_PATH={$tmp}");
     require_once __DIR__ . '/../lib/Db.php';
     require_once __DIR__ . '/../lib/TenantStatus.php';
+    // load_api は require の行を外すので、受講の API(edu_take)が使う受講の回の処理もここで読む
+    require_once __DIR__ . '/../lib/EduAttempts.php';
     if ($seedSql !== null) {
         Db::run($seedSql);
     }

@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS edu_deliveries (
   triggered_by     TEXT,                                -- manual / phishing_failure / new_target
   phish_campaign_id INTEGER,
   send_invites     INTEGER NOT NULL DEFAULT 0,          -- 1 の配信だけ、開始時と自動の投入時に受講の案内メールを送る
+  allow_retake_after_pass INTEGER NOT NULL DEFAULT 1,  -- 1 = 完了(合格)した後もマイページから受け直せる(新しい回として edu_attempts に残す)
   series_id        INTEGER REFERENCES edu_delivery_series(id), -- 毎月の配信(schema-edu-delivery.sql)から作った回
   target_positions TEXT,                                -- target_type=position の役職区分(JSON配列)
   risk_results     TEXT,                                -- target_type=risk の訓練の結果の区分(JSON配列)

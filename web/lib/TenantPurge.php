@@ -42,6 +42,7 @@ final class TenantPurge
         ['campaign_template_snapshots', 'tenant_id = ?'],
         ['campaign_report_snapshots', 'tenant_id = ?'],
         ['events', 'tenant_id = ?'],
+        ['edu_attempts', 'tenant_id = ?'],
         ['edu_answer_locks', 'assignment_id IN (SELECT id FROM edu_assignments WHERE tenant_id = ?)'],
         ['edu_response_answers', 'response_id IN (SELECT id FROM edu_responses WHERE tenant_id = ?)'],
         ['edu_responses', 'tenant_id = ?'],

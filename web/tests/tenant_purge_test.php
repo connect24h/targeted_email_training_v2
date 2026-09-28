@@ -83,6 +83,11 @@ function seedTenant(int $t, string $tag): void
     $response = $id('INSERT INTO edu_responses (tenant_id, assignment_id) VALUES (?, ?)', [$t, $assignment]);
     Db::run('INSERT INTO edu_response_answers (response_id, question_id) VALUES (?, ?)', [$response, $question]);
     Db::run("INSERT INTO edu_answer_locks (assignment_id, question_id, answer, is_correct) VALUES (?, ?, '[0]', 1)", [$assignment, $question]);
+    Db::run("INSERT INTO edu_attempts (tenant_id, assignment_id, attempt_no, completed_at, percentage) VALUES (?, ?, 1, '2026-09-03 10:00:00', 100)",
+        [$t, $assignment]);
+    // 受講者のマイページのアカウント(対象者につながる。完全削除では対象者と一緒に消える)
+    Db::run("INSERT INTO users (tenant_id, email, password_hash, name, role, status, target_id) VALUES (?, ?, 'x', 'L', 'learner', 'active', ?)",
+        [$t, "t-{$tag}@purge.test", $target]);
     Db::run("INSERT INTO edu_score_snapshots (tenant_id, snapshot_type, snapshot_date, target_id, group_id) VALUES (?, 'target', '2026-09-01', ?, ?)",
         [$t, $target, $group]);
     // アンケート

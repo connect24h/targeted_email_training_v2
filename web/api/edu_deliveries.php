@@ -434,6 +434,8 @@ function edu_d_parse_config(array $body, int $tenantId): array
             'phish_campaign_id' => $phishCampaignId,
             'feedback_mode' => edu_d_feedback_mode($body, $deliveryType),
             'send_invites' => edu_d_flag($body, 'send_invites', 0),
+            // 完了(合格)した後もマイページから受け直せるか(既定は許す)
+            'allow_retake_after_pass' => edu_d_flag($body, 'allow_retake_after_pass', 1),
             'target_positions' => edu_d_target_positions($body, $targetType),
             'risk_results' => edu_d_risk_results($body, $targetType, $triggeredBy, $phishCampaignId, $tenantId),
             'new_target_days' => edu_d_new_target_days($body, $triggeredBy),
@@ -529,9 +531,10 @@ function edu_d_handle_update(array $actor): never
 
     $feedbackMode = edu_d_feedback_mode($body, null);
     $sendInvites = array_key_exists('send_invites', $body) ? edu_d_flag($body, 'send_invites', 0) : null;
+    $allowRetake = array_key_exists('allow_retake_after_pass', $body) ? edu_d_flag($body, 'allow_retake_after_pass', 1) : null;
 
     if ($title === null && $passScore === null && $scheduledAt === null && !$clearSchedule && $deadline === null
-        && $triggeredBy === null && $feedbackMode === null && $sendInvites === null) {
+        && $triggeredBy === null && $feedbackMode === null && $sendInvites === null && $allowRetake === null) {
         json_error('更新項目がありません', 400);
     }
     // 下書きに予約の日時を入れたら予約にする(その日時に edu_scheduler.php が開始する)。予約を解除したら下書きに戻す
@@ -546,9 +549,10 @@ function edu_d_handle_update(array $actor): never
              triggered_by = COALESCE(?, triggered_by),
              feedback_mode = COALESCE(?, feedback_mode),
              send_invites = COALESCE(?, send_invites),
+             allow_retake_after_pass = COALESCE(?, allow_retake_after_pass),
              status = COALESCE(?, status)
          WHERE id = ? AND tenant_id = ? AND status IN (\'draft\',\'scheduled\')',
-        [$title, $passScore, $clearSchedule ? 1 : 0, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $status, $id, $tenantId]
+        [$title, $passScore, $clearSchedule ? 1 : 0, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $allowRetake, $status, $id, $tenantId]
     );
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);

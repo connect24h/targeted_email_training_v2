@@ -26,6 +26,7 @@ final class MigrationRunner
         '20261001-edu-delivery-features',
         '20261005-tenant-management',
         '20261008-user-password-tokens',
+        '20261012-learner-portal',
     ];
 
     /**
@@ -232,6 +233,14 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-user-password.sql'));
             return;
         }
+        if ($version === '20261012-learner-portal') {
+            // 受講者のマイページ(L1、L5)。users.target_id、配信の allow_retake_after_pass(既定 1)、受講の回の表を足す。
+            // 既存の回答(edu_responses)は1回目の回として写す。既存の表の行は変えない(レポートの数え方は変わらない)。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-learner.sql'));
+            $this->backfillEduAttempts($pdo);
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -250,6 +259,44 @@ final class MigrationRunner
             return;
         }
         throw new RuntimeException("未知のmigrationです: {$version}");
+    }
+
+    /** 回の行がない回答(migration 前の受講)を、1回目の提出済みの回として写す。何度流しても同じ。 */
+    private function backfillEduAttempts(PDO $pdo): void
+    {
+        $responses = $pdo->query(
+            'SELECT r.id, r.tenant_id, r.assignment_id, r.total_score, r.max_score, r.percentage,
+                    COALESCE(r.started_at, a.started_at) AS started_at, COALESCE(r.completed_at, a.completed_at) AS completed_at,
+                    d.pass_score
+             FROM edu_responses r
+             INNER JOIN edu_assignments a ON a.id = r.assignment_id
+             INNER JOIN edu_deliveries d ON d.id = a.delivery_id
+             WHERE NOT EXISTS (SELECT 1 FROM edu_attempts t WHERE t.assignment_id = r.assignment_id)'
+        )->fetchAll();
+        $answers = $pdo->prepare('SELECT question_id, answer, is_correct, score_earned FROM edu_response_answers WHERE response_id = ? ORDER BY id');
+        $insert = $pdo->prepare(
+            'INSERT INTO edu_attempts (tenant_id, assignment_id, attempt_no, is_retake, started_at, completed_at,
+                                       total_score, max_score, percentage, passed, answers)
+             VALUES (?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        foreach ($responses as $r) {
+            $answers->execute([(int) $r['id']]);
+            $list = [];
+            foreach ($answers->fetchAll() as $a) {
+                $list[] = [
+                    'question_id' => (int) $a['question_id'],
+                    'answer' => array_map('intval', json_decode((string) $a['answer'], true) ?: []),
+                    'is_correct' => (int) $a['is_correct'] === 1,
+                    'score_earned' => (int) $a['score_earned'],
+                ];
+            }
+            $passed = $r['pass_score'] !== null && $r['percentage'] !== null
+                ? ((int) $r['percentage'] >= (int) $r['pass_score'] ? 1 : 0) : null;
+            $insert->execute([
+                (int) $r['tenant_id'], (int) $r['assignment_id'], $r['started_at'], $r['completed_at'] ?? $r['started_at'],
+                $r['total_score'], $r['max_score'], $r['percentage'], $passed, json_encode($list),
+            ]);
+        }
     }
 
     private function applyElearningMaterials(PDO $pdo): void
@@ -385,6 +432,7 @@ final class MigrationRunner
             'users' => [
                 'password_pending' => 'INTEGER NOT NULL DEFAULT 0',
                 'session_epoch' => 'INTEGER NOT NULL DEFAULT 0',
+                'target_id' => 'INTEGER REFERENCES targets(id)',
             ],
             'tenants' => [
                 'deleted_at' => 'TEXT DEFAULT NULL',
@@ -434,6 +482,7 @@ final class MigrationRunner
                 'target_positions' => 'TEXT',
                 'risk_results' => 'TEXT',
                 'new_target_days' => 'INTEGER',
+                'allow_retake_after_pass' => 'INTEGER NOT NULL DEFAULT 1',
             ],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],
         ];

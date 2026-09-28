@@ -25,13 +25,14 @@ CREATE TABLE IF NOT EXISTS users (
   email         TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,                  -- password_hash(PASSWORD_DEFAULT)
   name          TEXT,
-  role          TEXT NOT NULL,                  -- superadmin / tenant_admin / operator / viewer
+  role          TEXT NOT NULL,                  -- superadmin / tenant_admin / operator / viewer / learner(マイページだけ。管理画面には入れない)
   status        TEXT NOT NULL DEFAULT 'active',
   failed_count  INTEGER NOT NULL DEFAULT 0,
   locked_until  TEXT,
   last_login_at TEXT,
   password_pending INTEGER NOT NULL DEFAULT 0,  -- 1 = パスワード未設定(招待を送った、または CSV で作った)。password_hash は使えない乱数
   session_epoch INTEGER NOT NULL DEFAULT 0,     -- パスワードを変えるたびに増やす。ログイン時の値と違うセッションは切る
+  target_id     INTEGER REFERENCES targets(id), -- role='learner' だけ: つながる対象者(同じテナント、1対象者に1つ。schema-learner.sql の索引)
   created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );

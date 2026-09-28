@@ -3372,6 +3372,9 @@ function eduDeliveryForm() {
     <div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="send_invites" id="eduSendInvites">
       <label class="form-check-label" for="eduSendInvites">受講の案内メールを送る</label></div>
     <div class="form-text mb-2">既定では送りません。送らない場合は、開始後に一覧の催促ボタンで案内するか、社内の連絡で受講を依頼してください。</div>
+    <div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="allow_retake_after_pass" id="eduAllowRetake" checked>
+      <label class="form-check-label" for="eduAllowRetake">完了（合格）した後も受け直せる</label></div>
+    <div class="form-text mb-2">受講者はマイページの「もう一度受講する」から受け直せます。前の回の結果は残り、レポートは最新の回で数えます。</div>
   </form>`;
 }
 
@@ -3428,7 +3431,7 @@ function eduDeliveryPayload(form) {
   const body = { title: form.title.value.trim(), delivery_type: type, feedback_mode: form.feedback_mode.value,
     target_type: target === 'new_target' ? 'all' : target,
     question_count: Number(form.question_count.value) || 3, category_ids: categories.length ? categories : undefined,
-    send_invites: form.send_invites.checked };
+    send_invites: form.send_invites.checked, allow_retake_after_pass: form.allow_retake_after_pass.checked };
   if (type === 'elearning') {
     body.pass_score = Number(form.pass_score.value) || 80;
     body.material_id = Number(form.material_id.value) || undefined;
@@ -3513,11 +3516,14 @@ async function editEduDelivery(id) {
       <div class="form-text">日時を入れると予約になり、その日時に自動で開始します。</div></div>
     <div class="form-check"><input class="form-check-input" type="checkbox" id="eduEditSendInvites"${Number(delivery.send_invites) === 1 ? ' checked' : ''}>
       <label class="form-check-label" for="eduEditSendInvites">受講の案内メールを送る</label></div>
+    <div class="form-check"><input class="form-check-input" type="checkbox" id="eduEditAllowRetake"${Number(delivery.allow_retake_after_pass ?? 1) === 1 ? ' checked' : ''}>
+      <label class="form-check-label" for="eduEditAllowRetake">完了（合格）した後も受け直せる</label></div>
   </form>`;
   showModal('教育配信を編集', body, async () => {
     const title = $('#eduEditTitle').value.trim();
     if (!title) throw new Error('タイトルを入力してください');
-    const payload = { id, title, feedback_mode: $('#eduEditFeedback').value, send_invites: $('#eduEditSendInvites').checked };
+    const payload = { id, title, feedback_mode: $('#eduEditFeedback').value, send_invites: $('#eduEditSendInvites').checked,
+      allow_retake_after_pass: $('#eduEditAllowRetake').checked };
     // 空にして保存したら予約を解除する(null を送る。送らないと API は予約をそのまま残す)
     payload.scheduled_at = $('#eduEditScheduledAt').value || null;
     await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' }, body: payload });
