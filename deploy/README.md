@@ -68,6 +68,13 @@ sudo systemctl enable --now tet2-edu-scheduler.timer
 - 管理画面の`/tet2`は外側のフォーム認証の後ろにあるため、外側の認証の資格を持たない人は招待のリンクを開けない。資格を持たない人を招待するなら、`set_password.php`と`api/password_set.php`だけを`credential_capture.php`と同じ形で認証から外す（Apacheの変更は別承認）。受講者のマイページ（sat.cojp.online）で使う時は、許可のリストにこの2つを足す。
 - テストとE2Eでは`TET2_MAIL_OUTBOX_DIR`（メールをファイルに書き、投函しない）か`TET2_EDU_MAIL_DISABLE=1`を使う。本番では設定しない。
 
+受講者のマイページ（L1〜L5、L7）を含む配備では、`20261012-learner-portal` migrationを**コードより先に**適用する。`users.target_id`、`edu_deliveries.allow_retake_after_pass`（既定1）、`edu_attempts`表を足し、既存の回答を1回目の回として写す。既存の割当と回答の行は変えない。新しい`edu_take.php`は提出のたびに`edu_attempts`へ書くため、migration前にコードを配備すると受講の提出が500になる。
+
+- 受講者のサイト（sat.cojp.online）の許可のリストに、`my.php`（`<Files>`は名前で合うので`api/my.php`も同じ1行で許可される）、`set_password.php`、`password_set.php`を足す。管理APIの`api/learners.php`は公開しない。Apacheの変更は別承認。反映後、`https://sat.cojp.online/my.php`がログイン画面を出すこと、`api/learners.php`と`index.html`が403のままであることを実HTTPで確かめる。
+- 招待のメールのURLの基点は`TET2_LEARNER_BASE_URL`（既定`https://sat.cojp.online`）。リンクは`set_password.php?token=...&site=my`で、設定の後に`my.php`へ案内する。
+- 招待は管理画面の対象者の一覧（組織管理者以上）からだけ送る。timerはない。
+- セッションのクッキーは`TET2MYSESID`（path `/`）で、管理画面の`TET2SESID`とは別。
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```
