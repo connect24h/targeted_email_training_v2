@@ -392,13 +392,7 @@ async function renderDashboard() {
     { label: '完了', value: done, icon: 'bi-check-circle', cls: 'val-success' },
     { label: '対象者延べ', value: targets, icon: 'bi-people' },
   ];
-  $('#kpiRow').innerHTML = kpis.map((k) => `
-    <div class="col-6 col-lg-3">
-      <div class="card kpi-card"><div class="card-body d-flex justify-content-between align-items-center">
-        <div><div class="kpi-value ${k.cls || ''}">${k.value}</div><div class="kpi-label">${k.label}</div></div>
-        <i class="bi ${k.icon} kpi-icon"></i>
-      </div></div>
-    </div>`).join('');
+  $('#kpiRow').innerHTML = kpis.map(kpiCard).join('');
 
   const labels = campaigns.map((c) => c.name);
   const counts = campaigns.map((c) => Number(c.target_count || 0));
@@ -4107,15 +4101,11 @@ async function renderEduReport() {
   const r = await api('api/edu_report.php', { query: { action: 'overview' } });
   const s = r.summary;
   $('#eduReportKpi').innerHTML = [
-    ['受講率', `${s.completion_rate}%`, 'bi-check2-circle'],
-    ['リテラシースコア', `${s.literacy_score}`, 'bi-mortarboard'],
-    ['割当', s.assigned, 'bi-people'],
-    ['完了', s.completed, 'bi-clipboard-check'],
-  ].map(([label, val, icon]) => `
-    <div class="col-6 col-md-3"><div class="card text-center"><div class="card-body py-3">
-      <i class="bi ${icon} fs-4 text-primary"></i>
-      <div class="fs-4 fw-bold">${val}</div><div class="small text-muted">${label}</div>
-    </div></div></div>`).join('');
+    { label: '受講率', value: `${s.completion_rate}%`, icon: 'bi-check2-circle' },
+    { label: 'リテラシースコア', value: `${s.literacy_score}`, icon: 'bi-mortarboard' },
+    { label: '割当', value: s.assigned, icon: 'bi-people' },
+    { label: '完了', value: s.completed, icon: 'bi-clipboard-check' },
+  ].map(kpiCard).join('');
   $('#eduReportDeptBody').innerHTML = (r.by_department || []).length ? r.by_department.map((d) =>
     `<tr><td>${esc(d.department)}</td><td>${d.average_score}%</td><td>${d.respondent_count}</td></tr>`).join('') : emptyRow(3);
   $('#eduReportCatBody').innerHTML = (r.by_category || []).filter((c) => c.answered > 0).length ?
@@ -4350,6 +4340,16 @@ function showInfoModal(title, bodyHtml, options = {}) {
   newBtn.classList.add('d-none');
   if (!modalInstance) modalInstance = new bootstrap.Modal($('#appModal'));
   modalInstance.show();
+}
+// 数字のカード(運用ホームと教育レポートで共通)。value は数値か API が返した整形済みの文字列。
+function kpiCard(k) {
+  return `
+    <div class="col-6 col-lg-3">
+      <div class="card kpi-card"><div class="card-body d-flex justify-content-between align-items-center">
+        <div><div class="kpi-value ${k.cls || ''}">${esc(String(k.value))}</div><div class="kpi-label">${esc(k.label)}</div></div>
+        <i class="bi ${k.icon} kpi-icon" aria-hidden="true"></i>
+      </div></div>
+    </div>`;
 }
 function emptyRow(cols) { return `<tr><td colspan="${cols}" class="text-center text-muted py-4">データがありません</td></tr>`; }
 
