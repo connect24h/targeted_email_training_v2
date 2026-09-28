@@ -124,10 +124,9 @@ try {
         mu_validate_html($html);
 
         if ($kind === 'auth') {
-            // 認証マスタは全テナント共通 → tenant_admin 以上(変更は全テナントに影響する)。
-            $rank = ['viewer' => 1, 'operator' => 2, 'tenant_admin' => 3, 'superadmin' => 4];
-            if (($rank[$actor['role']] ?? 0) < 3) {
-                json_error('認証マスタの変更はテナント管理者以上が可能です', 403);
+            // 認証マスタは全テナント共通 → superadmin だけ(変更はほかのテナントの訓練にも効く)。
+            if (($actor['role'] ?? '') !== 'superadmin') {
+                json_error('認証マスタの変更はシステム管理者だけが可能です', 403);
             }
             $file = (string) ($body['file'] ?? '');
             if (!in_array($file, AUTH_MASTER_FILES, true)) {

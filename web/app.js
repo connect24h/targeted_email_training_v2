@@ -809,7 +809,7 @@ const AUTH_MASTERS = [
   ['master5.html', '認証フラグ4: Microsoft 365（メールのみ）'],
 ];
 async function renderMasters() {
-  const canEditAuth = roleAtLeast(State.user.role, 'tenant_admin'); // 認証マスタは全テナント共通=tenant_admin以上
+  const canEditAuth = State.user.role === 'superadmin'; // 認証マスタは全テナント共通で、ほかのテナントの訓練にも効くのでシステム管理者だけ
   const authCards = AUTH_MASTERS.map(([f, label]) => `
     <div class="col-md-6 mb-2"><div class="card"><div class="card-body py-2 d-flex justify-content-between align-items-center">
       <div><div class="fw-bold small">${esc(label)}</div><code class="small text-muted">${esc(f)}</code></div>
@@ -3107,9 +3107,9 @@ function tplPreviewHtml(content, format, height = '40vh') {
 }
 
 // 単一テンプレート(偽ログイン/ネタバラシ/eラーニング等)のプレビュー/HTML/編集ビューア。
-// テンプレート編集可否: 共有プリセットは tenant_admin 以上、自テナント分は operator 以上。
+// テンプレート編集可否: 共有プリセットはシステム管理者だけ(全テナントに効く)、自テナント分は operator 以上。
 function canEditTemplate(isPreset) {
-  return Number(isPreset) ? roleAtLeast(State.user.role, 'tenant_admin') : roleAtLeast(State.user.role, 'operator');
+  return Number(isPreset) ? State.user.role === 'superadmin' : roleAtLeast(State.user.role, 'operator');
 }
 async function tplViewer(id) {
   let t;

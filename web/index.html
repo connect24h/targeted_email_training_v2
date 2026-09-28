@@ -280,8 +280,8 @@
           <h5 class="mb-0"><i class="bi bi-file-earmark-text me-1"></i>テンプレート</h5>
           <div class="d-flex gap-2 flex-wrap">
             <button class="btn btn-outline-secondary btn-sm" id="tplExportBtn"><i class="bi bi-download"></i> CSV出力（現タブ）</button>
-            <button class="btn btn-outline-secondary btn-sm" data-perm="tenant_admin" id="tplImportAddBtn"><i class="bi bi-upload"></i> CSV追加</button>
-            <button class="btn btn-outline-secondary btn-sm" data-perm="tenant_admin" id="tplImportUpsertBtn"><i class="bi bi-arrow-repeat"></i> CSV上書き更新</button>
+            <button class="btn btn-outline-secondary btn-sm" data-role="superadmin" id="tplImportAddBtn" title="共有テンプレートとして登録します（システム管理者だけ）"><i class="bi bi-upload"></i> CSV追加</button>
+            <button class="btn btn-outline-secondary btn-sm" data-role="superadmin" id="tplImportUpsertBtn" title="共有テンプレートを上書きします（システム管理者だけ）"><i class="bi bi-arrow-repeat"></i> CSV上書き更新</button>
             <button class="btn btn-primary btn-sm" data-perm="operator" id="newScenarioBtn"><i class="bi bi-plus-lg"></i> 新規シナリオ（件名＋本文）</button>
             <button class="btn btn-outline-primary btn-sm" data-perm="operator" id="newTemplateBtn"><i class="bi bi-plus-lg"></i> 新規（単体）</button>
           </div>
@@ -727,7 +727,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=5b133ea6"></script>
+<script src="app.js?v=e09ded36"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

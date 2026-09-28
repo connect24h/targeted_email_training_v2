@@ -29,12 +29,14 @@ $csv = make_csv([
     ['CSV_TEST_偽ログイン', 'phish_login', 'html', '<html>login</html>', '4', ''],
 ]);
 
-// operator は 403
+// operator と tenant_admin は 403(共有テンプレートとして登録するので superadmin だけ)
 $r = call_handler('templates_handle_import_csv', ['csv' => $csv, 'mode' => 'add'], 'operator');
 check($r['code'] === 403, 'operator の CSV import → 403');
-
-// tenant_admin で add → 3件追加、HTML本文が改行込みで保存される
 $r = call_handler('templates_handle_import_csv', ['csv' => $csv, 'mode' => 'add'], 'tenant_admin');
+check($r['code'] === 403, 'tenant_admin の CSV import → 403');
+
+// superadmin で add → 3件追加、HTML本文が改行込みで保存される
+$r = call_handler('templates_handle_import_csv', ['csv' => $csv, 'mode' => 'add'], 'superadmin');
 check($r['code'] === 200 && $r['payload']['added'] === 3, 'add で3件追加');
 $bodyRow = Db::one("SELECT content, format FROM templates WHERE name='CSV_TEST_本文A' AND kind='body'");
 check($bodyRow !== null && str_contains($bodyRow['content'], "\n") && str_contains($bodyRow['content'], '"引用"'),
@@ -43,18 +45,18 @@ check(Db::one("SELECT auth_flag FROM templates WHERE name='CSV_TEST_偽ログイ
 check(Db::one("SELECT scenario_key FROM templates WHERE name='CSV_TEST_件名A'")['scenario_key'] === 'csvtest', 'scenario_key が保存される');
 
 // 同じCSVを add で再import → 全件スキップ(同名)
-$r = call_handler('templates_handle_import_csv', ['csv' => $csv, 'mode' => 'add'], 'tenant_admin');
+$r = call_handler('templates_handle_import_csv', ['csv' => $csv, 'mode' => 'add'], 'superadmin');
 check($r['code'] === 200 && $r['payload']['added'] === 0 && $r['payload']['skipped'] === 3, 'add 再importは同名3件スキップ');
 
 // 内容を変えて upsert → 更新される
 $csv2 = make_csv([['CSV_TEST_件名A', 'subject', 'text', '更新後の件名A', '', 'csvtest']]);
-$r = call_handler('templates_handle_import_csv', ['csv' => $csv2, 'mode' => 'upsert'], 'tenant_admin');
+$r = call_handler('templates_handle_import_csv', ['csv' => $csv2, 'mode' => 'upsert'], 'superadmin');
 check($r['code'] === 200 && $r['payload']['updated'] === 1, 'upsert で1件更新');
 check(Db::one("SELECT content FROM templates WHERE name='CSV_TEST_件名A'")['content'] === '更新後の件名A', 'upsert の内容が反映される');
 
 // 不正な kind の行はスキップ(errors に記録)
 $csvBad = make_csv([['CSV_TEST_不正', 'invalid_kind', 'text', '内容', '', '']]);
-$r = call_handler('templates_handle_import_csv', ['csv' => $csvBad, 'mode' => 'add'], 'tenant_admin');
+$r = call_handler('templates_handle_import_csv', ['csv' => $csvBad, 'mode' => 'add'], 'superadmin');
 check($r['payload']['skipped'] === 1 && count($r['payload']['errors']) === 1, '不正な kind の行はスキップされエラー記録');
 
 echo "ALL TESTS PASSED\n";

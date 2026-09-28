@@ -26,7 +26,8 @@ function smCall(string $handler, array $body = [], array $get = [], string $role
     $GLOBALS['__TET2_TEST_ROLE'] = $role;
     $_GET = $get;
     // 本番ではディスパッチ側の require_role が走る（load_api はそこを切り落とす）ので、ここで同じ判定を通す。
-    $minRole = in_array($handler, ['sm_handle_upload', 'sm_handle_update', 'sm_handle_reanalyze', 'sm_handle_reputation'], true) ? 'operator' : 'viewer';
+    // 2026-09-28 から、実際のメールを扱うので読み取りも operator 以上(本物の入口は admin_permissions_e2e.mjs で確かめる)
+    $minRole = 'operator';
     try {
         $handler(require_role($minRole));
     } catch (Tet2TestExit $e) {

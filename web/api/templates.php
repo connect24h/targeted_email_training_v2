@@ -229,13 +229,12 @@ function templates_handle_update(array $actor): never
     $id = templates_int($body, 'id');
     $template = templates_assert_visible($id, $tenantId);
 
-    // 共有プリセット(tenant_id NULL または is_preset=1)は全テナント共通。編集は tenant_admin 以上。
+    // 共有プリセット(tenant_id NULL または is_preset=1)は全テナント共通で、ほかのテナントの訓練にも効く。編集は superadmin だけ。
     // 自テナントの非プリセットは operator 以上(従来どおり所有者のみ)。
     $isShared = ($template['tenant_id'] === null || (int) $template['is_preset'] === 1);
     if ($isShared) {
-        $rank = ['viewer' => 1, 'operator' => 2, 'tenant_admin' => 3, 'superadmin' => 4];
-        if (($rank[$actor['role']] ?? 0) < 3) {
-            json_error('共有テンプレートの編集はテナント管理者以上が可能です', 403);
+        if (($actor['role'] ?? '') !== 'superadmin') {
+            json_error('共有テンプレートの編集はシステム管理者だけが可能です', 403);
         }
     } elseif ((int) $template['tenant_id'] !== $tenantId) {
         json_error('他組織のデータにはアクセスできません', 403);
@@ -282,12 +281,11 @@ function templates_handle_delete(array $actor): never
     $id = templates_int($body, 'id');
     $template = templates_assert_visible($id, $tenantId);
 
-    // 共有プリセット(tenant_id NULL / is_preset=1)は全テナント共通 → 削除は tenant_admin 以上。
+    // 共有プリセット(tenant_id NULL / is_preset=1)は全テナント共通 → 削除は superadmin だけ。
     $isShared = ($template['tenant_id'] === null || (int) $template['is_preset'] === 1);
     if ($isShared) {
-        $rank = ['viewer' => 1, 'operator' => 2, 'tenant_admin' => 3, 'superadmin' => 4];
-        if (($rank[$actor['role']] ?? 0) < 3) {
-            json_error('共有テンプレートの削除はテナント管理者以上が可能です', 403);
+        if (($actor['role'] ?? '') !== 'superadmin') {
+            json_error('共有テンプレートの削除はシステム管理者だけが可能です', 403);
         }
     } elseif ((int) $template['tenant_id'] !== $tenantId) {
         json_error('他組織のデータにはアクセスできません', 403);
@@ -365,14 +363,13 @@ function templates_handle_export_csv(array $actor): never
  * CSV でテンプレートを一括登録する。共有テンプレート(tenant_id NULL, is_preset=1)として扱う。
  * mode=add: 同名(name+kind)が既存ならスキップ、無ければ追加。
  * mode=upsert: 同名があれば上書き更新、無ければ追加。
- * 全テナント共通に影響するため tenant_admin 以上。
+ * 全テナント共通に影響するため superadmin だけ。
  */
 function templates_handle_import_csv(array $actor): never
 {
     tet2_require_csrf();
-    $rank = ['viewer' => 1, 'operator' => 2, 'tenant_admin' => 3, 'superadmin' => 4];
-    if (($rank[$actor['role']] ?? 0) < 3) {
-        json_error('テンプレートの一括登録はテナント管理者以上が可能です', 403);
+    if (($actor['role'] ?? '') !== 'superadmin') {
+        json_error('共有テンプレートの一括登録はシステム管理者だけが可能です', 403);
     }
     $body = json_body();
     $csv = isset($body['csv']) && is_string($body['csv']) ? $body['csv'] : '';

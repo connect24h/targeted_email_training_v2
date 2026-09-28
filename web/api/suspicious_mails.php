@@ -193,7 +193,8 @@ function sm_handle_reputation(array $actor): never
 try {
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-    $actor = require_role($method === 'GET' ? 'viewer' : 'operator');
+    // 不審メールは実際に届いたメール(差出人、本文、添付)を扱うので、閲覧者には読み取りも許さない
+    $actor = require_role('operator');
 
     if ($action === 'list' && $method === 'GET') {
         sm_handle_list($actor);
