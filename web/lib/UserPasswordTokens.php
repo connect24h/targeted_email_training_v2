@@ -17,6 +17,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduMailer.php';
 require_once __DIR__ . '/PasswordPolicy.php';
+require_once __DIR__ . '/AdminSecurityPolicy.php';
 require_once __DIR__ . '/TenantStatus.php';
 
 final class PasswordTokenException extends RuntimeException
@@ -176,10 +177,31 @@ final class UserPasswordTokens
      * トークンを使用済みにし、ほかのトークンを無効にし、session_epoch を増やして既存のセッションを切る。
      * @return array<string,mixed>
      */
+    /**
+     * パスワードの決まり。管理画面のユーザには所属テナントと全体の方針(段階1)を重ね、受講者(learner)は PasswordPolicy のまま。
+     * @param array<string,mixed> $user
+     */
+    public static function policyViolation(array $user, string $password): ?string
+    {
+        if ((string) ($user['role'] ?? '') === 'learner') {
+            return PasswordPolicy::violation($password);
+        }
+        return AdminSecurityPolicy::violation($password, $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null);
+    }
+
+    /** 画面に出す決まりの説明(policyViolation と同じ区別)。 @param array<string,mixed> $user */
+    public static function policyDescription(array $user): string
+    {
+        if ((string) ($user['role'] ?? '') === 'learner') {
+            return PasswordPolicy::DESCRIPTION;
+        }
+        return AdminSecurityPolicy::description($user['tenant_id'] !== null ? (int) $user['tenant_id'] : null);
+    }
+
     public static function consume(string $token, string $password, string $ip = ''): array
     {
         ['token' => $row, 'user' => $user] = self::inspect($token);
-        $violation = PasswordPolicy::violation($password);
+        $violation = self::policyViolation($user, $password);
         if ($violation !== null) {
             // 決まりに合わない時はトークンを使わない(もう一度入力できる)
             throw new PasswordTokenException($violation, 400, 'policy');

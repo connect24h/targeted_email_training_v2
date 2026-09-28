@@ -31,6 +31,8 @@ function seedTenant(int $t, string $tag): void
         VALUES (?, ?, 'x', ?, 'tenant_admin', 'active', '2026-09-01 10:00:00')", [$t, "admin-{$tag}@purge.test", "Admin {$tag}"]);
     Db::run("INSERT INTO user_password_tokens (user_id, token_hash, purpose, expires_at) VALUES (?, ?, 'invite', '2026-12-01 00:00:00')",
         [$userId, hash('sha256', "pw-{$tag}")]);
+    Db::run('INSERT INTO user_mfa_recovery_codes (user_id, code_hash) VALUES (?, ?)', [$userId, hash('sha256', "rc-{$tag}")]);
+    Db::run('INSERT INTO tenant_security_policies (tenant_id, min_length, min_classes, require_mfa) VALUES (?, 14, 3, 1)', [$t]);
     $target = $id("INSERT INTO targets (tenant_id, tenant_no, email, name, status) VALUES (?, 99, ?, 'T', 'active')", [$t, "t-{$tag}@purge.test"]);
     $group = $id("INSERT INTO groups (tenant_id, name, kind) VALUES (?, ?, 'custom')", [$t, "G {$tag}"]);
     Db::run('INSERT INTO target_group (target_id, group_id) VALUES (?, ?)', [$target, $group]);

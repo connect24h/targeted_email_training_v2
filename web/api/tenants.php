@@ -1,6 +1,7 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/TenantPurge.php';
 require_once __DIR__ . '/../lib/PasswordPolicy.php';
+require_once __DIR__ . '/../lib/AdminSecurityPolicy.php';
 
 /**
  * テナントの管理(superadmin だけ)。
@@ -210,7 +211,8 @@ function tenants_handle_create(): never
             json_error('管理者の名前を入力してください', 400);
         }
         $adminPassword = isset($body['admin_password']) && is_string($body['admin_password']) ? $body['admin_password'] : '';
-        $violation = PasswordPolicy::violation($adminPassword);
+        // 新しいテナントにはまだ方針の行がないので、全体の方針(と PasswordPolicy)で確かめる
+        $violation = AdminSecurityPolicy::violation($adminPassword, null);
         if ($violation !== null) {
             json_error('管理者の初期' . $violation, 400);
         }

@@ -1,12 +1,18 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/PasswordPolicy.php';
 require_once __DIR__ . '/../lib/UserPasswordTokens.php';
+require_once __DIR__ . '/../lib/AdminSecurityPolicy.php';
+require_once __DIR__ . '/../lib/AdminMfa.php';
 
 const USER_ROLES = ['viewer', 'operator', 'tenant_admin', 'superadmin'];
 const TENANT_ADMIN_ROLES = ['viewer', 'operator', 'tenant_admin'];
 const USER_STATUSES = ['active', 'suspended'];
 /** 一覧と詳細で返す列。password_hash は返さない。 */
-const USER_PUBLIC_COLUMNS = 'id, tenant_id, email, name, role, status, failed_count, locked_until, last_login_at, created_at, password_pending';
+const USER_PUBLIC_COLUMNS = 'id, tenant_id, email, name, role, status, failed_count, locked_until, last_login_at, created_at, password_pending, mfa_enabled_at';
+/** 本人の多要素認証の操作(必須化で止められていても使える。ほかの操作は組織管理者以上)。 */
+const USER_MFA_SELF_ACTIONS = ['mfa_status', 'mfa_setup', 'mfa_enable', 'mfa_disable', 'mfa_recovery_regenerate'];
+/** 本人の操作でコードかパスワードを続けて間違えた時に、セッションを切る回数(盗まれたセッションでの総当たりを止める)。 */
+const USER_MFA_SELF_MAX_FAILURES = 5;
 /** CSV の一括登録の上限の行数。 */
 const USER_CSV_MAX_ROWS = 1000;
 
@@ -95,7 +101,7 @@ function users_handle_list(array $actor): never
     $tenantId = effective_tenant_id($actor, users_query_int('tenant_id'));
     $users = Db::all(
         "SELECT u.id, u.tenant_id, u.email, u.name, u.role, u.status, u.failed_count, u.locked_until, u.last_login_at,
-                u.created_at, u.password_pending,
+                u.created_at, u.password_pending, u.mfa_enabled_at,
                 (SELECT MAX(t.expires_at) FROM user_password_tokens t
                   WHERE t.user_id = u.id AND t.used_at IS NULL AND t.revoked_at IS NULL
                     AND t.expires_at > datetime('now','localtime')) AS password_link_expires_at
@@ -104,13 +110,21 @@ function users_handle_list(array $actor): never
          ORDER BY u.id",
         [$tenantId]
     );
-    json_out(['success' => true, 'users' => $users, 'password_policy' => PasswordPolicy::DESCRIPTION]);
+    json_out([
+        'success' => true,
+        'users' => $users,
+        'password_policy' => AdminSecurityPolicy::description($tenantId),
+        'security_policy' => AdminSecurityPolicy::effective($tenantId),
+    ]);
 }
 
-/** パスワードの決まり(A4)。全テナント共通で PasswordPolicy に1つにまとめる。 */
-function users_validate_password(string $password): void
+/**
+ * パスワードの決まり(A4)。PasswordPolicy(全テナント共通の下限)に、所属テナントと全体の方針(段階1)を重ねる。
+ * $tenantId が null はテナントに属さないユーザ(システム管理者)で、全体の方針だけを使う。
+ */
+function users_validate_password(string $password, ?int $tenantId): void
 {
-    $violation = PasswordPolicy::violation($password);
+    $violation = AdminSecurityPolicy::violation($password, $tenantId);
     if ($violation !== null) {
         json_error($violation, 400);
     }
@@ -168,9 +182,6 @@ function users_handle_create(array $actor): never
     if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
         json_error('email が不正です', 400);
     }
-    if ($password !== null) {
-        users_validate_password($password);
-    }
     users_assert_assignable_role($actor, $role);
 
     if ($actor['role'] === 'superadmin') {
@@ -180,6 +191,9 @@ function users_handle_create(array $actor): never
         }
     } else {
         $tenantId = (int) $actor['tenant_id'];
+    }
+    if ($password !== null) {
+        users_validate_password($password, $tenantId);
     }
     if ($sendInvite && !TenantStatus::userAllowed($tenantId, $role)) {
         json_error('停止中・削除済みのテナントのユーザには招待を送れません', 409);
@@ -269,7 +283,8 @@ function users_validate_update(array $actor, array $target, ?string $role, ?stri
         json_error('status が不正です', 400);
     }
     if ($password !== null) {
-        users_validate_password($password);
+        // 役割を superadmin に変えるとテナントから外れるので、全体の方針だけを使う
+        users_validate_password($password, $role === 'superadmin' || $target['tenant_id'] === null ? null : (int) $target['tenant_id']);
     }
     if ((int) $actor['id'] === (int) $target['id']) {
         if ($role !== null && users_role_rank($role) < users_role_rank((string) $actor['role'])) {
@@ -473,10 +488,251 @@ function users_handle_export_csv(array $actor): never
     exit;
 }
 
+// ============ 多要素認証(段階1、G43) ============
+
+/** 本人の操作でコードかパスワードを間違えた回数を数え、上限でセッションを切る。 */
+function users_mfa_self_failure(array $actor, string $what): never
+{
+    $count = (int) ($_SESSION['mfa_self_failures'] ?? 0) + 1;
+    $_SESSION['mfa_self_failures'] = $count;
+    audit('user.mfa_self_failed', 'user_id=' . (int) $actor['id'] . ',step=' . $what . ',count=' . $count);
+    if ($count >= USER_MFA_SELF_MAX_FAILURES) {
+        $_SESSION = [];
+        json_error('間違いが続いたため、ログアウトしました。もう一度ログインしてください', 401);
+    }
+    json_error($what === 'password' ? 'パスワードが正しくありません' : '確認コードが正しくありません', 400);
+}
+
+function users_mfa_self_success(): void
+{
+    unset($_SESSION['mfa_self_failures']);
+}
+
+/** 本人の多要素認証の状態(登録の画面とアカウントの画面が使う)。 */
+function users_handle_mfa_status(array $actor): never
+{
+    $userId = (int) $actor['id'];
+    $row = Db::one('SELECT tenant_id, mfa_secret, mfa_enabled_at FROM users WHERE id = ?', [$userId]);
+    $tenantId = $row !== null && $row['tenant_id'] !== null ? (int) $row['tenant_id'] : null;
+    json_out([
+        'success' => true,
+        'enabled' => $row !== null && $row['mfa_enabled_at'] !== null,
+        'enabled_at' => $row['mfa_enabled_at'] ?? null,
+        'setup_pending' => $row !== null && $row['mfa_enabled_at'] === null && $row['mfa_secret'] !== null,
+        'recovery_remaining' => AdminMfa::remainingRecoveryCodes($userId),
+        'required' => AdminSecurityPolicy::effective($tenantId)['require_mfa'],
+        'available' => AdminMfa::keyConfigured(),
+    ]);
+}
+
+/** 登録を始める: 新しい秘密鍵と、認証アプリに入れる URI を返す(まだ有効にはしない)。 */
+function users_handle_mfa_setup(array $actor): never
+{
+    tet2_require_csrf();
+    if (!AdminMfa::keyConfigured()) {
+        json_error('多要素認証の準備ができていません（暗号鍵が未設定です）。システム管理者に連絡してください', 503);
+    }
+    try {
+        $r = AdminMfa::beginEnrollment((int) $actor['id'], (string) $actor['email']);
+    } catch (DomainException $e) {
+        json_error($e->getMessage(), 409);
+    }
+    audit('user.mfa_setup', 'user_id=' . (int) $actor['id']);
+    json_out(['success' => true, 'secret' => $r['secret'], 'otpauth_uri' => $r['otpauth_uri'], 'issuer' => AdminMfa::ISSUER]);
+}
+
+/** 認証アプリのコードを確かめて有効にし、回復コードを1回だけ返す。 */
+function users_handle_mfa_enable(array $actor): never
+{
+    tet2_require_csrf();
+    $code = users_string(json_body(), 'code');
+    try {
+        $codes = AdminMfa::completeEnrollment((int) $actor['id'], $code, time());
+    } catch (DomainException $e) {
+        json_error($e->getMessage(), 409);
+    }
+    if ($codes === null) {
+        users_mfa_self_failure($actor, 'enable');
+    }
+    users_mfa_self_success();
+    audit('user.mfa_enable', 'user_id=' . (int) $actor['id']);
+    json_out(['success' => true, 'recovery_codes' => $codes]);
+}
+
+/** 本人の解除。今のコード(code)かパスワード(password)で本人を確かめる。登録の途中なら確かめずに取り消す。 */
+function users_handle_mfa_disable(array $actor): never
+{
+    tet2_require_csrf();
+    $userId = (int) $actor['id'];
+    if (AdminMfa::isEnabled($userId)) {
+        users_mfa_confirm_self($actor, json_body());
+    }
+    AdminMfa::disable($userId);
+    users_mfa_self_success();
+    audit('user.mfa_disable', 'user_id=' . $userId);
+    json_out(['success' => true]);
+}
+
+/** 回復コードを作り直す(今のコードで本人を確かめる)。前の回復コードはすべて使えなくなる。 */
+function users_handle_mfa_recovery_regenerate(array $actor): never
+{
+    tet2_require_csrf();
+    $userId = (int) $actor['id'];
+    if (!AdminMfa::isEnabled($userId)) {
+        json_error('多要素認証が有効ではありません', 409);
+    }
+    users_mfa_confirm_self($actor, ['code' => users_string(json_body(), 'code')]);
+    $codes = AdminMfa::regenerateRecoveryCodes($userId);
+    users_mfa_self_success();
+    audit('user.mfa_recovery_regenerate', 'user_id=' . $userId);
+    json_out(['success' => true, 'recovery_codes' => $codes]);
+}
+
+/** code(認証アプリ)か password のどちらかで本人を確かめる。違えば回数を数えて止める。 */
+function users_mfa_confirm_self(array $actor, array $body): void
+{
+    $userId = (int) $actor['id'];
+    $code = is_string($body['code'] ?? null) ? trim($body['code']) : '';
+    $password = is_string($body['password'] ?? null) ? $body['password'] : '';
+    if ($code === '' && $password === '') {
+        json_error('確認コードかパスワードを入力してください', 400);
+    }
+    if ($code !== '') {
+        try {
+            $ok = AdminMfa::verifyCode($userId, $code, time());
+        } catch (RuntimeException $e) {
+            error_log('mfa confirm: ' . $e->getMessage());
+            json_error('確認コードを確かめられません。パスワードで確かめてください', 503);
+        }
+        if (!$ok) {
+            users_mfa_self_failure($actor, 'code');
+        }
+        return;
+    }
+    $row = Db::one('SELECT password_hash FROM users WHERE id = ?', [$userId]);
+    if ($row === null || !password_verify($password, (string) $row['password_hash'])) {
+        users_mfa_self_failure($actor, 'password');
+    }
+}
+
+/**
+ * 管理者による多要素認証の解除(端末をなくした人のため)。組織管理者は自組織、システム管理者は全部。
+ * 自分より強い役割のユーザと、自分自身は解除できない(自分は本人の画面から解除する)。
+ */
+function users_handle_mfa_reset(array $actor): never
+{
+    tet2_require_csrf();
+    $id = users_int(json_body(), 'id');
+    if ((int) $actor['id'] === $id) {
+        json_error('自分の多要素認証は、アカウントの画面から解除してください', 400);
+    }
+    $target = users_assert_manageable($actor, $id);
+    if (users_role_rank((string) $target['role']) > users_role_rank((string) $actor['role'])) {
+        json_error('権限がありません', 403);
+    }
+    $changed = AdminMfa::disable($id);
+    audit('user.mfa_reset', 'user_id=' . $id . ',changed=' . ($changed ? 1 : 0));
+    json_out(['success' => true, 'changed' => $changed]);
+}
+
+// ============ パスワードと多要素認証の方針(段階1、G44) ============
+
+/** 方針の行を画面に返す形にする。 */
+function users_policy_payload(array $row): array
+{
+    return [
+        'min_length' => $row['min_length'],
+        'min_classes' => $row['min_classes'],
+        'require_mfa' => $row['require_mfa'],
+        'configured' => $row['exists'],
+        'updated_at' => $row['updated_at'],
+    ];
+}
+
+/** 方針の取得。テナントの行と全体の行(組織管理者には読むだけ)と、実際に効く方針を返す。 */
+function users_handle_policy_get(array $actor): never
+{
+    $requested = users_query_int('tenant_id');
+    $tenantId = $actor['role'] === 'superadmin' && $requested === null && $actor['tenant_id'] === null
+        ? null : effective_tenant_id($actor, $requested);
+    json_out([
+        'success' => true,
+        'tenant_id' => $tenantId,
+        'tenant' => $tenantId !== null ? users_policy_payload(AdminSecurityPolicy::row($tenantId)) : null,
+        'global' => users_policy_payload(AdminSecurityPolicy::row(null)),
+        'effective' => AdminSecurityPolicy::effective($tenantId),
+        'can_edit_global' => $actor['role'] === 'superadmin',
+        'mfa_available' => AdminMfa::keyConfigured(),
+        'limits' => ['min_length' => PasswordPolicy::MIN_LENGTH, 'max_length' => AdminSecurityPolicy::MAX_MIN_LENGTH],
+    ]);
+}
+
+/** 方針の保存。scope=global は全体の行(システム管理者だけ)、それ以外は対象のテナントの行。弱くはできない。 */
+function users_handle_policy_set(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $scope = $body['scope'] ?? 'tenant';
+    if (!in_array($scope, ['tenant', 'global'], true)) {
+        json_error('scope が不正です', 400);
+    }
+    foreach (['min_length', 'min_classes'] as $key) {
+        if (!is_int($body[$key] ?? null)) {
+            json_error($key . ' が不正です', 400);
+        }
+    }
+    if (!is_bool($body['require_mfa'] ?? null)) {
+        json_error('require_mfa が不正です', 400);
+    }
+    if ($scope === 'global') {
+        if ($actor['role'] !== 'superadmin') {
+            json_error('権限がありません', 403);
+        }
+        $tenantId = null;
+    } else {
+        $tenantId = effective_tenant_id($actor, users_body_optional_int($body, 'tenant_id'));
+    }
+    // 暗号鍵がないと誰も登録できず、必須にした組織の全員が操作できなくなる
+    if ($body['require_mfa'] && !AdminMfa::keyConfigured()) {
+        json_error('多要素認証の準備ができていないため（暗号鍵が未設定）、必須にはできません', 409);
+    }
+    try {
+        AdminSecurityPolicy::save($tenantId, $body['min_length'], $body['min_classes'], $body['require_mfa'], (int) $actor['id']);
+    } catch (InvalidArgumentException $e) {
+        json_error($e->getMessage(), 400);
+    }
+    audit('security_policy.update', 'tenant_id=' . ($tenantId ?? 'global') . ',min_length=' . $body['min_length']
+        . ',min_classes=' . $body['min_classes'] . ',require_mfa=' . ($body['require_mfa'] ? 1 : 0));
+    json_out(['success' => true, 'policy' => users_policy_payload(AdminSecurityPolicy::row($tenantId)),
+        'effective' => AdminSecurityPolicy::effective($tenantId)]);
+}
+
 try {
-    $actor = require_role('tenant_admin');
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+    // 本人の多要素認証は、どの役割でも使える。必須化で止められているユーザも登録できるよう、専用の入口を使う
+    if (in_array($action, USER_MFA_SELF_ACTIONS, true)) {
+        $self = require_auth_for_mfa_enrollment();
+        if ($action === 'mfa_status' && $method === 'GET') {
+            users_handle_mfa_status($self);
+        }
+        if ($action === 'mfa_setup' && $method === 'POST') {
+            users_handle_mfa_setup($self);
+        }
+        if ($action === 'mfa_enable' && $method === 'POST') {
+            users_handle_mfa_enable($self);
+        }
+        if ($action === 'mfa_disable' && $method === 'POST') {
+            users_handle_mfa_disable($self);
+        }
+        if ($action === 'mfa_recovery_regenerate' && $method === 'POST') {
+            users_handle_mfa_recovery_regenerate($self);
+        }
+        json_error('不正なアクションです', 400);
+    }
+
+    $actor = require_role('tenant_admin');
 
     if ($action === 'list' && $method === 'GET') {
         users_handle_list($actor);
@@ -498,6 +754,15 @@ try {
     }
     if ($action === 'export_csv' && $method === 'GET') {
         users_handle_export_csv($actor);
+    }
+    if ($action === 'mfa_reset' && $method === 'POST') {
+        users_handle_mfa_reset($actor);
+    }
+    if ($action === 'security_policy' && $method === 'GET') {
+        users_handle_policy_get($actor);
+    }
+    if ($action === 'security_policy' && $method === 'POST') {
+        users_handle_policy_set($actor);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

@@ -10,6 +10,7 @@ require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
 require_once __DIR__ . '/../lib/TenantPurge.php';
 require_once __DIR__ . '/../lib/PasswordPolicy.php';
+require_once __DIR__ . '/../lib/AdminSecurityPolicy.php';
 load_api('tenants');
 load_api('targets');
 
