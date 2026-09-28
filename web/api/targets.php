@@ -411,6 +411,8 @@ function targets_handle_delete(array $actor): never
         foreach (TARGET_DERIVED_TABLES as $table) {
             Db::run("DELETE FROM {$table} WHERE target_id = ?", [$id]);
         }
+        // その人の受講者のマイページのアカウント(users.target_id で対象者につながる。トークンは外部キーで一緒に消える)
+        Db::run("DELETE FROM users WHERE target_id = ? AND role = 'learner' AND tenant_id = ?", [$id, $tenantId]);
         Db::run('DELETE FROM targets WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
         return true;
     });

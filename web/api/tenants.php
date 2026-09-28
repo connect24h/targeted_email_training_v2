@@ -110,7 +110,7 @@ function tenants_rows(?int $id = null): array
     $rows = Db::all(
         "SELECT t.id, t.name, t.slug, t.data_dir, t.status, t.created_at, t.deleted_at,
                 t.contact_name, t.contact_email, t.contract_end_date, t.target_limit, t.memo,
-                (SELECT COUNT(*) FROM users u WHERE u.tenant_id = t.id) AS user_count,
+                (SELECT COUNT(*) FROM users u WHERE u.tenant_id = t.id AND u.role != 'learner') AS user_count,
                 (SELECT COUNT(*) FROM targets x WHERE x.tenant_id = t.id AND x.status = 'active' AND x.is_test = 0) AS target_count,
                 (SELECT COUNT(*) FROM campaigns c WHERE c.tenant_id = t.id AND c.deleted_at IS NULL) AS campaign_count,
                 (SELECT COUNT(*) FROM campaigns c WHERE c.tenant_id = t.id AND c.status IN ('running','scheduled')) AS campaign_active_count,
@@ -118,7 +118,7 @@ function tenants_rows(?int $id = null): array
                 (SELECT COUNT(*) FROM edu_deliveries d WHERE d.tenant_id = t.id AND d.status IN ('running','scheduled')) AS edu_active_count,
                 (SELECT MAX(ct.sent_at) FROM campaign_targets ct JOIN campaigns c ON c.id = ct.campaign_id
                   WHERE c.tenant_id = t.id AND ct.send_status = 'sent') AS last_sent_at,
-                (SELECT MAX(u.last_login_at) FROM users u WHERE u.tenant_id = t.id) AS last_login_at
+                (SELECT MAX(u.last_login_at) FROM users u WHERE u.tenant_id = t.id AND u.role != 'learner') AS last_login_at
          FROM tenants t {$where}
          ORDER BY t.id",
         $id !== null ? [$id] : []
@@ -169,7 +169,7 @@ function tenants_handle_get(): never
     tenants_assert_exists($id);
     $tenant = tenants_rows($id)[0];
     $users = Db::all(
-        'SELECT id, email, name, role, status, last_login_at, created_at FROM users WHERE tenant_id = ? ORDER BY id',
+        "SELECT id, email, name, role, status, last_login_at, created_at FROM users WHERE tenant_id = ? AND role != 'learner' ORDER BY id",
         [$id]
     );
     // テナントのユーザの操作と、superadmin がこのテナントに対して行ったテナントの操作(detail が tenant_id=<id> で始まる)

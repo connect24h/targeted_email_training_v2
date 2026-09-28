@@ -38,6 +38,11 @@ final class UserPasswordTokens
 
     /** 管理画面の URL の基点の既定。TET2_ADMIN_BASE_URL で上書きする。 */
     private const DEFAULT_ADMIN_BASE_URL = 'https://www.filesend.cojp.online/tet2';
+    /** 受講者のサイト(マイページ)の URL の基点の既定。TET2_LEARNER_BASE_URL で上書きする。 */
+    private const DEFAULT_LEARNER_BASE_URL = 'https://sat.cojp.online';
+
+    /** リンクの行き先: 管理画面(admin)か、受講者のサイトのマイページ(my)。 */
+    public const SITES = ['admin', 'my'];
 
     public const MSG_INVALID = 'このリンクは正しくありません。メールのリンクをもう一度お確かめいただくか、管理者に再送を依頼してください。';
     public const MSG_USED = 'このリンクは既に使われています。パスワードを忘れた場合は、管理者に再設定のメールを依頼してください。';
@@ -53,9 +58,18 @@ final class UserPasswordTokens
         return rtrim(is_string($env) && $env !== '' ? $env : self::DEFAULT_ADMIN_BASE_URL, '/');
     }
 
-    /** パスワード設定のページの URL(トークンは URL にだけ平文で入る)。 */
-    public static function url(string $token): string
+    public static function learnerBaseUrl(): string
     {
+        $env = getenv('TET2_LEARNER_BASE_URL');
+        return rtrim(is_string($env) && $env !== '' ? $env : self::DEFAULT_LEARNER_BASE_URL, '/');
+    }
+
+    /** パスワード設定のページの URL(トークンは URL にだけ平文で入る)。my は受講者のサイトのページで、設定の後にマイページへ案内する。 */
+    public static function url(string $token, string $site = 'admin'): string
+    {
+        if ($site === 'my') {
+            return self::learnerBaseUrl() . '/set_password.php?token=' . rawurlencode($token) . '&site=my';
+        }
         return self::adminBaseUrl() . '/set_password.php?token=' . rawurlencode($token);
     }
 
@@ -199,11 +213,14 @@ final class UserPasswordTokens
     /**
      * 招待・再設定のメールを1通送る。成功で true。本文に URL と期限を入れる(トークンはログに書かない)。
      */
-    public static function sendMail(array $user, string $token, string $purpose): bool
+    public static function sendMail(array $user, string $token, string $purpose, string $site = 'admin'): bool
     {
         $name = trim((string) ($user['name'] ?? ''));
         $expires = Db::one('SELECT expires_at FROM user_password_tokens WHERE token_hash = ?', [self::hashToken($token)]);
         $expiresAt = $expires !== null ? substr((string) $expires['expires_at'], 0, 16) : '';
+        if ($site === 'my') {
+            return self::sendLearnerMail($user, $token, $purpose, $name, $expiresAt);
+        }
         if ($purpose === 'invite') {
             $subject = '【TET v2】管理画面のアカウントのパスワード設定のお願い';
             $lead = "TET v2（標的型メール訓練・教育の管理画面）のアカウントが作られました。\n"
@@ -224,12 +241,40 @@ final class UserPasswordTokens
         return EduMailer::send((string) $user['email'], $subject, $body);
     }
 
+    /** 受講者のマイページの招待・再設定のメール(リンクは受講者のサイトのパスワード設定のページ)。 */
+    private static function sendLearnerMail(array $user, string $token, string $purpose, string $name, string $expiresAt): bool
+    {
+        if ($purpose === 'invite') {
+            $subject = '【セキュリティ教育】マイページのパスワード設定のお願い';
+            $lead = "セキュリティ教育の受講者のマイページをご用意しました。\n"
+                . "マイページでは、受講する教育と回答するアンケート、ご自分の成績を確認でき、教育を受け直せます。\n"
+                . "下記の URL を開き、パスワードを設定してください。\n";
+        } else {
+            $subject = '【セキュリティ教育】マイページのパスワード再設定のご案内';
+            $lead = "セキュリティ教育の受講者のマイページのパスワードの再設定を受け付けました。\n"
+                . "下記の URL を開き、新しいパスワードを設定してください。\n";
+        }
+        $shared = (string) ($user['role'] ?? '') !== 'learner'
+            ? "※このパスワードは管理画面のパスワードと共通です（同じアカウントです）。\n" : '';
+        $body = ($name !== '' ? $name . ' 様' : 'ご担当者 様') . "\n\n"
+            . $lead . "\n"
+            . self::url($token, 'my') . "\n\n"
+            . 'ログインに使うメールアドレス: ' . (string) $user['email'] . "\n"
+            . ($expiresAt !== '' ? 'リンクの有効期限: ' . $expiresAt . '（72時間。1回だけ使えます）' . "\n" : '')
+            . 'パスワードの決まり: ' . PasswordPolicy::DESCRIPTION . "\n"
+            . 'マイページ: ' . self::learnerBaseUrl() . "/my.php\n"
+            . $shared . "\n"
+            . "お心当たりがない場合は、このメールを破棄してください。\n"
+            . "※本メールは自動送信です。ご不明点は社内の担当者へお問い合わせください。\n";
+        return EduMailer::send((string) $user['email'], $subject, $body);
+    }
+
     /**
      * 管理画面から、ユーザに招待・再設定のメールを送る(発行と送信を1つに)。
      * 送れなかった時は、出したトークンを無効にして例外(502)にする。
      * @return array{purpose: string, expires_at: string}
      */
-    public static function issueAndSend(array $user, ?int $createdBy): array
+    public static function issueAndSend(array $user, ?int $createdBy, string $site = 'admin'): array
     {
         $reason = self::sendBlockReason($user);
         if ($reason !== null) {
@@ -237,7 +282,7 @@ final class UserPasswordTokens
         }
         $purpose = (int) ($user['password_pending'] ?? 0) === 1 ? 'invite' : 'reset';
         $token = self::issue((int) $user['id'], $purpose, $createdBy);
-        if (!self::sendMail($user, $token, $purpose)) {
+        if (!self::sendMail($user, $token, $purpose, $site)) {
             self::revokeOpen((int) $user['id']);
             throw new PasswordTokenException(self::MSG_MAIL_FAILED, 502, 'mail');
         }

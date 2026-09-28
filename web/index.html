@@ -644,11 +644,12 @@
                   </ul>
                 </div>
                 <button class="btn btn-outline-secondary btn-sm" data-perm="operator" id="importCsvBtn"><i class="bi bi-upload"></i> CSV取込</button>
+                <button class="btn btn-outline-primary btn-sm" data-role="tenant_admin" id="inviteMyPageBtn" title="チェックした対象者に、受講者のマイページの招待メールを送ります"><i class="bi bi-envelope" aria-hidden="true"></i> 選んだ人にマイページの招待を送る</button>
                 <button class="btn btn-primary btn-sm" data-perm="operator" id="newTargetBtn"><i class="bi bi-plus-lg"></i> 新規</button>
               </div>
             </div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th>操作</th></tr></thead>
+              <thead><tr><th data-role="tenant_admin"><input class="form-check-input" type="checkbox" id="targetsSelectAll" aria-label="表示中の対象者をすべて選ぶ"></th><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th data-role="tenant_admin">マイページ</th><th>操作</th></tr></thead>
               <tbody id="targetsBody"></tbody>
             </table></div>
           </div>
@@ -731,7 +732,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=2ab1398c"></script>
+<script src="app.js?v=e06f1fd0"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

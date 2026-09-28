@@ -145,6 +145,11 @@ function current_user(): ?array
         'role'      => (string) $_SESSION['role'],
         'email'     => (string) ($_SESSION['email'] ?? ''),
     ];
+    // 受講者のマイページ専用のアカウント(learner)は管理画面を使えない(ログインでも拒否している。念のためここでも切る)
+    if ($user['role'] === 'learner') {
+        $_SESSION = [];
+        return null;
+    }
     // 所属テナントが停止・削除されたら、ログイン中のセッションも次の操作で切る(superadmin は除く)。
     // 1リクエストの中で何度も呼ばれるので、判定はリクエストごとに1回にする。
     static $checkedKey = null;

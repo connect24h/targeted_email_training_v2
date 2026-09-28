@@ -81,6 +81,11 @@ function auth_handle_login(): never
         audit('login.failed', 'email=' . $email);
         json_error('メールアドレスまたはパスワードが不正です', 401);
     }
+    // 受講者のマイページ専用のアカウントは、管理画面にはログインできない(パスワードの確認の後に伝える)
+    if ((string) $user['role'] === 'learner') {
+        audit('login.learner_denied', 'email=' . $email);
+        json_error('このアカウントは受講者のマイページ用です。管理画面にはログインできません', 403);
+    }
     // 所属テナントが停止・削除されていれば拒否する(superadmin は通す)。
     // パスワードの確認の後に判定し、テナントの状態を第三者に知られないようにする。
     $userTenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null;

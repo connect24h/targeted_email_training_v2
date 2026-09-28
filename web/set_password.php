@@ -3,9 +3,11 @@
  * パスワード設定のページ(招待と再設定。ログイン不要・トークン方式)。
  * /tet2/set_password.php?token=<64桁hex>
  * リンクが使えるかを api/password_set.php?action=check で確かめ、使えなければ理由を出す。
- * 設定の後はログイン画面へ案内する。後で受講者のマイページ(sat.cojp.online)でも使うため、セッションに頼らない。
+ * 設定の後はログイン画面へ案内する。受講者のマイページ(sat.cojp.online)でも使うため、セッションに頼らない。
+ * &site=my(受講者のマイページの招待・再設定のメールのリンク)の時は、設定の後にマイページ(my.php)へ案内する。
  */
 $token = isset($_GET['token']) && is_string($_GET['token']) ? trim($_GET['token']) : '';
+$learnerSite = ($_GET['site'] ?? '') === 'my';
 $tokenValid = (bool) preg_match('/^[0-9a-f]{64}$/D', $token);
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
@@ -78,7 +80,7 @@ header('Cache-Control: no-store');
     <i class="bi bi-check-circle sp-icon-ok" aria-hidden="true"></i>
     <h1 class="mt-2">パスワードを設定しました</h1>
     <p class="sp-note">設定したパスワードでログインしてください。</p>
-    <a class="btn btn-primary" href="./" id="spLoginLink">ログイン画面へ</a>
+    <a class="btn btn-primary" href="<?= $learnerSite ? 'my.php' : './' ?>" id="spLoginLink"><?= $learnerSite ? 'マイページのログインへ' : 'ログイン画面へ' ?></a>
   </div>
 
   <div id="errorView" class="sp-card text-center d-none" role="alert">

@@ -72,14 +72,15 @@ function users_role_rank(string $role): int
 
 function users_assert_manageable(array $actor, int $id): array
 {
+    // 受講者のマイページのアカウント(learner)は、ここ(管理画面のユーザ)では扱わない(api/learners.php)
     if ($actor['role'] === 'superadmin') {
         $user = Db::one(
-            'SELECT ' . USER_PUBLIC_COLUMNS . ' FROM users WHERE id = ?',
+            'SELECT ' . USER_PUBLIC_COLUMNS . " FROM users WHERE id = ? AND role != 'learner'",
             [$id]
         );
     } else {
         $user = Db::one(
-            'SELECT ' . USER_PUBLIC_COLUMNS . ' FROM users WHERE id = ? AND tenant_id = ?',
+            'SELECT ' . USER_PUBLIC_COLUMNS . " FROM users WHERE id = ? AND tenant_id = ? AND role != 'learner'",
             [$id, (int) $actor['tenant_id']]
         );
     }
@@ -99,7 +100,7 @@ function users_handle_list(array $actor): never
                   WHERE t.user_id = u.id AND t.used_at IS NULL AND t.revoked_at IS NULL
                     AND t.expires_at > datetime('now','localtime')) AS password_link_expires_at
          FROM users u
-         WHERE u.tenant_id = ?
+         WHERE u.tenant_id = ? AND u.role != 'learner'
          ORDER BY u.id",
         [$tenantId]
     );
@@ -441,7 +442,7 @@ function users_handle_import_csv(array $actor): never
 function users_build_csv(int $tenantId): string
 {
     $rows = Db::all(
-        'SELECT email, name, role, status, last_login_at, password_pending FROM users WHERE tenant_id = ? ORDER BY id',
+        "SELECT email, name, role, status, last_login_at, password_pending FROM users WHERE tenant_id = ? AND role != 'learner' ORDER BY id",
         [$tenantId]
     );
     $out = fopen('php://temp', 'r+');

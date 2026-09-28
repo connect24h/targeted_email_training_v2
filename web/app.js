@@ -2586,6 +2586,16 @@ async function renderTargets() {
   if (showArchived) query.include_archived = '1';
   const { targets } = await api('api/targets.php', { query });
   cacheRows('targets', targets);
+  // 組織管理者以上には、受講者のマイページの状態と招待の操作を出す
+  const canInvite = roleAtLeast(State.user.role, 'tenant_admin');
+  const myPage = {};
+  if (canInvite) {
+    try {
+      const { learners } = await api('api/learners.php', { query: { action: 'status' } });
+      (learners || []).forEach((l) => { myPage[l.target_id] = l; });
+    } catch (e) { toast(e.message, 'err'); }
+  }
+  if ($('#targetsSelectAll')) $('#targetsSelectAll').checked = false;
   // #列は表示上の通し番号(古い順に1,2,3…)。他の一覧と統一。削除しても詰まる。
   // list は tenant_no 順(=作成順)で返るため、その並びのまま連番を振る。
   $('#targetsBody').innerHTML = targets.length ? targets.map((t, i) => {
@@ -2597,8 +2607,12 @@ async function renderTargets() {
         ? `<button class="btn btn-sm btn-outline-success" onclick="restoreTarget(${t.id})" title="削除を取り消して在籍に戻す"><i class="bi bi-arrow-counterclockwise"></i></button>`
         : `<button class="btn btn-sm btn-outline-secondary" onclick="editTarget(${t.id})"><i class="bi bi-pencil"></i></button>
            <button class="btn btn-sm btn-outline-danger" onclick="deleteTarget(${t.id})"><i class="bi bi-trash"></i></button>`;
+    const selectCell = canInvite
+      ? `<td>${archived ? '' : `<input class="form-check-input tgt-select" type="checkbox" value="${t.id}" aria-label="${esc(t.email)} を選ぶ">`}</td>` : '';
+    const myPageCell = canInvite ? `<td class="small">${myPageStatus(myPage[t.id], t, archived)}</td>` : '';
     return `
     <tr${archived ? ' class="text-muted table-light"' : ''}>
+      ${selectCell}
       <td>${i + 1}</td>
       <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}</td>
       <td>${esc(t.name)}</td>
@@ -2606,9 +2620,42 @@ async function renderTargets() {
       <td>${t.position_category ? `<span class="badge bg-light text-dark">${esc(t.position_category)}</span>` : ''}</td>
       <td class="text-nowrap small">${esc(dateOnly(t.created_at))}</td>
       <td class="text-nowrap small">${t.archived_at ? esc(dateOnly(t.archived_at)) : ''}</td>
+      ${myPageCell}
       <td class="text-nowrap">${actions}</td>
     </tr>`;
-  }).join('') : emptyRow(10);
+  }).join('') : emptyRow(canInvite ? 12 : 10);
+}
+// 受講者のマイページの状態(対象者の一覧の列)と、1件の招待・アカウントの削除のボタン
+function myPageStatus(l, t, archived) {
+  const invite = archived ? '' : `<button class="btn btn-sm btn-outline-primary ms-1" onclick="inviteMyPage([${t.id}])" title="マイページの招待を送る" aria-label="${esc(t.email)} にマイページの招待を送る"><i class="bi bi-envelope"></i></button>`;
+  if (!l) return `<span class="text-muted">未招待</span>${invite}`;
+  if (l.account === 'admin') return '<span class="badge bg-light text-dark border" title="管理画面と同じパスワードでマイページに入れます">管理画面のアカウント</span>';
+  const remove = `<button class="btn btn-sm btn-outline-danger ms-1" onclick="deleteMyPageAccount(${t.id})" title="マイページのアカウントを削除" aria-label="${esc(t.email)} のマイページのアカウントを削除"><i class="bi bi-person-x"></i></button>`;
+  let label;
+  if (l.status !== 'active') label = '<span class="badge bg-secondary">停止</span>';
+  else if (l.password_pending) label = `<span class="badge bg-warning text-dark">パスワード未設定</span>${l.link_expires_at ? `<div class="text-muted">リンクの期限 ${esc(String(l.link_expires_at).slice(0, 16))}</div>` : ''}`;
+  else label = `<span class="badge bg-success">利用可</span>${l.last_login_at ? `<div class="text-muted">最終ログイン ${esc(dateOnly(l.last_login_at))}</div>` : ''}`;
+  return `${label}${invite}${remove}`;
+}
+async function inviteMyPage(ids) {
+  if (!ids.length) return toast('招待を送る対象者をチェックしてください', 'err');
+  if (!confirm(`${ids.length}名に、受講者のマイページの招待メール（パスワード設定のリンク）を送りますか？\n既にアカウントがある人には、パスワード再設定のメールを送ります。`)) return;
+  try {
+    const r = await api('api/learners.php', { method: 'POST', query: { action: 'invite' }, body: { target_ids: ids } });
+    const parts = [`送信 ${r.sent}件`];
+    if (r.admin_account) parts.push(`管理画面のアカウントで入れる人 ${r.admin_account}件`);
+    if (r.errors) parts.push(`送れなかった ${r.errors}件`);
+    toast(parts.join('・'), r.errors ? 'warn' : 'ok', 8000);
+    (r.results || []).filter((x) => x.result === 'error').slice(0, 3).forEach((x) => toast(`${x.email}: ${x.message}`, 'err', 10000));
+    renderTargets();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function deleteMyPageAccount(targetId) {
+  if (!confirm('この対象者の受講者のマイページのアカウントを削除しますか？\n成績は消えません。もう一度招待すれば使えるようになります。')) return;
+  try {
+    await api('api/learners.php', { method: 'POST', query: { action: 'delete' }, body: { target_id: targetId } });
+    toast('マイページのアカウントを削除しました', 'ok'); renderTargets();
+  } catch (e) { toast(e.message, 'err'); }
 }
 // 削除済み対象者を在籍に戻す。訓練履歴はもともと消えていないのでそのまま復活する。
 async function restoreTarget(id) {
@@ -4939,6 +4986,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#exportCsvBtn')?.addEventListener('click', () => exportTargetsCsv(false));
   $('#exportCsvAllBtn')?.addEventListener('click', () => exportTargetsCsv(true));
   $('#showArchivedTargets')?.addEventListener('change', renderTargets);
+  $('#inviteMyPageBtn')?.addEventListener('click', () => inviteMyPage($$('#targetsBody .tgt-select:checked').map((el) => Number(el.value))));
+  $('#targetsSelectAll')?.addEventListener('change', (ev) => { $$('#targetsBody .tgt-select').forEach((el) => { el.checked = ev.target.checked; }); });
   $('#newGroupBtn').addEventListener('click', newGroup);
   $('#newScenarioBtn').addEventListener('click', newScenario);
 $('#newTemplateBtn').addEventListener('click', newTemplate);
