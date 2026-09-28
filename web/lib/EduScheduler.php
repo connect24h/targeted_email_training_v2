@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/EduDeliveryLauncher.php';
 require_once __DIR__ . '/EduDeliverySeries.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class EduScheduler
 {
@@ -45,7 +46,9 @@ final class EduScheduler
     {
         $result = ['assigned' => 0, 'mail_sent' => 0];
         $current = $now->format('Y-m-d H:i:s');
-        $rows = Db::all("SELECT * FROM edu_deliveries WHERE triggered_by = 'new_target' AND status = 'running' ORDER BY id");
+        // 停止中・削除済みのテナントの配信には入れない
+        $rows = Db::all("SELECT * FROM edu_deliveries WHERE triggered_by = 'new_target' AND status = 'running' AND "
+            . TenantStatus::operationalSql('tenant_id') . ' ORDER BY id');
         foreach ($rows as $delivery) {
             $id = (int) $delivery['id'];
             $tenantId = (int) $delivery['tenant_id'];
@@ -92,7 +95,9 @@ final class EduScheduler
     {
         $result = ['launched' => 0, 'skipped_expired' => 0, 'failed' => 0, 'mail_sent' => 0];
         $current = $now->format('Y-m-d H:i:s');
-        $rows = Db::all("SELECT * FROM edu_deliveries WHERE status = 'scheduled' AND scheduled_at IS NOT NULL ORDER BY id");
+        // 停止中・削除済みのテナントの予約は開始しない(予約のまま残し、有効に戻すと次の実行で開始する)
+        $rows = Db::all("SELECT * FROM edu_deliveries WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND "
+            . TenantStatus::operationalSql('tenant_id') . ' ORDER BY id');
         foreach ($rows as $delivery) {
             // 画面から来た 'T' 区切りなど、保存の形が揃っていない行もあるので PHP で比べる。
             $scheduledAt = EduDeliveryLauncher::normalizeDateTime((string) $delivery['scheduled_at']);

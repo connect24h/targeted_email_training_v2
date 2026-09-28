@@ -81,6 +81,13 @@ function auth_handle_login(): never
         audit('login.failed', 'email=' . $email);
         json_error('メールアドレスまたはパスワードが不正です', 401);
     }
+    // 所属テナントが停止・削除されていれば拒否する(superadmin は通す)。
+    // パスワードの確認の後に判定し、テナントの状態を第三者に知られないようにする。
+    $userTenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null;
+    if (!TenantStatus::userAllowed($userTenantId, (string) $user['role'])) {
+        audit('login.tenant_inactive', 'email=' . $email . ',tenant_id=' . ($userTenantId ?? ''));
+        json_error(TenantStatus::LOGIN_BLOCKED_MESSAGE, 403);
+    }
 
     Db::run(
         "UPDATE users
@@ -127,7 +134,8 @@ function auth_handle_me(): never
 {
     $user = current_user();
     if ($user === null) {
-        json_out(['success' => true, 'user' => null]);
+        $notice = !empty($GLOBALS['__TET2_TENANT_SESSION_BLOCKED']) ? TenantStatus::SESSION_BLOCKED_MESSAGE : null;
+        json_out(['success' => true, 'user' => null, 'notice' => $notice]);
     }
     json_out(['success' => true, 'user' => $user, 'csrf' => tet2_csrf_token()]);
 }

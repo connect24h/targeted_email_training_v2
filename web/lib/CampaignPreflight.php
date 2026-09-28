@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class CampaignPreflightNotFound extends RuntimeException {}
 
@@ -44,6 +45,8 @@ final class CampaignPreflight
         $templates = self::loadTemplates($contents);
         $blockers = [];
         $warnings = [];
+        $tenantBlocked = TenantStatus::sendBlockReason($tenantId);
+        if ($tenantBlocked !== null) $blockers[] = $tenantBlocked;
         if ($campaign['status'] !== 'draft') $blockers[] = '下書きのみ配信開始できます';
         if (trim((string) ($campaign['data_dir'] ?? '')) === '') $blockers[] = '送信データの保存先が未設定です';
         if (!filter_var((string) ($campaign['from_address'] ?? ''), FILTER_VALIDATE_EMAIL)) {

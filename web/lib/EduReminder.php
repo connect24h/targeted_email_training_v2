@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class EduReminder
 {
@@ -36,6 +37,7 @@ final class EduReminder
              INNER JOIN edu_deliveries d ON d.id = a.delivery_id
              INNER JOIN targets t ON t.id = a.target_id
              WHERE d.status = 'running'
+               AND " . TenantStatus::operationalSql('d.tenant_id') . "
                AND a.status IN ('assigned','started')
                AND (d.deadline IS NULL OR d.deadline >= datetime('now','localtime'))
                AND (

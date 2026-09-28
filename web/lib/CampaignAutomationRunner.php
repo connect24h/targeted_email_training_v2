@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/CampaignAutomationSchedule.php';
 require_once __DIR__ . '/CampaignDraftFactory.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 /** due automationを冪等にclaimし、draftだけを生成する。 */
 final class CampaignAutomationRunner
@@ -18,7 +19,8 @@ final class CampaignAutomationRunner
     {
         $now = $now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
         $row = Db::one(
-            "SELECT COUNT(*) AS n FROM campaign_automations WHERE status='active' AND next_due_at <= ?",
+            "SELECT COUNT(*) AS n FROM campaign_automations WHERE status='active' AND next_due_at <= ? AND "
+            . TenantStatus::operationalSql('tenant_id'),
             [$now->format('Y-m-d H:i:s')]
         );
         return (int) ($row['n'] ?? 0);
@@ -29,8 +31,10 @@ final class CampaignAutomationRunner
     {
         $now = $now ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
         $rows = Db::all(
+            // 停止中・削除済みのテナントの定期キャンペーンは作らない(予定の日時も進めない。有効に戻すと次の実行で作る)。
             "SELECT id FROM campaign_automations
-             WHERE status='active' AND next_due_at <= ? ORDER BY next_due_at, id",
+             WHERE status='active' AND next_due_at <= ? AND " . TenantStatus::operationalSql('tenant_id') . "
+             ORDER BY next_due_at, id",
             [$now->format('Y-m-d H:i:s')]
         );
         $result = ['examined' => count($rows), 'generated' => 0, 'failed' => 0, 'duplicate' => 0];
@@ -59,6 +63,9 @@ final class CampaignAutomationRunner
         }
         if ($rule['status'] !== 'active') {
             return ['status' => 'skipped'];
+        }
+        if (!TenantStatus::isOperational((int) $rule['tenant_id'])) {
+            return ['status' => 'skipped', 'error_code' => 'tenant_inactive'];
         }
         $now = $options['now'] ?? new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
         if (!$now instanceof DateTimeImmutable) {

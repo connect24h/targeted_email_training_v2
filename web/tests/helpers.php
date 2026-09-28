@@ -41,6 +41,7 @@ function tet2_test_boot(?string $seedSql = null): string
     });
     putenv("TET2_DB_PATH={$tmp}");
     require_once __DIR__ . '/../lib/Db.php';
+    require_once __DIR__ . '/../lib/TenantStatus.php';
     if ($seedSql !== null) {
         Db::run($seedSql);
     }

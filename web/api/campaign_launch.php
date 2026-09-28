@@ -61,6 +61,11 @@ try {
         if ((string) $campaign['status'] !== 'paused') {
             json_error('一時停止中のキャンペーンのみ再開できます（status=' . $campaign['status'] . '）', 409);
         }
+        // 停止中・削除済みのテナントでは、superadmin でも再開しない(停止フラグも残す)
+        $blocked = TenantStatus::sendBlockReason($tenantId);
+        if ($blocked !== null) {
+            json_error($blocked, 409);
+        }
         // 停止フラグ解除(ワーカーが次バッチを起動できるように)
         $dir = (string) $campaign['data_dir'];
         if ($dir !== '' && is_dir($dir)) {

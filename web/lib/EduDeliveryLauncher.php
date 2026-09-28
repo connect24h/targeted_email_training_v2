@@ -12,6 +12,7 @@ require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
 require_once __DIR__ . '/EduDeliverySeries.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 /** 開始できない理由。code は API がそのまま返す HTTP の状態コード(400/404/409)。 */
 final class EduDeliveryError extends RuntimeException
@@ -44,6 +45,11 @@ final class EduDeliveryLauncher
         $id = (int) $delivery['id'];
         if (!in_array((string) $delivery['status'], ['draft', 'scheduled'], true)) {
             throw new EduDeliveryError('この配信は開始できません(status=' . $delivery['status'] . ')', 409);
+        }
+        // 停止中・削除済みのテナントでは、superadmin が画面から開始しても開始しない
+        $blocked = TenantStatus::sendBlockReason($tenantId);
+        if ($blocked !== null) {
+            throw new EduDeliveryError($blocked, 409);
         }
         $targetIds = self::resolveTargets($delivery, $tenantId, $now);
         // 新入社員の配信は、開始の時点で該当者がいなくても開始する(以後は edu_scheduler が投入する)。

@@ -11,6 +11,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduMailer.php';
 require_once __DIR__ . '/SurveyService.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class SurveyMailer
 {
@@ -34,6 +35,7 @@ final class SurveyMailer
     public static function sendInvitations(int $tenantId, int $deliveryId): array
     {
         self::assertEnabled();
+        self::assertTenantOperational($tenantId);
         $delivery = self::openDelivery($tenantId, $deliveryId);
         $rows = Db::all(
             "SELECT a.id, a.access_token, t.email, t.name FROM survey_assignments a
@@ -57,6 +59,9 @@ final class SurveyMailer
     public static function remind(?int $tenantId = null, ?int $deliveryId = null, ?int $now = null): array
     {
         self::assertEnabled();
+        if ($tenantId !== null) {
+            self::assertTenantOperational($tenantId);
+        }
         $now ??= time();
         $sql = "SELECT a.id, a.access_token, t.email, t.name, s.title AS survey_title, d.deadline
                 FROM survey_assignments a
@@ -66,6 +71,7 @@ final class SurveyMailer
                 WHERE d.status = 'open' AND d.deadline IS NOT NULL
                   AND a.status = 'assigned' AND a.invited_at IS NOT NULL AND a.last_reminded_at IS NULL
                   AND t.status = 'active'
+                  AND " . TenantStatus::operationalSql('d.tenant_id') . "
                   AND d.deadline > ? AND d.deadline <= ?";
         $params = [date('Y-m-d H:i:s', $now), date('Y-m-d H:i:s', $now + self::REMIND_BEFORE_DAYS * 86400)];
         if ($tenantId !== null) {
@@ -90,6 +96,14 @@ final class SurveyMailer
     {
         if (!self::enabled()) {
             throw new SurveyException('アンケートのメール送信は無効です。受講用 URL の一覧(CSV)を社内のメールで配布してください', 409);
+        }
+    }
+
+    private static function assertTenantOperational(int $tenantId): void
+    {
+        $reason = TenantStatus::sendBlockReason($tenantId);
+        if ($reason !== null) {
+            throw new SurveyException($reason, 409);
         }
     }
 

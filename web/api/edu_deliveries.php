@@ -701,6 +701,10 @@ function edu_d_handle_remind(array $actor): never
     if ((string) $delivery['status'] !== 'running') {
         json_error('開始済み(running)の配信のみ催促できます(status=' . $delivery['status'] . ')', 409);
     }
+    $blocked = TenantStatus::sendBlockReason($tenantId);
+    if ($blocked !== null) {
+        json_error($blocked, 409);
+    }
 
     // 未完了者 + メールアドレス(自テナントのみ。IDOR は tenant_id 一致で担保)
     $rows = Db::all(

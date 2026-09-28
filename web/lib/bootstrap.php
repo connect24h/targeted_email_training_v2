@@ -6,6 +6,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 /**
  * 役職カテゴリの正規値。targets.position_category と position_masters.category が取り得る値。
@@ -130,23 +131,42 @@ function tet2_require_csrf(): void
 }
 
 // ---- 認証・ロール・テナント ----
+/** このリクエストでテナントの停止によりセッションを切ったか(require_auth が理由を返すため)。 */
+$GLOBALS['__TET2_TENANT_SESSION_BLOCKED'] = false;
+
 function current_user(): ?array
 {
     if (empty($_SESSION['uid'])) {
         return null;
     }
-    return [
+    $user = [
         'id'        => (int) $_SESSION['uid'],
         'tenant_id' => $_SESSION['tenant_id'] !== null ? (int) $_SESSION['tenant_id'] : null,
         'role'      => (string) $_SESSION['role'],
         'email'     => (string) ($_SESSION['email'] ?? ''),
     ];
+    // 所属テナントが停止・削除されたら、ログイン中のセッションも次の操作で切る(superadmin は除く)。
+    // 1リクエストの中で何度も呼ばれるので、判定はリクエストごとに1回にする。
+    static $checkedKey = null;
+    $key = $user['id'] . ':' . ($user['tenant_id'] ?? '') . ':' . $user['role'];
+    if ($checkedKey !== $key) {
+        if (!TenantStatus::userAllowed($user['tenant_id'], $user['role'])) {
+            $_SESSION = [];
+            $GLOBALS['__TET2_TENANT_SESSION_BLOCKED'] = true;
+            return null;
+        }
+        $checkedKey = $key;
+    }
+    return $user;
 }
 
 function require_auth(): array
 {
     $u = current_user();
     if ($u === null) {
+        if (!empty($GLOBALS['__TET2_TENANT_SESSION_BLOCKED'])) {
+            json_error(TenantStatus::SESSION_BLOCKED_MESSAGE, 401);
+        }
         json_error('認証が必要です', 401);
     }
     return $u;
