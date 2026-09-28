@@ -25,6 +25,7 @@ final class MigrationRunner
         '20260927-edu-rich-content',
         '20261001-edu-delivery-features',
         '20261005-tenant-management',
+        '20261008-user-password-tokens',
     ];
 
     /**
@@ -224,6 +225,13 @@ final class MigrationRunner
             $this->ensureAdditiveColumns($pdo);
             return;
         }
+        if ($version === '20261008-user-password-tokens') {
+            // 招待メールとパスワード再設定(A1、A2)。users に列を足し、トークンの表を作るだけ。
+            // 既存のユーザは password_pending=0、session_epoch=0 のままで、パスワードもセッションも変えない。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-user-password.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -374,6 +382,10 @@ final class MigrationRunner
     private function ensureAdditiveColumns(PDO $pdo): void
     {
         $columns = [
+            'users' => [
+                'password_pending' => 'INTEGER NOT NULL DEFAULT 0',
+                'session_epoch' => 'INTEGER NOT NULL DEFAULT 0',
+            ],
             'tenants' => [
                 'deleted_at' => 'TEXT DEFAULT NULL',
                 'contact_name' => 'TEXT DEFAULT NULL',

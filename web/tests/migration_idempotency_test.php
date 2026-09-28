@@ -57,8 +57,8 @@ $pdo->exec("INSERT INTO groups (tenant_id, name, kind) VALUES (1, '全職員', '
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 21, '未適用migrationが21件ある');
-check($runner->migrate() === 21, '初回はmigrationを21件適用する');
+check(count($runner->pending()) === 22, '未適用migrationが22件ある');
+check($runner->migrate() === 22, '初回はmigrationを22件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
@@ -141,10 +141,31 @@ check((int) $pdo->query('SELECT COUNT(*) FROM tenants')->fetchColumn() === 2, '�
 check($runner->migrate() === 0, 'テナントの管理のmigrationも冪等');
 $pdo->exec("UPDATE tenants SET status = 'active' WHERE id = 2");
 
+// 招待メールとパスワード再設定(A1、A2)。既存のユーザのパスワードとログインの記録を変えず、列と表を足すだけであることを確かめる。
+$pdo->exec("INSERT INTO users (tenant_id, email, password_hash, name, role, status, last_login_at)
+    VALUES (1, 'migration-user@example.test', 'existing-hash', '既存', 'operator', 'active', '2026-09-01 09:00:00')");
+$pdo->exec('DROP TABLE user_password_tokens');
+$pdo->exec('ALTER TABLE users DROP COLUMN password_pending');
+$pdo->exec('ALTER TABLE users DROP COLUMN session_epoch');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261008-user-password-tokens'");
+check($runner->pending() === ['20261008-user-password-tokens'], 'パスワード設定のmigrationだけがpending');
+check($runner->migrate() === 1, '既存DBへパスワード設定の列と表を追加できる');
+$userCols = array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');
+check(in_array('password_pending', $userCols, true) && in_array('session_epoch', $userCols, true),
+    '既存usersへpassword_pendingとsession_epochを追加する');
+$existingUser = $pdo->query("SELECT password_hash, password_pending, session_epoch, last_login_at FROM users WHERE email = 'migration-user@example.test'")->fetch(PDO::FETCH_ASSOC);
+check($existingUser['password_hash'] === 'existing-hash' && (int) $existingUser['password_pending'] === 0
+    && (int) $existingUser['session_epoch'] === 0 && $existingUser['last_login_at'] === '2026-09-01 09:00:00',
+    '既存のユーザのパスワードとログインの記録を変えない(未設定にもしない)');
+check((int) $pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='user_password_tokens'")->fetchColumn() === 1,
+    '既存DBへパスワード設定のトークンの表を作成する');
+check($runner->migrate() === 0, 'パスワード設定のmigrationも冪等');
+$pdo->exec("DELETE FROM users WHERE email = 'migration-user@example.test'");
+
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 21,
-    'schema_migrationsへ21件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 22,
+    'schema_migrationsへ22件だけ記録される');
 check(in_array('credential_capture_approval_ref', array_column(
     $pdo->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name'
 ), true), 'campaignsへ顧客承認参照を追加する');
@@ -216,8 +237,9 @@ check($currentRunner->pending() === [
     '20260927-edu-rich-content',
     '20261001-edu-delivery-features',
     '20261005-tenant-management',
-], '現行DBは20件の後続migrationがpending');
-check($currentRunner->migrate() === 20, '現行DBへ残りのmigrationを適用する');
+    '20261008-user-password-tokens',
+], '現行DBは21件の後続migrationがpending');
+check($currentRunner->migrate() === 21, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
@@ -245,7 +267,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 19, '既存automation DBへ19件の後続migrationを適用する');
+check($rotationRunner->migrate() === 20, '既存automation DBへ20件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -269,9 +291,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 21, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 21,
-    'version tableを作成して21件記録する');
+check($unversionedRunner->migrate() === 22, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 22,
+    'version tableを作成して22件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -284,7 +306,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 21, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 22, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets

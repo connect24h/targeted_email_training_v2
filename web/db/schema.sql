@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
   failed_count  INTEGER NOT NULL DEFAULT 0,
   locked_until  TEXT,
   last_login_at TEXT,
+  password_pending INTEGER NOT NULL DEFAULT 0,  -- 1 = パスワード未設定(招待を送った、または CSV で作った)。password_hash は使えない乱数
+  session_epoch INTEGER NOT NULL DEFAULT 0,     -- パスワードを変えるたびに増やす。ログイン時の値と違うセッションは切る
   created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
