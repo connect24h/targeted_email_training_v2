@@ -24,6 +24,7 @@ final class MigrationRunner
         '20260925-surveys',
         '20260927-edu-rich-content',
         '20261001-edu-delivery-features',
+        '20261005-tenant-management',
     ];
 
     /**
@@ -217,6 +218,12 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-edu-delivery.sql'));
             return;
         }
+        if ($version === '20261005-tenant-management') {
+            // テナントの論理削除(status='deleted' と deleted_at)と管理の項目(担当者、契約の終了日、対象者数の上限、メモ)。
+            // 列を足すだけで、既存のテナントの状態と行は変えない。
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -367,6 +374,14 @@ final class MigrationRunner
     private function ensureAdditiveColumns(PDO $pdo): void
     {
         $columns = [
+            'tenants' => [
+                'deleted_at' => 'TEXT DEFAULT NULL',
+                'contact_name' => 'TEXT DEFAULT NULL',
+                'contact_email' => 'TEXT DEFAULT NULL',
+                'contract_end_date' => 'TEXT DEFAULT NULL',
+                'target_limit' => 'INTEGER DEFAULT NULL',
+                'memo' => 'TEXT DEFAULT NULL',
+            ],
             'campaigns' => [
                 'beacon_base' => 'TEXT',
                 'content_delivery' => "TEXT NOT NULL DEFAULT 'distribute'",

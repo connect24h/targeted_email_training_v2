@@ -314,7 +314,8 @@ function targets_handle_create(array $actor): never
     audit('target.create', 'target_id=' . $id);
     $target = assert_target_owned($id, $tenantId);
     $target['groups'] = targets_group_names([$id], $tenantId)[$id] ?? [];
-    json_out(['success' => true, 'target' => $target], 201);
+    // テナントの対象者数の上限を超えたら警告する(登録は拒否しない)
+    json_out(['success' => true, 'target' => $target, 'limit_warning' => TenantStatus::targetLimitWarning($tenantId)], 201);
 }
 
 function targets_handle_update(array $actor): never
@@ -437,7 +438,7 @@ function targets_handle_restore(array $actor): never
         [$id, $tenantId]
     );
     audit('target.restore', 'target_id=' . $id);
-    json_out(['success' => true, 'restored' => true]);
+    json_out(['success' => true, 'restored' => true, 'limit_warning' => TenantStatus::targetLimitWarning($tenantId)]);
 }
 
 function targets_csv_header_map(array $headers): array
@@ -610,6 +611,7 @@ function targets_handle_import_csv(array $actor): never
         'updated' => $result['updated'],
         'skipped' => $result['skipped'],
         'errors' => $result['errors'],
+        'limit_warning' => TenantStatus::targetLimitWarning($tenantId),
     ]);
 }
 

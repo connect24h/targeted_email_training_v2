@@ -64,6 +64,7 @@ foreach ($expectedTables as $table) {
 }
 
 $expectedColumns = [
+    'tenants' => ['deleted_at', 'contact_name', 'contact_email', 'contract_end_date', 'target_limit', 'memo'],
     'campaigns' => ['beacon_base', 'content_delivery', 'deleted_at', 'closed_at', 'closed_by', 'credential_capture_approval_ref', 'test_redirect_emails'],
     'campaign_targets' => ['content_no'],
     'targets' => ['position_category', 'tenant_no', 'archived_at', 'is_test'],
