@@ -19,6 +19,7 @@
 
 require_once __DIR__ . '/../lib/Db.php';
 require_once __DIR__ . '/../lib/EduMedia.php';
+require_once __DIR__ . '/../lib/TenantStatus.php';
 
 // ---- 最小レスポンスヘルパ(bootstrap を使わないため自前) ----
 function take_json($data, int $code = 200): never
@@ -83,6 +84,10 @@ function take_resolve(string $token): array
     );
     if ($a === null) {
         take_error('無効なトークンです', 404);
+    }
+    // 停止中・削除済みのテナントの受講は受け付けない(教材の画像の配信もここを通る)
+    if (!TenantStatus::isOperational((int) $a['tenant_id'])) {
+        take_error(TenantStatus::PARTICIPANT_BLOCKED_MESSAGE, 403);
     }
     if (take_is_expired($a['token_expiry'] ?? null)) {
         take_error('この受講リンクは有効期限が切れています', 410);

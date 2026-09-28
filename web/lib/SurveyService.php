@@ -13,6 +13,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/TenantStatus.php';
 
 final class SurveyException extends RuntimeException
 {
@@ -440,6 +441,10 @@ final class SurveyService
         );
         if ($a === null) {
             throw new SurveyException('リンクが正しくありません', 404);
+        }
+        // 停止中・削除済みのテナントの回答は受け付けない
+        if (!TenantStatus::isOperational((int) $a['tenant_id'])) {
+            throw new SurveyException(TenantStatus::PARTICIPANT_BLOCKED_MESSAGE, 403);
         }
         if ((string) $a['status'] === 'answered') {
             throw new SurveyException('このアンケートは回答済みです', 409);

@@ -253,6 +253,12 @@ check($GLOBALS['__TET2_TEST_CSRF_CALLS'] === 1, 'T3-11: CSRF を確かめる');
 $super = Db::one("SELECT * FROM users WHERE email = 'super-home@purge.test'");
 check($super !== null && $super['tenant_id'] === null && $super['role'] === 'superadmin', 'T3-12: 所属していた superadmin は消さずに所属を外す');
 Db::run("DELETE FROM users WHERE email = 'super-home@purge.test'");
+// 報告メールは行を残して個人の情報だけを空にする(共有のメールボックスからの再取込を防ぐ)
+$tombstone = Db::one("SELECT * FROM report_mails WHERE message_id_hash = 'mh-victim'");
+check($tombstone !== null && $tombstone['maildir_file'] === 'file-victim' && $tombstone['parse_status'] === 'purged'
+    && $tombstone['from_email'] === null && $tombstone['subject_head'] === null && $tombstone['message_id'] === null,
+    'T3-13b: 報告メールは取込の重複の判定に要る列だけを残し、個人の情報を空にする');
+Db::run("DELETE FROM report_mails WHERE message_id_hash = 'mh-victim'");
 $after = snapshotDb();
 $diffTables = [];
 foreach ($before as $table => $rows) {

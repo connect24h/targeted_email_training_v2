@@ -159,4 +159,12 @@ check(EventIngest::ingestAll()['report']===1, 'EventIngest経由でreportを返�
 $d=setupMail(); Db::run('DELETE FROM campaign_targets'); deliver($d,mailRaw()); putenv('TET2_REPORT_MAILDIR='.$d);
 check(EventIngest::ingestAll()['report']===0 && matches()[0]['status']==='rejected', '対象マップが空でも報告の取込は実行');
 check(ingest($d.'/absent')===['report'=>0,'report_pending'=>0,'scanned'=>0,'skipped'=>0], 'Maildir不在は4カウンタすべて0');
+// テナントの完全削除で個人の情報を空にした行(parse_status=purged)が残っていれば、元のメールを取り込み直さない
+$d=setupMail(); deliver($d,mailRaw()); ingest($d);
+Db::run('DELETE FROM report_mail_matches');
+Db::run("UPDATE report_mails SET message_id=NULL, date_header=NULL, from_email=NULL, subject_head=NULL, parse_error=NULL, parse_status='purged'");
+ingest($d); ingest($d);
+$rows=Db::all('SELECT parse_status, from_email FROM report_mails');
+check(count($rows)===1 && $rows[0]['parse_status']==='purged' && $rows[0]['from_email']===null && matches()===[],
+    '完全削除で空にした報告メールは、共有のメールボックスに元のメールが残っても取り込み直さない');
 echo "ALL TESTS PASSED\n";

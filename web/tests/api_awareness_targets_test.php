@@ -39,6 +39,19 @@ try {
     check($error->httpCode === 401, '不正tokenを拒否する');
 }
 
+$goodAuth = ['HTTP_AUTHORIZATION' => 'Bearer test-token-with-enough-entropy'];
+check(IntegrationAuth::tenantId($goodAuth, $authEnv) === 1, '正しい token なら有効なテナントの id を返す');
+foreach (['suspended', 'deleted'] as $blockedStatus) {
+    Db::run('UPDATE tenants SET status = ? WHERE id = 1', [$blockedStatus]);
+    try {
+        IntegrationAuth::tenantId($goodAuth, $authEnv);
+        check(false, "{$blockedStatus} のテナントへの連携を拒否する");
+    } catch (IntegrationAuthException $error) {
+        check($error->httpCode === 403, "{$blockedStatus} のテナントへの連携を拒否する");
+    }
+}
+Db::run("UPDATE tenants SET status = 'active' WHERE id = 1");
+
 check(
     IntegrationAuth::tenantId(['HTTP_AUTHORIZATION' => 'Bearer test-token-with-enough-entropy'], $authEnv) === 1,
     'tokenからtenantをserver側で固定する'

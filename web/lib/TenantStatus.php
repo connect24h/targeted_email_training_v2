@@ -14,6 +14,9 @@ require_once __DIR__ . '/Db.php';
 
 final class TenantStatus
 {
+    /** 受講者、回答者向け。訓練であることや運用の事情を明かさない文言にする。 */
+    public const PARTICIPANT_BLOCKED_MESSAGE = 'このリンクは現在ご利用いただけません。担当者にお問い合わせください。';
+
     public const ACTIVE = 'active';
     public const SUSPENDED = 'suspended';
     public const DELETED = 'deleted';

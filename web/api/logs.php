@@ -1205,7 +1205,8 @@ function logs_handle_report_mail(?int $tenantId): never
     $result = ['success'=>true,'rows'=>$rows,'total'=>$total,'limit'=>$limit,'offset'=>$offset];
     if (current_user()['role'] === 'superadmin' && ($_GET['include_unmatched'] ?? '') === '1') {
         $result['unmatched'] = Db::all('SELECT rm.id,rm.received_at,rm.from_email,rm.subject_head,rm.parse_status,rm.parse_error
-            FROM report_mails rm WHERE NOT EXISTS (SELECT 1 FROM report_mail_matches m WHERE m.report_mail_id=rm.id)
+            FROM report_mails rm WHERE rm.parse_status <> \'purged\'
+              AND NOT EXISTS (SELECT 1 FROM report_mail_matches m WHERE m.report_mail_id=rm.id)
             ORDER BY rm.received_at DESC,rm.id DESC');
     }
     json_out($result);

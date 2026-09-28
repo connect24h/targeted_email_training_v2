@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/TenantStatus.php';
+
 final class IntegrationAuthException extends RuntimeException
 {
     public function __construct(public readonly int $httpCode, string $message)
@@ -24,6 +26,10 @@ final class IntegrationAuth
         if (!preg_match('/^Bearer ([^\s]+)$/', $authorization, $matches)
             || !hash_equals($token, $matches[1])) {
             throw new IntegrationAuthException(401, 'integration認証に失敗しました');
+        }
+        // 停止中・削除済みのテナントには、連携からの登録も受け付けない
+        if (!TenantStatus::isOperational((int) $tenant)) {
+            throw new IntegrationAuthException(403, 'このテナントは利用が停止されています');
         }
         return (int) $tenant;
     }

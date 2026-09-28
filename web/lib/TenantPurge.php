@@ -252,13 +252,17 @@ final class TenantPurge
                     $params = array_fill(0, substr_count($where, '?'), $tenantId);
                     $rows[$table] = Db::run("DELETE FROM {$table} WHERE {$where}", $params);
                 }
-                // このテナントの報告にだけつながっていた報告メール(ほかのテナントの候補や不審メールが残るものは消さない)
+                // このテナントの報告にだけつながっていた報告メール(ほかのテナントの候補や不審メールが残るものは触らない)。
+                // 元のメールは全テナント共有のメールボックスに残るので、行を消すと5分ごとの取込が同じメールを取り込み直し、
+                // 個人の情報が戻ってしまう。行は残し、取込が「取り込み済み」と判断する列(hash、ファイル)以外を空にする。
                 $rows['report_mails'] = 0;
                 foreach ($reportMailIds as $id) {
                     $rows['report_mails'] += Db::run(
-                        'DELETE FROM report_mails WHERE id = ?
+                        "UPDATE report_mails SET message_id = NULL, date_header = NULL, from_email = NULL, subject_head = NULL,
+                                parse_error = NULL, parse_status = 'purged'
+                         WHERE id = ?
                            AND NOT EXISTS (SELECT 1 FROM report_mail_matches WHERE report_mail_id = ?)
-                           AND NOT EXISTS (SELECT 1 FROM suspicious_mails WHERE report_mail_id = ?)',
+                           AND NOT EXISTS (SELECT 1 FROM suspicious_mails WHERE report_mail_id = ?)",
                         [$id, $id, $id]
                     );
                 }
