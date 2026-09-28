@@ -395,10 +395,20 @@ function take_upsert_response(array $assignment, array $result): int
  * 提出を保存する。edu_responses と割当は最新の提出の回の結果で上書きし(レポートは最新の回を数える)、
  * 回ごとの結果は edu_attempts に残す(前の回は消さない)。
  */
+/** 提出を保存しようとした時に、別の提出が先に受講を完了させていた。 */
+final class TakeAlreadyCompleted extends RuntimeException
+{
+}
+
 function take_save_attempt(array $assignment, array $result, array $questionMeta, bool $completed, bool $clearLocks = false,
     ?bool $passed = null): void
 {
-    Db::tx(function () use ($assignment, $result, $questionMeta, $completed, $clearLocks, $passed) {
+    // 書き込みの鍵を先に取り、割当を読み直してから確かめる(二度押しで同じ提出が2回分の回として残らないように)
+    Db::txImmediate(function () use ($assignment, $result, $questionMeta, $completed, $clearLocks, $passed) {
+        $fresh = Db::one('SELECT * FROM edu_assignments WHERE id = ?', [(int) $assignment['id']]);
+        if ($fresh === null || ((string) $fresh['status'] === 'completed' && !EduAttempts::retakeOpen($fresh))) {
+            throw new TakeAlreadyCompleted('この受講は既に完了しています');
+        }
         EduAttempts::closeWithResult($assignment, $result, $passed);
         if ($clearLocks) {
             // eラーニングで不合格なら、答え合わせの固定を消して受け直せるようにする(採点の保存と同じトランザクション)
@@ -562,7 +572,11 @@ function take_handle_submit(): never
     $passScore = $a['pass_score'] !== null ? (int) $a['pass_score'] : null;
     $passed = $passScore !== null ? ($result['percentage'] >= $passScore) : null;
     $completed = (string) $a['delivery_type'] !== 'elearning' || $passed === true;
-    take_save_attempt($a, $result, $qMeta, $completed, $immediate && !$completed, $passed);
+    try {
+        take_save_attempt($a, $result, $qMeta, $completed, $immediate && !$completed, $passed);
+    } catch (TakeAlreadyCompleted $e) {
+        take_error($e->getMessage(), 409);
+    }
 
     // 即時結果(解説つき)。ここで初めて correct_answer と explanation を返す。
     $feedback = [];

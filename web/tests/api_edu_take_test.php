@@ -70,6 +70,22 @@ check($afterPass['status'] === 'completed' && (int) $afterPass['score'] === 100,
 check((int) Db::one('SELECT COUNT(*) AS n FROM edu_responses WHERE assignment_id = ?', [(int) $assignment['id']])['n'] === 1,
     'ET-3: 再受講結果は1件に更新する');
 
+// 二度押し: 最初の提出で完了した後、古い割当(まだ受講中)のままもう一度保存しようとしても、回は増えない
+$attemptsBefore = (int) Db::one('SELECT COUNT(*) AS n FROM edu_attempts WHERE assignment_id = ?', [(int) $assignment['id']])['n'];
+$rejected = false;
+try {
+    take_save_attempt($assignment, [
+        'total_score' => 1,
+        'max_score' => 1,
+        'percentage' => 100,
+        'answers' => [['question_id' => $questionId, 'answer' => [0], 'is_correct' => true, 'score_earned' => 1]],
+    ], [$questionId => ['id' => $questionId]], true);
+} catch (TakeAlreadyCompleted $e) {
+    $rejected = true;
+}
+check($rejected && (int) Db::one('SELECT COUNT(*) AS n FROM edu_attempts WHERE assignment_id = ?', [(int) $assignment['id']])['n'] === $attemptsBefore,
+    'ET-3b: 完了した後の二重の提出は書き込みの前に止め、受講の回を増やさない');
+
 // --- 期限切れの受講リンクを弾く ---
 // token_expiry の検証コードは元からあったが、セットする側が無く実測では全件 NULL
 // だった(受講リンクが事実上無期限)。launch/自動投入の両方で deadline を入れるようにした。
