@@ -484,6 +484,23 @@ h6, .h6 { font-weight: 600; }
 .tenant-note-danger { color: var(--tet-danger); }
 /* ===== ユーザ管理 ===== */
 .user-badge-pending { background: var(--tet-warning-soft); color: var(--tet-warning); border: 1px solid var(--tet-warning); }
+/* ===== 多要素認証(段階1) ===== */
+.user-badge-mfa { background: var(--tet-success-soft); color: var(--tet-success); border: 1px solid var(--tet-success); }
+.login-card-wide { max-width: 520px; }
+.mfa-secret {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 16px; font-weight: 600; letter-spacing: .08em; word-break: break-all;
+  background: var(--tet-surface-2); border: 1px solid var(--tet-border); border-radius: var(--tet-radius-sm);
+  padding: 8px 12px; color: var(--tet-text);
+}
+.mfa-uri { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.mfa-code-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 20px; letter-spacing: .3em; text-align: center; }
+.mfa-recovery-list {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; list-style: none; padding: 12px; margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px;
+  background: var(--tet-surface-2); border: 1px solid var(--tet-border); border-radius: var(--tet-radius-sm);
+}
+.security-policy-summary { font-size: 13px; color: var(--tet-text-2); }
 .tenant-notice {
   background: var(--tet-warning-soft);
   border: 1px solid var(--tet-warning);

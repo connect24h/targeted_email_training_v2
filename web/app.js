@@ -50,7 +50,16 @@ async function api(path, { method = 'GET', body = null, query = {}, timeout = 30
     showLoginNotice(data.error || 'セッションが切れました。もう一度ログインしてください');
     throw new Error(data.error || 'セッション切れ');
   }
-  if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+  // 多要素認証が必須の組織で未登録なら、登録の画面へ移す(サーバは登録の API 以外を 403 で止める)
+  if (res.status === 403 && State.user && String(data.error || '').startsWith(MFA_ENROLLMENT_REQUIRED_PREFIX)) {
+    State.user.mfa_enrollment_required = true;
+    showForcedEnrollment();
+  }
+  if (!res.ok || data.success === false) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -152,6 +161,8 @@ function showLoginNotice(message) {
 }
 async function login(email, password) {
   const data = await api('api/auth.php', { method: 'POST', query: { action: 'login' }, body: { email, password } });
+  // 多要素認証のユーザは、パスワードの後に確認コードを入れる(この時点ではまだログインしていない)
+  if (data.mfa_required) { showMfaStep(); return; }
   State.user = data.user;
   State.csrf = data.csrf;
   await afterLogin();
@@ -165,6 +176,8 @@ async function logout(silent = false) {
   contextHelp?.close();
   $('#helpToggle').setAttribute('aria-expanded', 'false');
   $('#appView').classList.add('d-none');
+  $('#mfaEnrollView').classList.add('d-none');
+  hideMfaStep();
   $('#loginView').classList.remove('d-none');
   $('#loginPassword').value = '';
   // 前の利用者の画面の位置を URL に残さず、入力欄から始める
@@ -176,10 +189,15 @@ async function checkSession() {
     const data = await api('api/auth.php', { query: { action: 'me' } });
     if (data.user) { State.user = data.user; State.csrf = data.csrf; await afterLogin(); return; }
     if (data.notice) showLoginNotice(data.notice);
+    // 確認コードの入力の途中で読み込み直した時は、コードの入力から続ける
+    if (data.mfa_pending) { $('#loginView').classList.remove('d-none'); showMfaStep(); return; }
   } catch {}
   $('#loginView').classList.remove('d-none');
 }
 async function afterLogin() {
+  // 組織の方針で多要素認証が必須なのに未登録なら、登録の画面だけを出す
+  if (State.user.mfa_enrollment_required) { showForcedEnrollment(); return; }
+  $('#mfaEnrollView').classList.add('d-none');
   $('#loginView').classList.add('d-none');
   $('#appView').classList.remove('d-none');
   $('#userLabel').textContent = `${State.user.email}（${roleLabel(State.user.role)}）`;
@@ -193,6 +211,244 @@ async function afterLogin() {
   await setupTenantSwitcher();
   State.campaignWorkspaceId = campaignIdFromHash(window.location.hash);
   navigate(routeFromHash(window.location.hash));
+}
+/* ========== 多要素認証(段階1) ========== */
+// サーバの TET2_MFA_ENROLLMENT_REQUIRED_MESSAGE の書き出し(403 の理由がこれなら登録の画面へ移す)
+const MFA_ENROLLMENT_REQUIRED_PREFIX = '多要素認証の登録が必要です';
+let mfaRecoveryMode = false;
+function showMfaStep() {
+  $('#loginForm').classList.add('d-none');
+  $('#loginMfaForm').classList.remove('d-none');
+  $('#loginMfaError').classList.add('d-none');
+  $('#loginMfaCode').value = '';
+  $('#loginRecoveryCode').value = '';
+  setMfaRecoveryMode(false);
+}
+function hideMfaStep() {
+  $('#loginMfaForm').classList.add('d-none');
+  $('#loginForm').classList.remove('d-none');
+}
+function setMfaRecoveryMode(on) {
+  mfaRecoveryMode = on;
+  $('#loginMfaCodeField').classList.toggle('d-none', on);
+  $('#loginRecoveryField').classList.toggle('d-none', !on);
+  $('#loginRecoveryToggle').textContent = on ? '認証アプリのコードを使う' : '回復コードを使う';
+  $('#loginMfaLead').textContent = on
+    ? '控えておいた回復コードを1つ入力してください。'
+    : '認証アプリに表示されている6桁のコードを入力してください。';
+  (on ? $('#loginRecoveryCode') : $('#loginMfaCode')).focus();
+}
+async function submitMfa() {
+  const body = mfaRecoveryMode
+    ? { recovery_code: $('#loginRecoveryCode').value.trim() }
+    : { code: $('#loginMfaCode').value.trim() };
+  if (!(body.code || body.recovery_code)) throw new Error('確認コードを入力してください');
+  const data = await api('api/auth.php', { method: 'POST', query: { action: 'mfa_verify' }, body });
+  hideMfaStep();
+  State.user = data.user;
+  State.csrf = data.csrf;
+  await afterLogin();
+}
+function showForcedEnrollment() {
+  if (!$('#mfaEnrollView').classList.contains('d-none')) return;
+  $('#loginView').classList.add('d-none');
+  $('#appView').classList.add('d-none');
+  $('#mfaEnrollView').classList.remove('d-none');
+  renderMfaEnrollment($('#mfaEnrollBody'), async () => {
+    const data = await api('api/auth.php', { query: { action: 'me' } });
+    State.user = data.user;
+    State.csrf = data.csrf;
+    $('#mfaEnrollView').classList.add('d-none');
+    await afterLogin();
+  });
+}
+// 秘密鍵は4文字ずつ区切って見せる(認証アプリには区切りなしでも区切りありでも入る)
+const formatMfaSecret = (secret) => String(secret).replace(/(.{4})/g, '$1 ').trim();
+/**
+ * 登録の3つの手順(始める → 秘密鍵を認証アプリに入れてコードを確かめる → 回復コードを控える)を container に描く。
+ * QR コードの部品は同梱していないので、秘密鍵と otpauth の URI を出す。
+ */
+function renderMfaEnrollment(container, onDone) {
+  container.innerHTML = `<p class="mb-2">スマートフォンの認証アプリ（Google Authenticator、Microsoft Authenticator など）に登録し、ログインの時にパスワードと6桁のコードを入力します。</p>
+    <div id="mfaEnrollError" class="alert alert-danger py-2 d-none" role="alert"></div>
+    <button type="button" class="btn btn-primary" id="mfaStartBtn">登録を始める</button>`;
+  const showError = (message) => { const el = container.querySelector('#mfaEnrollError'); el.textContent = message; el.classList.remove('d-none'); };
+  container.querySelector('#mfaStartBtn').addEventListener('click', async (ev) => {
+    ev.currentTarget.disabled = true;
+    let setup;
+    try { setup = await api('api/users.php', { method: 'POST', query: { action: 'mfa_setup' }, body: {} }); }
+    catch (e) { showError(e.message); ev.currentTarget.disabled = false; return; }
+    renderMfaSetupStep(container, setup, onDone);
+  });
+}
+function renderMfaSetupStep(container, setup, onDone) {
+  container.innerHTML = `<ol class="small ps-3 mb-2">
+      <li>認証アプリで「セットアップキーを入力」（キーを手動で入力）を選びます。</li>
+      <li>アカウント名に「${esc(setup.issuer)}」、キーに次の文字列を入れ、種類は「時間ベース」を選びます。</li>
+    </ol>
+    <div class="mfa-secret mb-2" id="mfaSecret">${esc(formatMfaSecret(setup.secret))}</div>
+    <details class="mb-3"><summary class="small">URI で登録する（パスワード管理ソフトなど）</summary>
+      <label class="form-label small mt-2" for="mfaUri">otpauth の URI</label>
+      <textarea class="form-control mfa-uri" id="mfaUri" rows="3" readonly>${esc(setup.otpauth_uri)}</textarea></details>
+    <div class="mb-2"><label class="form-label" for="mfaEnableCode">認証アプリに表示された6桁のコード</label>
+      <input type="text" class="form-control mfa-code-input" id="mfaEnableCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></div>
+    <div id="mfaEnrollError" class="alert alert-danger py-2 d-none" role="alert"></div>
+    <button type="button" class="btn btn-primary" id="mfaEnableBtn">確認して有効にする</button>`;
+  const input = container.querySelector('#mfaEnableCode');
+  const btn = container.querySelector('#mfaEnableBtn');
+  const submit = async () => {
+    const err = container.querySelector('#mfaEnrollError');
+    err.classList.add('d-none');
+    btn.disabled = true;
+    try {
+      const r = await api('api/users.php', { method: 'POST', query: { action: 'mfa_enable' }, body: { code: input.value.trim() } });
+      if (State.user) State.user.mfa_enabled = true;
+      renderRecoveryCodes(container, r.recovery_codes, '多要素認証を有効にしました。', onDone);
+    } catch (e) { err.textContent = e.message; err.classList.remove('d-none'); input.focus(); }
+    finally { btn.disabled = false; }
+  };
+  btn.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  input.focus();
+}
+// 回復コードは、この画面を閉じると二度と出せない(サーバはハッシュだけを持つ)
+function renderRecoveryCodes(container, codes, lead, onDone) {
+  container.innerHTML = `<div class="alert alert-success py-2" role="status">${esc(lead)}</div>
+    <p class="small mb-2">端末をなくした時にコードの代わりに使う<strong>回復コード</strong>です。この画面を閉じると二度と表示されません。安全な場所に控えてください。1つのコードは1回だけ使えます。</p>
+    <ul class="mfa-recovery-list mb-2" id="mfaRecoveryCodes">${codes.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
+    <button type="button" class="btn btn-outline-secondary btn-sm mb-3" id="mfaCopyCodes"><i class="bi bi-clipboard" aria-hidden="true"></i> コピー</button>
+    <div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="mfaSavedCheck">
+      <label class="form-check-label" for="mfaSavedCheck">回復コードを控えました</label></div>
+    <button type="button" class="btn btn-primary" id="mfaDoneBtn" disabled>続ける</button>`;
+  container.querySelector('#mfaCopyCodes').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(codes.join('\n')); toast('回復コードをコピーしました', 'ok'); }
+    catch { toast('コピーできませんでした。画面から書き写してください', 'err'); }
+  });
+  const done = container.querySelector('#mfaDoneBtn');
+  container.querySelector('#mfaSavedCheck').addEventListener('change', (e) => { done.disabled = !e.target.checked; });
+  done.addEventListener('click', async () => {
+    done.disabled = true;
+    try { await onDone(); } catch (e) { toast(e.message, 'err'); done.disabled = false; }
+  });
+}
+// 上のバーの盾のボタン: 本人の多要素認証の状態、登録、回復コードの作り直し、解除
+async function openAccountSecurity() {
+  let st;
+  try { st = await api('api/users.php', { query: { action: 'mfa_status' } }); }
+  catch (e) { toast(e.message, 'err'); return; }
+  showInfoModal('多要素認証', '<div id="accountMfaBody"></div>');
+  renderAccountMfa(st);
+}
+function renderAccountMfa(st) {
+  const box = $('#accountMfaBody');
+  const finish = async () => { modalInstance.hide(); toast('多要素認証の設定を保存しました', 'ok'); };
+  if (!st.enabled) {
+    box.innerHTML = `<p class="mb-2"><span class="text-muted">未登録</span>${st.required ? '（組織の方針で必須です）' : ''}</p>
+      ${st.available ? '<div id="accountMfaEnroll"></div>'
+        : '<div class="alert alert-warning py-2">多要素認証の準備ができていません（暗号鍵が未設定です）。システム管理者に連絡してください。</div>'}`;
+    if (st.available) renderMfaEnrollment($('#accountMfaEnroll'), finish);
+    return;
+  }
+  box.innerHTML = `<p class="mb-1"><span class="badge user-badge-mfa">有効</span> <span class="small text-muted">${esc(fmtDate(st.enabled_at))} から</span></p>
+    <p class="small mb-3">使える回復コード: <strong id="accountMfaRemaining">${Number(st.recovery_remaining)}</strong> 個${Number(st.recovery_remaining) <= 2 ? '（残りが少ないので作り直してください）' : ''}</p>
+    <div class="mb-2"><label class="form-label" for="accountMfaCode">確認コード（認証アプリの6桁）</label>
+      <input type="text" class="form-control mfa-code-input" id="accountMfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></div>
+    <div class="mb-2"><label class="form-label" for="accountMfaPassword">またはパスワード（解除の時だけ使えます）</label>
+      <input type="password" class="form-control" id="accountMfaPassword" autocomplete="current-password"></div>
+    <div id="accountMfaError" class="alert alert-danger py-2 d-none" role="alert"></div>
+    <div class="d-flex gap-2 flex-wrap">
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="accountMfaRegen">回復コードを作り直す</button>
+      <button type="button" class="btn btn-outline-danger btn-sm" id="accountMfaDisable">多要素認証を解除</button>
+    </div>
+    ${st.required ? '<div class="form-text mt-2">組織の方針で必須のため、解除すると次の操作から登録の画面になります。</div>' : ''}`;
+  const fail = (e) => { const el = $('#accountMfaError'); el.textContent = e.message; el.classList.remove('d-none'); };
+  $('#accountMfaRegen').addEventListener('click', async () => {
+    $('#accountMfaError').classList.add('d-none');
+    try {
+      const r = await api('api/users.php', { method: 'POST', query: { action: 'mfa_recovery_regenerate' }, body: { code: $('#accountMfaCode').value.trim() } });
+      renderRecoveryCodes(box, r.recovery_codes, '回復コードを作り直しました。前の回復コードはもう使えません。', finish);
+    } catch (e) { fail(e); }
+  });
+  $('#accountMfaDisable').addEventListener('click', async () => {
+    $('#accountMfaError').classList.add('d-none');
+    if (!confirm('多要素認証を解除しますか？\nログインはパスワードだけになります。')) return;
+    const code = $('#accountMfaCode').value.trim();
+    const body = code ? { code } : { password: $('#accountMfaPassword').value };
+    try {
+      await api('api/users.php', { method: 'POST', query: { action: 'mfa_disable' }, body });
+      if (State.user) State.user.mfa_enabled = false;
+      modalInstance.hide();
+      toast('多要素認証を解除しました', 'ok');
+      if (st.required) {
+        const me = await api('api/auth.php', { query: { action: 'me' } });
+        if (me.user?.mfa_enrollment_required) { State.user = me.user; showForcedEnrollment(); }
+      }
+    } catch (e) { fail(e); }
+  });
+}
+// 管理画面ユーザの一覧: 端末をなくした人の多要素認証を解除する
+async function resetUserMfa(id) {
+  const u = Cache.users[id];
+  if (!u) return;
+  if (!confirm(`${u.email} の多要素認証を解除しますか？\nご本人は次のログインでパスワードだけで入り、改めて登録します。`)) return;
+  try {
+    await api('api/users.php', { method: 'POST', query: { action: 'mfa_reset' }, body: { id } });
+    toast('多要素認証を解除しました', 'ok');
+    renderAdminUsers();
+  } catch (e) { toast(e.message, 'err'); }
+}
+// パスワードと多要素認証の方針(組織管理者は自組織、システム管理者は全テナント共通も)
+let securityPolicy = null;
+function securityPolicyText(p) {
+  return `パスワードは${p.min_length}文字以上で、${Number(p.min_classes) >= 4 ? '英大文字・英小文字・数字・記号をすべて含む' : '4種類の文字のうち3種類以上を含む'}。多要素認証は${p.require_mfa ? '必須' : '任意'}。`;
+}
+async function renderSecurityPolicy() {
+  const el = $('#securityPolicySummary');
+  try { securityPolicy = await api('api/users.php', { query: { action: 'security_policy' } }); }
+  catch (e) { el.textContent = `方針を読み込めませんでした（${e.message}）`; return; }
+  el.textContent = securityPolicyText(securityPolicy.effective)
+    + (securityPolicy.global.configured ? '（全テナント共通の方針と合わせた結果）' : '');
+}
+function editSecurityPolicy() {
+  const p = securityPolicy;
+  if (!p) return;
+  const scopes = [...(p.tenant ? [['tenant', 'このテナント']] : []), ...(p.can_edit_global ? [['global', '全テナント共通（システム管理者を含む）']] : [])];
+  const body = `<form id="policyForm">
+    ${scopes.length > 1 ? `<div class="mb-2"><label class="form-label" for="pfScope">対象</label>
+      <select class="form-select" id="pfScope" name="scope">${scopes.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>` : ''}
+    <div class="mb-2"><label class="form-label" for="pfMinLength">パスワードの最小の文字数</label>
+      <input class="form-control" type="number" id="pfMinLength" name="min_length" min="${p.limits.min_length}" max="${p.limits.max_length}" required>
+      <div class="form-text">${p.limits.min_length}〜${p.limits.max_length}。${p.limits.min_length}文字より短くはできません。</div></div>
+    <div class="mb-2"><label class="form-label" for="pfMinClasses">文字の種類</label>
+      <select class="form-select" id="pfMinClasses" name="min_classes">
+        <option value="3">英大文字・英小文字・数字・記号のうち3種類以上</option><option value="4">4種類すべて</option></select></div>
+    <div class="form-check mb-1"><input class="form-check-input" type="checkbox" id="pfRequireMfa" name="require_mfa"${p.mfa_available ? '' : ' disabled'}>
+      <label class="form-check-label" for="pfRequireMfa">多要素認証を必須にする</label></div>
+    <div class="form-text">${p.mfa_available ? '必須にすると、未登録のユーザは次の操作から登録の画面だけになります。'
+      : '多要素認証の暗号鍵が未設定のため、今は必須にできません。'}</div>
+    ${!p.can_edit_global && p.global.configured ? `<div class="small text-muted mt-2">全テナント共通の方針（${esc(securityPolicyText(p.global))}）の方が厳しい項目は、そちらが効きます。</div>` : ''}
+  </form>`;
+  showModal('パスワードと多要素認証の方針', body, async () => {
+    const f = $('#policyForm');
+    const scope = f.scope ? f.scope.value : scopes[0][0];
+    await api('api/users.php', { method: 'POST', query: { action: 'security_policy' }, body: {
+      scope, min_length: Number(f.min_length.value), min_classes: Number(f.min_classes.value), require_mfa: f.require_mfa.checked,
+    } });
+    toast('方針を保存しました', 'ok');
+    // 自分が未登録のまま必須にした時は、すぐに登録の画面へ移す
+    const me = await api('api/auth.php', { query: { action: 'me' } });
+    if (me.user?.mfa_enrollment_required) { State.user = me.user; setTimeout(showForcedEnrollment, 300); return; }
+    renderAdminUsers();
+  });
+  const f = $('#policyForm');
+  const fill = () => {
+    const cur = (f.scope ? f.scope.value : scopes[0][0]) === 'global' ? p.global : p.tenant;
+    f.min_length.value = cur.min_length;
+    f.min_classes.value = String(cur.min_classes);
+    f.require_mfa.checked = !!cur.require_mfa;
+  };
+  fill();
+  f.scope?.addEventListener('change', fill);
 }
 function roleLabel(r) {
   return { superadmin:'システム管理者', tenant_admin:'組織管理者', operator:'オペレータ', viewer:'閲覧者' }[r] || r;
@@ -4252,12 +4508,15 @@ async function renderAdminUsers() {
       <td>${u.status==='active'?'<span class="badge bg-success">有効</span>':'<span class="badge bg-secondary">停止</span>'}</td>
       <td class="text-nowrap" data-col="last-login">${u.last_login_at ? esc(fmtDate(u.last_login_at)) : '<span class="text-muted">なし</span>'}</td>
       <td data-col="password">${userPasswordCell(u)}</td>
+      <td data-col="mfa">${u.mfa_enabled_at ? '<span class="badge user-badge-mfa">有効</span>' : '<span class="text-muted small">未登録</span>'}</td>
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-secondary" onclick="editUser(${u.id})" title="ユーザを編集" aria-label="ユーザを編集"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+        ${u.mfa_enabled_at && u.id !== State.user.id ? `<button class="btn btn-sm btn-outline-secondary" data-action="mfa-reset" onclick="resetUserMfa(${u.id})" title="多要素認証を解除" aria-label="多要素認証を解除"><i class="bi bi-shield-x" aria-hidden="true"></i></button>` : ''}
         <button class="btn btn-sm btn-outline-secondary" data-action="send-password-mail" onclick="sendUserPasswordMail(${u.id})" title="${mailLabel}" aria-label="${mailLabel}"${u.status==='active'?'':' disabled'}><i class="bi bi-envelope" aria-hidden="true"></i></button>
         <button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id})" title="ユーザを削除" aria-label="ユーザを削除"><i class="bi bi-trash" aria-hidden="true"></i></button>
       </td></tr>`;
-  }).join('') : emptyRow(8);
+  }).join('') : emptyRow(9);
+  renderSecurityPolicy();
 }
 // パスワードの列: 設定済み、または「未設定」(送ったリンクの期限。なければ未送信か期限切れ)
 function userPasswordCell(u) {
@@ -4865,6 +5124,27 @@ document.addEventListener('DOMContentLoaded', () => {
     finally { btn.disabled = false; spin.classList.add('d-none'); }
   });
   $('#logoutBtn').addEventListener('click', () => logout());
+  $('#mfaEnrollLogout').addEventListener('click', () => logout());
+  $('#loginMfaForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#loginMfaBtn'), err = $('#loginMfaError');
+    err.classList.add('d-none'); btn.disabled = true;
+    try { await submitMfa(); }
+    catch (ex) {
+      // 期限切れ・ロック・停止は、パスワードの入力からやり直す
+      if ([401, 403, 423].includes(ex.status) && !/確認コードが正しくありません/.test(ex.message)) {
+        hideMfaStep(); showLoginNotice(ex.message); $('#loginPassword').focus();
+      } else { err.textContent = ex.message; err.classList.remove('d-none'); }
+    }
+    finally { btn.disabled = false; }
+  });
+  $('#loginRecoveryToggle').addEventListener('click', () => setMfaRecoveryMode(!mfaRecoveryMode));
+  $('#loginMfaCancel').addEventListener('click', async () => {
+    try { await api('api/auth.php', { method: 'POST', query: { action: 'logout' } }); } catch {}
+    hideMfaStep();
+    $('#loginPassword').value = '';
+    $('#loginPassword').focus();
+  });
   $('#sidebarToggle').addEventListener('click', () => setSidebarOpen(!$('#sidebar').classList.contains('open')));
   $('#sidebarBackdrop').addEventListener('click', () => setSidebarOpen(false));
   $$('.app-sidebar .nav-link').forEach((a) => a.addEventListener('click', () => navigate(a.dataset.view)));
@@ -4999,6 +5279,8 @@ $('#newTemplateBtn').addEventListener('click', newTemplate);
   $('#tplImportUpsertBtn')?.addEventListener('click', () => importTemplatesCsv('upsert'));
   $('#newEduDeliveryBtn').addEventListener('click', newEduDelivery);
   $('#newUserBtn').addEventListener('click', newUser);
+  $('#editSecurityPolicyBtn').addEventListener('click', editSecurityPolicy);
+  $('#accountSecurityBtn').addEventListener('click', openAccountSecurity);
   $('#importUsersCsvBtn')?.addEventListener('click', importUsersCsv);
   $('#exportUsersCsvBtn')?.addEventListener('click', exportUsersCsv);
   $('#newTenantBtn').addEventListener('click', newTenant);

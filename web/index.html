@@ -8,7 +8,7 @@
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=cd988a0c" rel="stylesheet">
+  <link href="assets/app.css?v=21d31c4b" rel="stylesheet">
 </head>
 <body>
 
@@ -35,6 +35,39 @@
         ログイン
       </button>
     </form>
+    <!-- 多要素認証の2段目(パスワードの後) -->
+    <form id="loginMfaForm" class="d-none" autocomplete="off" novalidate>
+      <h5 class="h6 mb-1" id="loginMfaTitle">確認コードを入力</h5>
+      <p class="small text-muted mb-3" id="loginMfaLead">認証アプリに表示されている6桁のコードを入力してください。</p>
+      <div class="mb-3" id="loginMfaCodeField">
+        <label class="form-label" for="loginMfaCode">確認コード</label>
+        <input type="text" class="form-control mfa-code-input" id="loginMfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+      </div>
+      <div class="mb-3 d-none" id="loginRecoveryField">
+        <label class="form-label" for="loginRecoveryCode">回復コード</label>
+        <input type="text" class="form-control mfa-code-input" id="loginRecoveryCode" autocomplete="off" maxlength="19" placeholder="XXXX-XXXX-XXXX-XXXX">
+        <div class="form-text">1つの回復コードは1回だけ使えます。</div>
+      </div>
+      <div id="loginMfaError" class="alert alert-danger py-2 d-none" role="alert"></div>
+      <button type="submit" class="btn btn-primary w-100 mb-2" id="loginMfaBtn">確認してログイン</button>
+      <div class="d-flex justify-content-between">
+        <button type="button" class="btn btn-link btn-sm px-0" id="loginRecoveryToggle">回復コードを使う</button>
+        <button type="button" class="btn btn-link btn-sm px-0" id="loginMfaCancel">最初からやり直す</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========== 多要素認証の登録(組織の方針で必須の時、ログインの後にここだけを出す) ========== -->
+<div id="mfaEnrollView" class="login-wrap d-none">
+  <div class="login-card login-card-wide">
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <i class="bi bi-shield-lock-fill login-logo fs-3" aria-hidden="true"></i>
+      <h4 class="h5 mb-0">多要素認証の登録</h4>
+    </div>
+    <p class="small text-muted mb-3">組織の方針で、この管理画面には多要素認証が必要です。登録が済むまでほかの画面は使えません。</p>
+    <div id="mfaEnrollBody" aria-live="polite"></div>
+    <div class="text-end mt-3"><button type="button" class="btn btn-link btn-sm" id="mfaEnrollLogout">ログアウト</button></div>
   </div>
 </div>
 
@@ -49,6 +82,7 @@
       <select id="tenantSwitcher" class="form-select form-select-sm d-none" style="width:auto" aria-label="テナントの切り替え"></select>
       <button type="button" class="app-icon-btn" id="helpToggle" aria-controls="contextHelp" aria-expanded="false" aria-label="HELP"><i class="bi bi-question-circle"></i><span class="d-none d-sm-inline">HELP</span></button>
       <span class="app-user d-none d-sm-inline" id="userLabel"></span>
+      <button type="button" class="app-icon-btn" id="accountSecurityBtn" aria-label="多要素認証" title="多要素認証"><i class="bi bi-shield-check" aria-hidden="true"></i></button>
       <button type="button" class="app-icon-btn" id="logoutBtn" aria-label="ログアウト" title="ログアウト"><i class="bi bi-box-arrow-right"></i></button>
     </div>
   </header>
@@ -654,6 +688,15 @@
             </table></div>
           </div>
           <div class="tab-pane fade" id="adminUsersPane" role="tabpanel" aria-labelledby="adminUsersTab" tabindex="0" data-role="tenant_admin">
+            <div class="card mb-3" id="securityPolicyBox">
+              <div class="card-body d-flex justify-content-between align-items-start flex-wrap gap-2">
+                <div>
+                  <div class="fw-semibold">パスワードと多要素認証の方針</div>
+                  <div class="security-policy-summary" id="securityPolicySummary">読み込み中…</div>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm" id="editSecurityPolicyBtn"><i class="bi bi-sliders" aria-hidden="true"></i> 方針を変える</button>
+              </div>
+            </div>
             <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
               <div class="small text-muted">この管理画面へログインできるアカウント</div>
               <div class="d-flex gap-2 align-items-center flex-wrap">
@@ -663,7 +706,7 @@
               </div>
             </div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>最終ログイン</th><th>パスワード</th><th>操作</th></tr></thead>
+              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>最終ログイン</th><th>パスワード</th><th>多要素認証</th><th>操作</th></tr></thead>
               <tbody id="usersBody"></tbody>
             </table></div>
           </div>
@@ -732,7 +775,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=e06f1fd0"></script>
+<script src="app.js?v=22650377"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
