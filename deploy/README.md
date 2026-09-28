@@ -61,6 +61,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tet2-edu-scheduler.timer
 ```
 
+ユーザ管理の改善（招待メール、パスワード再設定、CSV の一括登録・出力、パスワードの決まり）を含む配備では、`20261008-user-password-tokens` migrationを**コードより先に**適用する。`users`へ`password_pending`と`session_epoch`の列を足し、`user_password_tokens`表を作るだけで、既存のユーザのパスワードとセッションは変えない。新しい`bootstrap.php`は毎回`users.session_epoch`を読むため、migration前にコードを配備すると全APIが500になる。
+
+- 招待・再設定のメールは教育の案内と同じ`EduMailer`（`TET2_EDU_MAIL_FROM`、localhost:25）で送る。管理者の明示の操作（作成時の選択、一覧のボタン、CSV一括登録の選択）でだけ送り、timerはない。
+- メールのURLの基点は`TET2_ADMIN_BASE_URL`（既定`https://www.filesend.cojp.online/tet2`）。パスワード設定のページは`set_password.php`、APIは`api/password_set.php`（ログイン前にトークンだけで動く）。
+- 管理画面の`/tet2`は外側のフォーム認証の後ろにあるため、外側の認証の資格を持たない人は招待のリンクを開けない。資格を持たない人を招待するなら、`set_password.php`と`api/password_set.php`だけを`credential_capture.php`と同じ形で認証から外す（Apacheの変更は別承認）。受講者のマイページ（sat.cojp.online）で使う時は、許可のリストにこの2つを足す。
+- テストとE2Eでは`TET2_MAIL_OUTBOX_DIR`（メールをファイルに書き、投函しない）か`TET2_EDU_MAIL_DISABLE=1`を使う。本番では設定しない。
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```

@@ -8,7 +8,7 @@
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=92adbb6f" rel="stylesheet">
+  <link href="assets/app.css?v=cd988a0c" rel="stylesheet">
 </head>
 <body>
 
@@ -653,12 +653,16 @@
             </table></div>
           </div>
           <div class="tab-pane fade" id="adminUsersPane" role="tabpanel" aria-labelledby="adminUsersTab" tabindex="0" data-role="tenant_admin">
-            <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
               <div class="small text-muted">この管理画面へログインできるアカウント</div>
-              <button class="btn btn-primary btn-sm" id="newUserBtn"><i class="bi bi-plus-lg"></i> 新規</button>
+              <div class="d-flex gap-2 align-items-center flex-wrap">
+                <button class="btn btn-outline-secondary btn-sm" id="exportUsersCsvBtn"><i class="bi bi-download" aria-hidden="true"></i> CSV出力</button>
+                <button class="btn btn-outline-secondary btn-sm" id="importUsersCsvBtn"><i class="bi bi-upload" aria-hidden="true"></i> CSV一括登録</button>
+                <button class="btn btn-primary btn-sm" id="newUserBtn"><i class="bi bi-plus-lg" aria-hidden="true"></i> 新規</button>
+              </div>
             </div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>操作</th></tr></thead>
+              <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>最終ログイン</th><th>パスワード</th><th>操作</th></tr></thead>
               <tbody id="usersBody"></tbody>
             </table></div>
           </div>
@@ -727,7 +731,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=e09ded36"></script>
+<script src="app.js?v=2ab1398c"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

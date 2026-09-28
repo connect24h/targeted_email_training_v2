@@ -4186,17 +4186,33 @@ async function renderUsers() {
 }
 
 async function renderAdminUsers() {
-  const { users } = await api('api/users.php', { query: { action: 'list' } });
+  const { users, password_policy: policy } = await api('api/users.php', { query: { action: 'list' } });
   cacheRows('users', users);
+  if (policy) State.passwordPolicy = policy;
   // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
   const usersAsc = users.slice().sort((a, b) => a.id - b.id);
-  $('#usersBody').innerHTML = usersAsc.length ? usersAsc.map((u, i) => `
-    <tr><td>${i + 1}</td><td>${esc(u.email)}</td><td>${esc(u.name)}</td><td>${roleLabel(u.role)}</td>
+  $('#usersBody').innerHTML = usersAsc.length ? usersAsc.map((u, i) => {
+    const pending = Number(u.password_pending) === 1;
+    const mailLabel = pending ? '招待メールを送る' : 'パスワード再設定のメールを送る';
+    return `
+    <tr data-user-id="${u.id}"><td>${i + 1}</td><td>${esc(u.email)}</td><td>${esc(u.name)}</td><td>${roleLabel(u.role)}</td>
       <td>${u.status==='active'?'<span class="badge bg-success">有効</span>':'<span class="badge bg-secondary">停止</span>'}</td>
+      <td class="text-nowrap" data-col="last-login">${u.last_login_at ? esc(fmtDate(u.last_login_at)) : '<span class="text-muted">なし</span>'}</td>
+      <td data-col="password">${userPasswordCell(u)}</td>
       <td class="text-nowrap">
         <button class="btn btn-sm btn-outline-secondary" onclick="editUser(${u.id})" title="ユーザを編集" aria-label="ユーザを編集"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="send-password-mail" onclick="sendUserPasswordMail(${u.id})" title="${mailLabel}" aria-label="${mailLabel}"${u.status==='active'?'':' disabled'}><i class="bi bi-envelope" aria-hidden="true"></i></button>
         <button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id})" title="ユーザを削除" aria-label="ユーザを削除"><i class="bi bi-trash" aria-hidden="true"></i></button>
-      </td></tr>`).join('') : emptyRow(6);
+      </td></tr>`;
+  }).join('') : emptyRow(8);
+}
+// パスワードの列: 設定済み、または「未設定」(送ったリンクの期限。なければ未送信か期限切れ)
+function userPasswordCell(u) {
+  if (Number(u.password_pending) !== 1) return '<span class="text-muted small">設定済み</span>';
+  const note = u.password_link_expires_at
+    ? `リンクの期限 ${esc(fmtDate(u.password_link_expires_at))}`
+    : '有効なリンクなし。メールを送ってください';
+  return `<span class="badge user-badge-pending">パスワード未設定</span><div class="small text-muted">${note}</div>`;
 }
 function userRoleOptions(cur) {
   const roles = State.user.role === 'superadmin'
@@ -4204,22 +4220,54 @@ function userRoleOptions(cur) {
     : [['operator','オペレータ'],['viewer','閲覧者']];
   return roles.map(([v,l])=>`<option value="${v}"${cur===v?' selected':''}>${l}</option>`).join('');
 }
+// サーバの PasswordPolicy::DESCRIPTION と同じ文(一覧の API が返した値があればそちらを使う)
+const PASSWORD_POLICY_TEXT = '12文字以上で、英大文字・英小文字・数字・記号のうち3種類以上を含めてください';
 function userForm(u = {}, isNew = true) {
+  const policy = esc(State.passwordPolicy || PASSWORD_POLICY_TEXT);
+  const passwordField = `<div class="mb-2" id="userPasswordField"${isNew ? ' hidden' : ''}><label class="form-label" for="ufPassword">${isNew ? '初期パスワード' : 'パスワード（変更時のみ入力）'}</label>
+      <input class="form-control" id="ufPassword" name="password" type="password" autocomplete="new-password" aria-describedby="ufPasswordHelp">
+      <div class="form-text" id="ufPasswordHelp">${policy}</div></div>`;
   return `<form id="userForm">
-    <div class="mb-2"><label class="form-label">メール</label><input class="form-control" name="email" type="email" value="${esc(u.email)}" ${isNew?'required':'readonly'}></div>
-    <div class="mb-2"><label class="form-label">氏名</label><input class="form-control" name="name" value="${esc(u.name)}"></div>
-    <div class="mb-2"><label class="form-label">ロール</label><select class="form-select" name="role">${userRoleOptions(u.role)}</select></div>
-    <div class="mb-2"><label class="form-label">パスワード${isNew?'':'（変更時のみ入力）'}</label><input class="form-control" name="password" type="password" ${isNew?'required':''}></div>
-    ${!isNew?`<div class="mb-2"><label class="form-label">状態</label><select class="form-select" name="status"><option value="active"${u.status==='active'?' selected':''}>有効</option><option value="suspended"${u.status==='suspended'?' selected':''}>停止</option></select></div>`:''}
+    <div class="mb-2"><label class="form-label" for="ufEmail">メール</label><input class="form-control" id="ufEmail" name="email" type="email" value="${esc(u.email)}" ${isNew?'required':'readonly'}></div>
+    <div class="mb-2"><label class="form-label" for="ufName">氏名</label><input class="form-control" id="ufName" name="name" value="${esc(u.name)}"${isNew?' required':''}></div>
+    <div class="mb-2"><label class="form-label" for="ufRole">ロール</label><select class="form-select" id="ufRole" name="role">${userRoleOptions(u.role)}</select></div>
+    ${isNew ? `<fieldset class="mb-2"><legend class="form-label fs-6 mb-1">パスワード</legend>
+      <div class="form-check"><input class="form-check-input" type="radio" name="pwmode" id="ufModeInvite" value="invite" checked>
+        <label class="form-check-label" for="ufModeInvite">パスワード設定のメールを送る（推奨）</label></div>
+      <div class="form-text ms-4 mb-1">1回だけ使える設定用のリンク（72時間有効）を、ご本人のメールへ送ります。</div>
+      <div class="form-check"><input class="form-check-input" type="radio" name="pwmode" id="ufModePassword" value="password">
+        <label class="form-check-label" for="ufModePassword">初期パスワードを入れる（ご本人へは別の方法で伝える）</label></div>
+    </fieldset>` : ''}
+    ${passwordField}
+    ${!isNew?`<div class="mb-2"><label class="form-label" for="ufStatus">状態</label><select class="form-select" id="ufStatus" name="status"><option value="active"${u.status==='active'?' selected':''}>有効</option><option value="suspended"${u.status==='suspended'?' selected':''}>停止</option></select></div>`:''}
   </form>`;
 }
 function newUser() {
   showModal('新規ユーザ', userForm({}, true), async () => {
     const f = $('#userForm');
-    await api('api/users.php', { method: 'POST', query: { action: 'create' },
-      body: { email: f.email.value.trim(), name: f.name.value.trim(), role: f.role.value, password: f.password.value } });
-    toast('作成しました', 'ok'); renderAdminUsers();
+    const invite = f.pwmode.value === 'invite';
+    if (!invite && !f.password.value) {
+      markModalField(f.password, '初期パスワードを入力してください');
+      f.password.focus();
+      const err = new Error('初期パスワードを入力してください'); err.handled = true; throw err;
+    }
+    const body = { email: f.email.value.trim(), name: f.name.value.trim(), role: f.role.value };
+    if (invite) body.send_invite = true; else body.password = f.password.value;
+    const r = await api('api/users.php', { method: 'POST', query: { action: 'create' }, body });
+    if (r.invite && !r.invite.sent) {
+      toast(`ユーザは作りましたが、招待メールを送れませんでした（${r.invite.error}）。一覧から送り直してください`, 'err', 10000);
+    } else {
+      toast(invite ? '作成し、パスワード設定のメールを送りました' : '作成しました', 'ok');
+    }
+    renderAdminUsers();
   });
+  // 「初期パスワードを入れる」を選んだ時だけ入力欄を出す
+  const f = $('#userForm');
+  f.querySelectorAll('input[name="pwmode"]').forEach((radio) => radio.addEventListener('change', () => {
+    const show = f.pwmode.value === 'password';
+    $('#userPasswordField').hidden = !show;
+    f.password.required = show;
+  }));
 }
 function editUser(id) {
   const u = Cache.users[id];
@@ -4232,10 +4280,74 @@ function editUser(id) {
     toast('更新しました', 'ok'); renderAdminUsers();
   });
 }
+async function sendUserPasswordMail(id) {
+  const u = Cache.users[id];
+  if (!u) return;
+  const pending = Number(u.password_pending) === 1;
+  const what = pending ? '招待（パスワード設定）のメール' : 'パスワード再設定のメール';
+  if (!confirm(`${u.email} へ${what}を送りますか？\n前に送ったリンクは使えなくなります。`)) return;
+  try {
+    const r = await api('api/users.php', { method: 'POST', query: { action: 'send_password_mail' }, body: { id } });
+    toast(`${what}を送りました（リンクの期限 ${fmtDate(r.expires_at)}）`, 'ok', 6000);
+    renderAdminUsers();
+  } catch (e) { toast(e.message, 'err', 10000); }
+}
 async function deleteUser(id) {
   if (!confirm('このユーザを削除しますか？')) return;
   try { await api('api/users.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
     toast('削除しました', 'ok'); renderAdminUsers(); } catch (e) { toast(e.message, 'err'); }
+}
+// ユーザの CSV 一括登録(列は email、name、role)。パスワードは入れず、招待メールを送るかを選ぶ。
+function importUsersCsv() {
+  const body = `<p class="small text-muted mb-2">1行目に見出し <code>email,name,role</code>（日本語の「メールアドレス,氏名,ロール」も可）。role は viewer（閲覧者）、operator（オペレータ）、tenant_admin（組織管理者）のどれか（付けられるのは、あなたが付けられる役割だけ）。パスワードは入れず、「パスワード未設定」で作ります。</p>
+    <div class="mb-2"><label class="form-label" for="userCsvFile">CSV ファイル</label><input class="form-control" type="file" id="userCsvFile" accept=".csv,text/csv"></div>
+    <div class="mb-2"><label class="form-label" for="userCsvText">または貼り付け</label>
+      <textarea class="form-control" id="userCsvText" rows="6" placeholder="email,name,role&#10;hanako@example.com,山田花子,operator"></textarea></div>
+    <div class="form-check"><input class="form-check-input" type="checkbox" id="userCsvInvite" checked>
+      <label class="form-check-label" for="userCsvInvite">登録した人に、パスワード設定のメールを送る</label></div>
+    <div class="form-text">送らない場合は、後で一覧の <i class="bi bi-envelope" aria-hidden="true"></i> から1人ずつ送れます。</div>`;
+  showModal('ユーザの CSV 一括登録', body, async () => {
+    const csv = $('#userCsvText').value.trim();
+    if (!csv) throw new Error('CSV を選ぶか、貼り付けてください');
+    const invite = $('#userCsvInvite').checked;
+    const r = await api('api/users.php', { method: 'POST', query: { action: 'import_csv' },
+      body: { csv, send_invite: invite }, timeout: 120000 });
+    renderAdminUsers();
+    const problems = [...(r.errors || []).map((e) => ({ ...e, kind: '登録しなかった' })),
+      ...(r.invite_errors || []).map((e) => ({ ...e, kind: 'メールを送れなかった' }))];
+    const summary = `登録 ${r.created} 件、飛ばした行 ${r.skipped} 件${invite ? `、招待メール ${r.invited} 件` : ''}`;
+    if (!problems.length) { toast(summary, 'ok', 6000); return; }
+    // 保存のモーダルが閉じてから、行ごとの結果を出す
+    setTimeout(() => showInfoModal('CSV 一括登録の結果', `<p id="userCsvSummary">${esc(summary)}</p>
+      <div class="table-responsive"><table class="table table-sm" id="userCsvErrors"><thead><tr><th>行</th><th>内容</th><th>理由</th></tr></thead><tbody>
+      ${problems.map((p) => `<tr><td>${Number(p.line)}</td><td>${esc(p.kind)}${p.email ? `（${esc(p.email)}）` : ''}</td><td>${esc(p.reason)}</td></tr>`).join('')}
+      </tbody></table></div>`, { size: 'lg' }), 400);
+  }, { size: 'lg', saveLabel: '登録する' });
+  $('#userCsvFile').addEventListener('change', async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) { toast('CSV は1MB以内にしてください', 'err'); ev.target.value = ''; return; }
+    // 先頭の BOM はサーバが取り除く
+    $('#userCsvText').value = await file.text();
+  });
+}
+async function exportUsersCsv() {
+  const btn = $('#exportUsersCsvBtn');
+  btn.disabled = true;
+  try {
+    const qs = new URLSearchParams({ action: 'export_csv' });
+    if (State.user && State.user.role === 'superadmin' && State.activeTenantId) qs.set('tenant_id', State.activeTenantId);
+    const res = await fetch(`api/users.php?${qs}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `users_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    toast('CSV を出力しました', 'ok');
+  } catch (e) { toast(`出力に失敗しました（${e.message}）`, 'err'); }
+  finally { btn.disabled = false; }
 }
 
 /* ========== テナント管理 ========== */
@@ -4452,7 +4564,8 @@ function tenantForm(t = {}, isNew = true) {
         <div class="col-md-6 mb-2"><label class="form-label" for="tfAdminEmail">管理者のメール</label><input class="form-control" id="tfAdminEmail" name="admin_email" type="email"></div>
         <div class="col-md-6 mb-2"><label class="form-label" for="tfAdminName">管理者の名前</label><input class="form-control" id="tfAdminName" name="admin_name"></div>
       </div>
-      <div class="mb-2"><label class="form-label" for="tfAdminPassword">初期パスワード（8文字以上）</label><input class="form-control" id="tfAdminPassword" name="admin_password" type="password" autocomplete="new-password"></div>
+      <div class="mb-2"><label class="form-label" for="tfAdminPassword">初期パスワード</label><input class="form-control" id="tfAdminPassword" name="admin_password" type="password" autocomplete="new-password" aria-describedby="tfAdminPasswordHelp">
+        <div class="form-text" id="tfAdminPasswordHelp">${esc(PASSWORD_POLICY_TEXT)}</div></div>
     </fieldset>` : ''}
   </form>`;
 }
@@ -4831,6 +4944,8 @@ $('#newTemplateBtn').addEventListener('click', newTemplate);
   $('#tplImportUpsertBtn')?.addEventListener('click', () => importTemplatesCsv('upsert'));
   $('#newEduDeliveryBtn').addEventListener('click', newEduDelivery);
   $('#newUserBtn').addEventListener('click', newUser);
+  $('#importUsersCsvBtn')?.addEventListener('click', importUsersCsv);
+  $('#exportUsersCsvBtn')?.addEventListener('click', exportUsersCsv);
   $('#newTenantBtn').addEventListener('click', newTenant);
   checkSession();
 });
@@ -4839,6 +4954,6 @@ $('#newTemplateBtn').addEventListener('click', newTemplate);
 Object.assign(window, {
   launchCampaign, stopCampaign, resumeCampaign, showCampaignProgress, showCampaignData, loadCampaignFile, viewMaster, editMaster, downloadMaster, deleteCampaign, editTarget, deleteTarget, restoreTarget,
   editGroup, deleteGroup, setTplKind, editTemplate, deleteTemplate, tplViewer, scenarioViewer,
-  editUser, deleteUser, editTenant, showReportDetail, generateCampaign,
+  editUser, deleteUser, sendUserPasswordMail, editTenant, showReportDetail, generateCampaign,
   openTenantDetail, closeTenantDetail, switchToTenant, setTenantStatusFilter, deleteTenant, restoreTenant, purgeTenant,
 });

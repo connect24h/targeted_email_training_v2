@@ -482,6 +482,8 @@ h6, .h6 { font-weight: 600; }
 .btn-group .btn.active .tenant-filter-count { color: inherit; }
 .tenant-badge-warning { background: var(--tet-warning-soft); color: var(--tet-warning); border: 1px solid var(--tet-warning); }
 .tenant-note-danger { color: var(--tet-danger); }
+/* ===== ユーザ管理 ===== */
+.user-badge-pending { background: var(--tet-warning-soft); color: var(--tet-warning); border: 1px solid var(--tet-warning); }
 .tenant-notice {
   background: var(--tet-warning-soft);
   border: 1px solid var(--tet-warning);

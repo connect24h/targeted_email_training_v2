@@ -98,9 +98,6 @@ header('Cache-Control: no-store');
   const API = 'api/password_set.php';
   const $ = (id) => document.getElementById(id);
 
-  // URL からトークンを消す(履歴や画面の共有で漏れにくくする)。再読み込みしても変数に残る分で動く。
-  try { history.replaceState(null, '', location.pathname); } catch (_) { /* 古いブラウザは何もしない */ }
-
   async function call(action, body) {
     const res = await fetch(API + '?action=' + action, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
