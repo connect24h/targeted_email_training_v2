@@ -402,7 +402,24 @@ function targets_handle_delete(array $actor): never
     $id = targets_int($body, 'id');
     assert_target_owned($id, $tenantId);
 
-    // 論理削除(アーカイブ)。物理削除しない理由:
+    // 履歴(訓練、教育、アンケート、グループ)が1件もない対象者は、実名とメールアドレスを残さないよう本当に消す。
+    // 派生のデータ(支援優先度のスコア)は履歴として数えず、一緒に消す。
+    $deleted = Db::txImmediate(static function () use ($id, $tenantId): bool {
+        if (targets_history_refs($id) !== []) {
+            return false;
+        }
+        foreach (TARGET_DERIVED_TABLES as $table) {
+            Db::run("DELETE FROM {$table} WHERE target_id = ?", [$id]);
+        }
+        Db::run('DELETE FROM targets WHERE id = ? AND tenant_id = ?', [$id, $tenantId]);
+        return true;
+    });
+    if ($deleted) {
+        audit('target.delete', 'target_id=' . $id);
+        json_out(['success' => true, 'archived' => false, 'deleted' => true]);
+    }
+
+    // 履歴がある対象者は論理削除(アーカイブ)。物理削除しない理由:
     //  1. 訓練履歴(campaign_targets/events/edu_*)を保持し、退職者も「よく開封する人」等の
     //     個人別統計レポートに残す(=履歴管理の要件)。
     //  2. これらは target_id を外部キー(CASCADEなし)で参照するため、物理 DELETE は FK 違反→
@@ -415,7 +432,36 @@ function targets_handle_delete(array $actor): never
         [$id, $tenantId]
     );
     audit('target.archive', 'target_id=' . $id);
-    json_out(['success' => true, 'archived' => true]);
+    json_out(['success' => true, 'archived' => true, 'deleted' => false]);
+}
+
+/** 対象者を参照していても履歴ではない(消してよい)派生のデータ。 */
+const TARGET_DERIVED_TABLES = ['human_risk_scores'];
+
+/**
+ * 対象者を参照している履歴のテーブルと件数。外部キーの定義から毎回調べるので、テーブルが増えても漏れない。
+ * @return array<string,int> テーブル名 => 件数(0件のテーブルは含めない)
+ */
+function targets_history_refs(int $targetId): array
+{
+    $refs = [];
+    foreach (Db::all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'") as $row) {
+        $table = (string) $row['name'];
+        if (in_array($table, TARGET_DERIVED_TABLES, true)) {
+            continue;
+        }
+        foreach (Db::all('SELECT "table" AS parent, "from" AS col FROM pragma_foreign_key_list(?)', [$table]) as $fk) {
+            if ($fk['parent'] !== 'targets') {
+                continue;
+            }
+            $col = (string) $fk['col'];
+            $n = (int) Db::one("SELECT COUNT(*) AS c FROM \"{$table}\" WHERE \"{$col}\" = ?", [$targetId])['c'];
+            if ($n > 0) {
+                $refs[$table] = ($refs[$table] ?? 0) + $n;
+            }
+        }
+    }
+    return $refs;
 }
 
 /**

@@ -119,6 +119,44 @@ check($r['code'] === 200 && ($r['payload']['archived'] ?? null) === true, '削�
 check(Db::one('SELECT status FROM targets WHERE id = ?', [$archId])['status'] === 'archived', 'status が archived になる');
 check((int) Db::one('SELECT COUNT(*) c FROM campaign_targets WHERE target_id = ?', [$archId])['c'] === 1, '訓練履歴(campaign_targets)は保持される');
 
+// --- 履歴のない対象者は本当に消す(2026-09-28)。実名とメールアドレスを残さない ---
+$mk = static function (string $email) use ($tenantId): int {
+    return Db::insert('INSERT INTO targets (tenant_id, email, name) VALUES (?,?,?)', [$tenantId, $email, '履歴なし']);
+};
+$score = static function (int $targetId, string $date) use ($tenantId): void {
+    Db::run("INSERT INTO human_risk_scores (tenant_id, target_id, score, band, computed_date) VALUES (?, ?, 10, 'low', ?)", [$tenantId, $targetId, $date]);
+};
+$plainId = $mk('plain_del@test');
+$keepId = $mk('keep_score@test');
+$score($plainId, '2026-09-01');
+$score($plainId, '2026-09-02');
+$score($keepId, '2026-09-01');
+$GLOBALS['__TET2_TEST_AUDIT'] = [];
+$r = call_handler('targets_handle_delete', ['id' => $plainId], 'operator');
+check($r['code'] === 200 && ($r['payload']['deleted'] ?? null) === true && ($r['payload']['archived'] ?? null) === false,
+    'TD-1: 履歴のない対象者の削除 → deleted=true');
+check(Db::one('SELECT 1 FROM targets WHERE id = ?', [$plainId]) === null, 'TD-1: 対象者の行が消える(実名とメールアドレスを残さない)');
+check((int) Db::one('SELECT COUNT(*) c FROM human_risk_scores WHERE target_id = ?', [$plainId])['c'] === 0, 'TD-2: 派生の支援優先度のスコアも消す');
+check((int) Db::one('SELECT COUNT(*) c FROM human_risk_scores WHERE target_id = ?', [$keepId])['c'] === 1, 'TD-2: ほかの対象者のスコアは消さない');
+check(array_column($GLOBALS['__TET2_TEST_AUDIT'], 'action') === ['target.delete'], 'TD-3: 監査ログは target.delete');
+
+// グループの所属や教育の割当があれば、履歴として残す(アーカイブ)
+$groupId = Db::insert("INSERT INTO groups (tenant_id, name, kind) VALUES (?, '削除テスト', 'custom')", [$tenantId]);
+$inGroup = $mk('in_group@test');
+Db::run('INSERT INTO target_group (target_id, group_id) VALUES (?, ?)', [$inGroup, $groupId]);
+$r = call_handler('targets_handle_delete', ['id' => $inGroup], 'operator');
+check(($r['payload']['archived'] ?? null) === true && Db::one('SELECT status FROM targets WHERE id = ?', [$inGroup])['status'] === 'archived',
+    'TD-4: グループに所属していればアーカイブ');
+$eduDelivery = Db::insert("INSERT INTO edu_deliveries (tenant_id, title, status) VALUES (?, '削除テスト', 'running')", [$tenantId]);
+$hasEdu = $mk('has_edu@test');
+Db::run("INSERT INTO edu_assignments (tenant_id, delivery_id, target_id, access_token) VALUES (?, ?, ?, ?)", [$tenantId, $eduDelivery, $hasEdu, str_repeat('c', 32)]);
+$score($hasEdu, '2026-09-01');
+$r = call_handler('targets_handle_delete', ['id' => $hasEdu], 'operator');
+check(($r['payload']['archived'] ?? null) === true && Db::one('SELECT status FROM targets WHERE id = ?', [$hasEdu])['status'] === 'archived'
+    && (int) Db::one('SELECT COUNT(*) c FROM human_risk_scores WHERE target_id = ?', [$hasEdu])['c'] === 1,
+    'TD-5: 教育の割当があればアーカイブにし、スコアも残す');
+check(targets_history_refs($hasEdu) === ['edu_assignments' => 1], 'TD-6: 履歴の参照は外部キーの定義から数える(派生のスコアは数えない)');
+
 // --- 削除日時の記録(2026-08-09 archived_at 追加) ---
 $archivedAt = Db::one('SELECT archived_at FROM targets WHERE id = ?', [$archId])['archived_at'];
 check($archivedAt !== null && $archivedAt !== '', '削除すると archived_at に日時が入る');

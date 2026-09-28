@@ -2662,8 +2662,12 @@ function editTarget(id) {
 }
 async function deleteTarget(id) {
   if (!confirm('この対象者を削除しますか？')) return;
-  try { await api('api/targets.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
-    toast('削除しました', 'ok'); renderTargets(); } catch (e) { toast(e.message, 'err'); }
+  try {
+    const r = await api('api/targets.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
+    // 履歴のない対象者は本当に消え、履歴のある対象者は統計に残すためアーカイブになる
+    toast(r.deleted ? '削除しました' : '削除しました（訓練の履歴があるため、統計用にアーカイブとして残します）', 'ok');
+    renderTargets();
+  } catch (e) { toast(e.message, 'err'); }
 }
 function importCsv() {
   const body = `<p class="small text-muted">1行目にヘッダ（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ または email/name/company/department/title/position_category）。メール列は必須。役職カテゴリは「役員/管理職/一般従業員」のみ有効（旧称「社員」は「一般従業員」として取り込みます）。列が無い場合は役職名から役職マスタを引いて自動補完します。</p>
