@@ -1779,7 +1779,8 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">件名</label><select class="form-select form-select-sm c-subject">${opt(byKind('subject'))}</select></div>
         <div class="col-md-4"><label class="form-label small">本文</label><select class="form-select form-select-sm c-body">${opt(byKind('body'))}</select></div>
-        <div class="col-md-4"><label class="form-label small">偽ログイン（認証画面）</label><select class="form-select form-select-sm c-phish">${optPhish(byKind('phish_login'))}</select></div>
+        <div class="col-md-4"><label class="form-label small">偽ログイン（認証画面）</label><select class="form-select form-select-sm c-phish">${optPhish(byKind('phish_login'))}</select>
+          ${byKind('phish_login').length ? '' : '<div class="form-text text-danger">偽ログインのテンプレートがありません。「テンプレート」画面の「偽ログイン」で作成してください。</div>'}</div>
       </div>
       <div class="text-end mt-1">
         <button type="button" class="btn btn-sm btn-outline-info c-preview"><i class="bi bi-eye"></i> 内容プレビュー</button>
@@ -2846,6 +2847,8 @@ function templateForm(t = {}) {
       <div class="col-md-6 mb-2"><label class="form-label">形式</label>
         <select class="form-select" name="format"><option value="html"${t.format==='html'?' selected':''}>HTML</option><option value="text"${t.format==='text'?' selected':''}>テキスト</option></select></div>
     </div>
+    <div class="mb-2" id="tplAuthField"><label class="form-label" for="tplAuthFlag">認証の種別（偽ログインのみ）</label>
+      <select class="form-select" name="auth_flag" id="tplAuthFlag">${Object.entries(AUTH_FLAG_NAME).map(([k, l]) => `<option value="${k}"${String(t.auth_flag ?? 0) === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
     <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
     <div class="mb-2"><label class="form-label">内容</label><textarea class="form-control" name="content" id="tplContent" rows="8" required>${esc(t.content)}</textarea></div>
     <div class="mb-2">
@@ -2862,6 +2865,12 @@ function bindTemplateForm() {
   // 種別が「件名」以外のときは何もしない(本文などは名称と中身が別物のため)。
   const nameInput = document.querySelector('#tplForm [name=name]');
   const kindSel = document.querySelector('#tplForm [name=kind]');
+  const authField = document.getElementById('tplAuthField');
+  if (kindSel && authField) {
+    const syncAuthField = () => { authField.hidden = kindSel.value !== 'phish_login'; };
+    kindSel.addEventListener('change', syncAuthField);
+    syncAuthField();
+  }
   if (nameInput && kindSel && ta) {
     // 空、または直前に名称から複写した値のままなら「未編集」とみなす。
     let mirrored = ta.value === '' ? '' : null;
@@ -2933,11 +2942,15 @@ function newScenario() {
   // 差し込みボタンは本文(#tplContent)に挿す。既存フォームと同じ id を使うため流用できる。
   bindTemplateForm();
 }
+// 偽ログインの時だけ auth_flag を送る(API はほかの種別の auth_flag を拒否する)
+function templateAuthFlag(f) {
+  return f.kind.value === 'phish_login' ? { auth_flag: Number(f.auth_flag.value) } : {};
+}
 function newTemplate() {
   showModal('新規テンプレート', templateForm(), async () => {
     const f = $('#tplForm');
     await api('api/templates.php', { method: 'POST', query: { action: 'create' },
-      body: { name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value } });
+      body: { name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, ...templateAuthFlag(f) } });
     toast('作成しました', 'ok'); renderTemplates();
   });
   bindTemplateForm();
@@ -2947,7 +2960,7 @@ async function editTemplate(id) {
   showModal('テンプレート編集', templateForm(template), async () => {
     const f = $('#tplForm');
     await api('api/templates.php', { method: 'POST', query: { action: 'update' },
-      body: { id, name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value } });
+      body: { id, name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, ...templateAuthFlag(f) } });
     toast('更新しました', 'ok'); renderTemplates();
   });
   bindTemplateForm();
