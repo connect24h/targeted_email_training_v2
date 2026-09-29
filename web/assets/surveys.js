@@ -331,6 +331,54 @@ async function svResults(deliveryId) {
   showInfoModal(`結果: ${r.delivery.title}`, body, { size: 'lg' });
 }
 
+/* ========== 訓練後のアンケートの自動配信(段D の D6) ========== */
+
+/**
+ * キャンペーンごとの設定。訓練をクローズした時に1回だけ、防衛に失敗した人(か全員)へアンケートを配る。
+ * 既定は切。クローズする前は配らない(訓練だと気付かれないように)。案内メールはアンケートのメール送信が有効な時だけ。
+ * キャンペーンの一覧の操作から開く(app.js)。
+ */
+async function openCampaignSurveyFollowup(campaignId) {
+  let data;
+  try { data = await api('api/campaign_survey_followup.php', { query: { action: 'get', campaign_id: campaignId } }); }
+  catch (e) { toast(e.message, 'err'); return; }
+  const s = data.setting;
+  const locked = data.closed;
+  const dis = locked ? ' disabled' : '';
+  const surveyOptions = ['<option value="">（選んでください）</option>', ...data.surveys.map((v) =>
+    `<option value="${Number(v.id)}"${Number(v.id) === Number(s.survey_id) ? ' selected' : ''}>${esc(v.title)}${Number(v.is_anonymous) === 1 ? '（匿名）' : ''}</option>`)].join('');
+  const body = `
+    ${locked ? `<div class="alert alert-secondary small py-2">このキャンペーンはクローズ済みです。${s.processed_at ? `結果: ${esc(s.result || '')}（${esc(fmtDate(s.processed_at))}）` : '自動配信は行っていません。'}</div>` : ''}
+    ${data.is_test && !locked ? '<div class="alert alert-warning small py-2">テスト用のキャンペーンでは、有効にしても配りません。</div>' : ''}
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="csfEnabled"${s.enabled ? ' checked' : ''}${dis}>
+      <label class="form-check-label" for="csfEnabled">訓練をクローズした時に、アンケートを配る</label>
+    </div>
+    <div class="mb-2"><label class="form-label" for="csfSurvey">配るアンケート</label>
+      <select class="form-select" id="csfSurvey"${dis}>${surveyOptions}</select>
+      <div class="form-text">設問のある、終了していないアンケートから選びます。雛形からも作れます（アンケートの画面）。</div></div>
+    <div class="mb-2"><label class="form-label" for="csfAudience">配り先</label>
+      <select class="form-select" id="csfAudience"${dis}>
+        <option value="failed"${s.audience === 'failed' ? ' selected' : ''}>防衛に失敗した人（リンクを開いた、または認証を入力した人）</option>
+        <option value="all"${s.audience === 'all' ? ' selected' : ''}>訓練のメールを送った全員</option>
+      </select></div>
+    <div class="mb-2"><label class="form-label" for="csfDeadline">回答の締切（クローズした日から何日後か。空なら期限なし）</label>
+      <input type="number" class="form-control" id="csfDeadline" min="1" max="${Number(data.max_deadline_days)}" value="${s.deadline_days ?? ''}"${dis}></div>
+    <div class="small text-muted">クローズする前は配りません（訓練だと気付かれないように）。配るのはクローズした時の1回だけです。
+      ${data.mail_enabled ? '案内メールも送ります（実在の従業員に届きます）。' : 'アンケートのメール送信は無効なので、配信だけ作ります。回答用 URL の CSV を出力して配ってください。'}</div>`;
+  const title = '訓練後のアンケート';
+  if (locked) { showInfoModal(title, body); return; }
+  showModal(title, body, async () => {
+    const days = $('#csfDeadline').value.trim();
+    const surveyId = $('#csfSurvey').value;
+    await api('api/campaign_survey_followup.php', { method: 'POST', query: { action: 'save' }, body: {
+      campaign_id: Number(campaignId), enabled: $('#csfEnabled').checked, survey_id: surveyId ? Number(surveyId) : null,
+      audience: $('#csfAudience').value, deadline_days: days ? Number(days) : null,
+    } });
+    toast('訓練後のアンケートの設定を保存しました', 'ok');
+  });
+}
+
 /* ========== 登録 ========== */
 
 VIEWS.surveys = renderSurveys;

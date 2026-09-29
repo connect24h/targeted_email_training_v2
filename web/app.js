@@ -773,6 +773,8 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator') && !c.closed_at
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="openCampaignSurveyFollowup(${c.id})" title="訓練後のアンケート（クローズした時に配る設定）" aria-label="訓練後のアンケート"><i class="bi bi-ui-checks" aria-hidden="true"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
@@ -3007,8 +3009,12 @@ async function closeReport() {
   if (!id || State.user?.role !== 'superadmin') return;
   if (!confirm('キャンペーンをクローズしますか？\n確定済み統計を保持し、保存済みの入力本文・パスワードを消去します。この操作は取り消せません。')) return;
   try {
-    await api('api/report.php', { method: 'POST', query: { action: 'close' }, body: { campaign_id: id } });
+    const res = await api('api/report.php', { method: 'POST', query: { action: 'close' }, body: { campaign_id: id } });
     toast('クローズしました。入力本文は消去されました', 'ok');
+    // 訓練後のアンケートの自動配信(D6)を有効にしていた時だけ、結果を知らせる
+    const f = res.survey_followup;
+    if (f && f.status === 'delivered') toast(`訓練後のアンケートを${Number(f.assigned)}人に配りました（案内メール ${Number(f.mail_sent)}通）`, 'ok', 6000);
+    else if (f && ['skipped', 'error'].includes(f.status)) toast(`訓練後のアンケートは配っていません: ${f.message || '内部のエラー'}`, 'err', 6000);
     await renderReports();
   } catch (e) { toast(e.message, 'err'); }
 }

@@ -1004,7 +1004,21 @@ function report_handle_close(): never
         json_error($error->getMessage(), 409);
     }
     audit('campaign.close', 'campaign_id=' . $campaignId . ',purged_captures=' . $result['purged_captures']);
-    json_out(['success' => true, 'is_closed' => true, 'closed_at' => $result['closed_at'], 'purged_captures' => $result['purged_captures']]);
+    // 訓練後のアンケートの自動配信(D6)。設定が有効な時だけ、閉じた後に1回だけ配る(既定は切で、何もしない)。
+    // クローズ自体は確定済みなので、配信の失敗でクローズの応答を失敗にしない(結果は設定の行に残る)。
+    if (!class_exists('CampaignSurveyFollowup')) { require_once __DIR__ . '/../lib/CampaignSurveyFollowup.php'; }
+    try {
+        $followup = CampaignSurveyFollowup::onClosed($tenantId, $campaignId, (int) $user['id']);
+    } catch (Throwable $e) {
+        error_log('report close: survey followup ' . $campaignId . ' ' . $e->getMessage());
+        $followup = ['status' => 'error'];
+    }
+    if ($followup['status'] !== 'off') {
+        audit('campaign.survey_followup_run', 'campaign_id=' . $campaignId . ',status=' . $followup['status']
+            . ',delivery_id=' . ($followup['delivery_id'] ?? '') . ',assigned=' . ($followup['assigned'] ?? 0) . ',mail_sent=' . ($followup['mail_sent'] ?? 0));
+    }
+    json_out(['success' => true, 'is_closed' => true, 'closed_at' => $result['closed_at'], 'purged_captures' => $result['purged_captures'],
+        'survey_followup' => $followup]);
 }
 
 /**
