@@ -100,6 +100,76 @@ async function loadSuspiciousMails() {
   $('#smNextBtn').disabled = SmState.offset + SmState.limit >= data.total;
 }
 
+/* ========== 報告のダッシュボード(G11/G39) ========== */
+
+// superadmin がテナントを選んでいる時はそのテナントだけ(一覧・CSV と同じ扱い)。
+function smDashboardQuery() {
+  const q = { action: 'dashboard' };
+  if (State.user && State.user.role === 'superadmin' && State.activeTenantId) q.tenant_id = State.activeTenantId;
+  return q;
+}
+
+function smMetricBlock(title, m) {
+  if (!m.count) return `<div class="col-md-6"><h6 class="small fw-bold mb-1">${esc(title)}</h6><div class="small text-muted">対象の記録がありません。</div></div>`;
+  const bars = m.buckets.map((b) => {
+    const pct = m.count ? Math.round((b.count / m.count) * 100) : 0;
+    return `<div class="d-flex align-items-center gap-2 mb-1"><span class="small" style="width:6rem">${esc(b.label)}</span>
+      <div class="progress flex-grow-1" style="height:.9rem"><div class="progress-bar bg-info" style="width:${pct}%"></div></div>
+      <span class="small text-muted" style="width:2.5rem">${b.count}件</span></div>`;
+  }).join('');
+  return `<div class="col-md-6"><h6 class="small fw-bold mb-1">${esc(title)}</h6>
+    <div class="small mb-2">中央値 <strong>${smHours(m.median_hours)}</strong> ・ 平均 <strong>${smHours(m.avg_hours)}</strong> ・ ${m.count}件</div>
+    ${bars}</div>`;
+}
+
+function smHours(h) {
+  if (h == null) return '—';
+  if (h < 24) return `${h}時間`;
+  return `${(h / 24).toFixed(1)}日`;
+}
+
+function smRenderDashboard(d) {
+  const maxMonth = Math.max(1, ...d.months.map((m) => m.training + m.real));
+  const monthRows = d.months.map((m) => {
+    const total = m.training + m.real;
+    const tw = Math.round((m.training / maxMonth) * 100);
+    const rw = Math.round((m.real / maxMonth) * 100);
+    return `<div class="d-flex align-items-center gap-2 mb-1"><span class="small" style="width:4.5rem">${esc(m.month)}</span>
+      <div class="progress flex-grow-1" style="height:1rem">
+        <div class="progress-bar bg-secondary" style="width:${tw}%" title="訓練メール ${m.training}件"></div>
+        <div class="progress-bar bg-danger" style="width:${rw}%" title="実メール ${m.real}件"></div>
+      </div><span class="small text-muted" style="width:6.5rem">訓練${m.training}/実${m.real}</span></div>`;
+  }).join('');
+  const c = d.status_counts;
+  return `<div class="mb-3">
+      <div class="d-flex flex-wrap gap-3 mb-2 small">
+        <span>合計 <strong>${d.total}</strong> 件</span>
+        <span><span class="badge bg-secondary">訓練メール ${d.training_total}</span></span>
+        <span><span class="badge bg-danger">実メール ${d.real_total}</span></span>
+        <span><span class="badge bg-primary">未確認 ${c.open}</span> <span class="badge bg-info text-dark">確認中 ${c.in_progress}</span> <span class="badge bg-secondary">対応済 ${c.resolved}</span></span>
+      </div>
+      <h6 class="small fw-bold mb-1">月ごとの受付件数（直近12ヶ月・<span class="text-secondary">訓練</span>／<span class="text-danger">実メール</span>）</h6>
+      ${monthRows}
+    </div>
+    <div class="row g-3">
+      ${smMetricBlock('受付から初動まで（最初の状況変更）', d.first_action)}
+      ${smMetricBlock('受付から対応済まで', d.resolved)}
+    </div>
+    <div class="form-text mt-2">「受付」は不審メールが登録された日時、「初動」は状況を「未確認」から初めて変えた操作です。状況を一度も変えていない報告は対象に含みません。</div>`;
+}
+
+async function loadSmDashboard() {
+  const body = $('#smDashboardBody');
+  if (!body) return;
+  body.innerHTML = '<div class="small text-muted">集計を読み込んでいます…</div>';
+  try {
+    const { dashboard } = await api('api/suspicious_mails.php', { query: smDashboardQuery() });
+    body.innerHTML = smRenderDashboard(dashboard);
+  } catch (e) {
+    body.innerHTML = `<div class="small text-danger">${esc(e.message)}</div>`;
+  }
+}
+
 /* ========== 登録した条件 ========== */
 
 const SM_RULE_KIND_LABEL = { sender: '送信者', subject_keyword: '件名の語', url_domain: 'URL のドメイン' };
@@ -498,7 +568,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#smFileInput')?.addEventListener('change', (e) => smUploadFile(e.target.files[0]));
   $('#smApplyBtn')?.addEventListener('click', () => { SmState.offset = 0; loadSuspiciousMails().catch((e) => toast(e.message, 'err')); });
   $('#smExportBtn')?.addEventListener('click', () => { smExportCsv(); });
-  // 登録した条件は開いた時に読む(一覧の表示を遅くしない)
+  // ダッシュボードと登録した条件は開いた時に読む(一覧の表示を遅くしない)
+  $('#smDashboardCard')?.addEventListener('toggle', (e) => { if (e.target.open) loadSmDashboard(); });
   $('#smRulesCard')?.addEventListener('toggle', (e) => { if (e.target.open) loadSmRules(); });
   $('#smRuleForm')?.addEventListener('submit', smAddRule);
   $('#smRulesBody')?.addEventListener('click', (e) => {

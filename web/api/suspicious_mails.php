@@ -194,6 +194,13 @@ function sm_handle_export_csv(array $actor): never
     exit;
 }
 
+/** 報告のダッシュボード(G11/G39)。読める人とテナントの範囲は一覧と同じ。 */
+function sm_handle_dashboard(array $actor): never
+{
+    $tenantId = sm_tenant($actor);
+    json_out(['success' => true, 'dashboard' => SuspiciousMailStore::dashboard($tenantId)]);
+}
+
 function sm_handle_get(array $actor): never
 {
     $tenantId = sm_tenant($actor);
@@ -324,6 +331,9 @@ try {
     }
     if ($action === 'get' && $method === 'GET') {
         sm_handle_get($actor);
+    }
+    if ($action === 'dashboard' && $method === 'GET') {
+        sm_handle_dashboard($actor);
     }
     if ($action === 'export_csv' && $method === 'GET') {
         sm_handle_export_csv($actor);
