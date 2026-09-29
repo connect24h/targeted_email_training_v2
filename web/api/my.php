@@ -7,8 +7,8 @@
  *   POST my.php?action=logout           (CSRF)
  *   POST my.php?action=change_password  {current_password, new_password} (CSRF)
  *   POST my.php?action=forgot           {email}  登録の有無にかかわらず同じ応答
- *   GET  my.php?action=home             期限つきの ToDo(未受講・受講中の教育、未回答のアンケート)
- *   GET  my.php?action=grades           自分の成績(配信ごと、回ごと、答え合わせ、アウェアネスの推移)
+ *   GET  my.php?action=home             期限つきの ToDo(未受講・受講中の教育、未回答のアンケート)と社内の問い合わせ先
+ *   GET  my.php?action=grades           自分の成績(配信ごと、回ごと、答え合わせ、アウェアネスの推移、自分の受講完了率)
  *   POST my.php?action=retake           {delivery_id} (CSRF) もう一度受講する → 受講の画面の URL
  *   GET  my.php?action=surveys          自分のアンケート(未回答と回答の履歴)
  *
@@ -154,8 +154,10 @@ function my_handle_forgot(): never
 function my_handle_home(): never
 {
     $me = my_require_login();
+    $tenantId = (int) $me['target']['tenant_id'];
     my_json(['success' => true, 'user' => my_profile($me),
-        'todos' => LearnerPortal::todos((int) $me['target']['tenant_id'], (int) $me['target']['id'])]);
+        'todos' => LearnerPortal::todos($tenantId, (int) $me['target']['id']),
+        'contact' => LearnerPortal::contact($tenantId)]);
 }
 
 function my_handle_grades(): never

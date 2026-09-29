@@ -4,7 +4,16 @@
  * 既存の tracking_id 方式に倣い、ログイン不要でトークンだけで受講する。
  *
  *   GET  edu_take.php?action=start&token=...   設問配信(correct_answer は返さない=秘匿)
+ *   POST edu_take.php?action=begin_test        確認テストを始めた(テスト中は教材を閉じる配信は、ここから提出まで教材を返さない)
+ *   POST edu_take.php?action=answer            1問ごとの答え合わせ(feedback_mode = immediate の配信)
  *   POST edu_take.php?action=submit            回答受領→採点→保存→即時結果(解説つき)
+ *
+ * 配信ごとの受講の設定(段A):
+ *   - shuffle_options: 選択肢を割当と設問ごとに決まった順に並べ替えて返す(EduOptionOrder)。画面は表示の順の番号で
+ *     解答を送り、ここで元の番号に戻してから採点と保存をする。答え合わせは表示の順に直して返す。
+ *   - lock_material_during_test: テストを始めた後(受講中の回の test_started_at)は、提出するまで教材とページの画像を返さない。
+ *   - allow_after_deadline: 受講のリンクの期限の後も受講できる(完了はレポートで期限後として数える)。
+ *   - retake_from_test: 不合格の回がある受け直しは、教材を飛ばして確認テストから始める(start の start_at_test)。
  *
  * 採点は SecurityAwareness/lib/scoring.ts の移植:
  *   - 難易度(difficulty) = その設問の配点(maxScore)
@@ -21,6 +30,8 @@ require_once __DIR__ . '/../lib/Db.php';
 require_once __DIR__ . '/../lib/EduMedia.php';
 require_once __DIR__ . '/../lib/TenantStatus.php';
 require_once __DIR__ . '/../lib/EduAttempts.php';
+require_once __DIR__ . '/../lib/EduOptionOrder.php';
+require_once __DIR__ . '/../lib/LearnerPortal.php';
 
 // ---- 最小レスポンスヘルパ(bootstrap を使わないため自前) ----
 function take_json($data, int $code = 200): never
@@ -77,7 +88,8 @@ function take_resolve(string $token): array
 {
     $a = Db::one(
         'SELECT a.*, d.title AS delivery_title, d.delivery_type, d.pass_score, d.status AS delivery_status,
-                d.feedback_mode, d.material_id
+                d.feedback_mode, d.material_id, d.shuffle_options, d.lock_material_during_test, d.allow_after_deadline,
+                d.retake_from_test
          FROM edu_assignments a
          INNER JOIN edu_deliveries d ON d.id = a.delivery_id
          WHERE a.access_token = ?',
@@ -90,7 +102,8 @@ function take_resolve(string $token): array
     if (!TenantStatus::isOperational((int) $a['tenant_id'])) {
         take_error(TenantStatus::PARTICIPANT_BLOCKED_MESSAGE, 403);
     }
-    if (take_is_expired($a['token_expiry'] ?? null)) {
+    // 期限の後の受講を認める配信は通す(完了の日時が期限の後なので、レポートでは期限後として数える)
+    if (take_is_expired($a['token_expiry'] ?? null) && (int) ($a['allow_after_deadline'] ?? 0) !== 1) {
         take_error('この受講リンクは有効期限が切れています', 410);
     }
     return $a;
@@ -225,21 +238,72 @@ function take_option_explanations(?string $json): ?array
     return is_array($value) && $value !== [] ? array_values(array_map('strval', $value)) : null;
 }
 
-/** 1問の答え合わせの内容(正解、選択肢ごとの解説、まとめの解説)。 */
-function take_question_feedback(array $q, array $answer): array
+/** @return list<int> 割当と設問の選択肢の表示の順(表示の位置 → 元の番号)。並べ替えない配信は元の順。 */
+function take_option_order(array $a, array $q): array
+{
+    $options = json_decode((string) $q['options'], true) ?: [];
+    return EduOptionOrder::permutation($a, (int) $q['id'], count($options));
+}
+
+/**
+ * 1問の答え合わせの内容(正解、選択肢ごとの解説、まとめの解説)。$answer は元の選択肢の番号。
+ * 受講の画面へ返すので、選択肢、解答、正解、選択肢ごとの解説は表示の順に直す。
+ */
+function take_question_feedback(array $q, array $answer, array $a): array
 {
     $correct = json_decode((string) $q['correct_answer'], true) ?: [];
+    $order = take_option_order($a, $q);
+    $explanations = take_option_explanations($q['option_explanations'] ?? null);
     return [
         'id' => (int) $q['id'],
         'title' => $q['title'],
-        'options' => json_decode((string) $q['options'], true) ?: [],
-        'your_answer' => array_values(array_map('intval', $answer)),
-        'correct_answer' => $correct,
+        'options' => EduOptionOrder::arrange($order, json_decode((string) $q['options'], true) ?: []),
+        'your_answer' => EduOptionOrder::toDisplayed($order, array_values(array_map('intval', $answer))),
+        'correct_answer' => EduOptionOrder::toDisplayed($order, array_map('intval', $correct)),
         'is_correct' => take_arrays_equal($answer, $correct),
         'explanation' => $q['explanation'],
-        'option_explanations' => take_option_explanations($q['option_explanations'] ?? null),
+        'option_explanations' => $explanations !== null ? EduOptionOrder::arrange($order, $explanations) : null,
         'has_image' => ($q['image_name'] ?? '') !== '',
     ];
+}
+
+/** テスト中は教材を閉じる配信で、受講中の回のテストが始まっているか(提出するまで教材を返さない)。 */
+function take_material_locked(array $a): bool
+{
+    if ((int) ($a['lock_material_during_test'] ?? 0) !== 1) {
+        return false;
+    }
+    $open = EduAttempts::open((int) $a['id']);
+    return $open !== null && $open['test_started_at'] !== null;
+}
+
+/** 受講を始めた(割当を started にする。既に started 以降ならそのまま)。 */
+function take_mark_started(array $a): void
+{
+    if ((string) $a['status'] === 'assigned') {
+        Db::run("UPDATE edu_assignments SET status='started', started_at=datetime('now','localtime') WHERE id=? AND status='assigned'",
+            [(int) $a['id']]);
+    }
+}
+
+/** 確認テストを始めた。受講中の回に日時を残す(テスト中は教材を閉じる配信の判定に使う)。 */
+function take_handle_begin_test(): never
+{
+    $a = take_resolve(take_token('post'));
+    take_reject_if_completed($a);
+    take_mark_started($a);
+    EduAttempts::markTestStarted($a);
+    take_json(['success' => true, 'material_locked' => take_material_locked($a)]);
+}
+
+/** 不合格の回があり、配信が「テストから受け直す」なら、教材を飛ばしてテストから始める。 */
+function take_start_at_test(array $a): bool
+{
+    if ((int) ($a['retake_from_test'] ?? 0) !== 1 || (string) $a['status'] === 'completed') {
+        return false;
+    }
+    return Db::one('SELECT 1 FROM edu_attempts WHERE assignment_id = ? AND completed_at IS NOT NULL AND passed = 0',
+        [(int) $a['id']]) !== null;
 }
 
 /** 画像を送り出す。 */
@@ -255,12 +319,16 @@ function take_send_file(array $file): never
 
 /**
  * 受講者のトークンで、配信の教材のページ画像の場所を決める。受講の完了後も教材は見直せる。
+ * テスト中は教材を閉じる配信では、テストを始めてから提出するまで 403。
  *
  * @return array{path:string,mime:string}
  */
 function take_page_image_file(string $token, int $pageNo): array
 {
     $a = take_resolve($token);
+    if (take_material_locked($a)) {
+        take_error('確認テストの間は教材を見られません。提出した後に見直せます', 403);
+    }
     $material = $a['material_id'] !== null
         ? Db::one("SELECT id, tenant_id FROM edu_materials WHERE id = ? AND format = 'page_images'", [(int) $a['material_id']])
         : null;
@@ -351,21 +419,20 @@ function take_handle_answer(): never
     if ($q === null) {
         take_error('この配信の設問ではありません', 404);
     }
-    if ((string) $a['status'] === 'assigned') {
-        Db::run("UPDATE edu_assignments SET status='started', started_at=datetime('now','localtime') WHERE id=? AND status='assigned'",
-            [(int) $a['id']]);
-    }
-    EduAttempts::ensureOpen($a);
+    take_mark_started($a);
+    EduAttempts::markTestStarted($a);
+    // 画面は表示の順の番号で送るので、元の選択肢の番号に戻してから判定して残す
+    $original = EduOptionOrder::toOriginal(take_option_order($a, $q), array_values($answer));
     $correct = json_decode((string) $q['correct_answer'], true) ?: [];
     Db::run(
         'INSERT OR IGNORE INTO edu_answer_locks (assignment_id, question_id, answer, is_correct) VALUES (?, ?, ?, ?)',
-        [(int) $a['id'], $questionId, json_encode(array_values($answer)), take_arrays_equal($answer, $correct) ? 1 : 0]
+        [(int) $a['id'], $questionId, json_encode($original), take_arrays_equal($original, $correct) ? 1 : 0]
     );
     $locked = take_locked_answers((int) $a['id'])[$questionId];
     take_json([
         'success' => true,
-        'locked' => $locked !== array_values($answer),
-        'feedback' => take_question_feedback($q, $locked),
+        'locked' => $locked !== $original,
+        'feedback' => take_question_feedback($q, $locked, $a),
     ]);
 }
 
@@ -454,10 +521,7 @@ function take_handle_start(): never
 
     // 初回アクセスで started に(冪等: 既に started ならそのまま)
     if ((string) $a['status'] === 'assigned') {
-        Db::run(
-            "UPDATE edu_assignments SET status='started', started_at=datetime('now','localtime') WHERE id=? AND status='assigned'",
-            [(int) $a['id']]
-        );
+        take_mark_started($a);
         // token解決後に配信削除が先行した場合、消えた割当で受講成功を返さない。
         $a = take_resolve($token);
         take_reject_if_completed($a);
@@ -474,7 +538,8 @@ function take_handle_start(): never
             'id' => (int) $q['id'],
             'title' => $q['title'],
             'question_type' => $q['question_type'],
-            'options' => json_decode((string) $q['options'], true) ?: [],
+            // 選択肢は表示の順(並べ替える配信は割当と設問ごとに決まった順)
+            'options' => EduOptionOrder::arrange(take_option_order($a, $q), json_decode((string) $q['options'], true) ?: []),
             'difficulty' => (int) $q['difficulty'],
             'has_image' => ($q['image_name'] ?? '') !== '',
         ];
@@ -483,9 +548,10 @@ function take_handle_start(): never
     $answered = [];
     foreach (take_locked_answers((int) $a['id']) as $qid => $answer) {
         if (isset($byId[$qid])) {
-            $answered[] = ['question_id' => $qid, 'feedback' => take_question_feedback($byId[$qid], $answer)];
+            $answered[] = ['question_id' => $qid, 'feedback' => take_question_feedback($byId[$qid], $answer, $a)];
         }
     }
+    $materialLocked = take_material_locked($a);
 
     take_json([
         'success' => true,
@@ -495,10 +561,19 @@ function take_handle_start(): never
             'question_count' => count($out),
             'feedback_mode' => (string) ($a['feedback_mode'] ?? 'after_submit'),
             'pass_score' => $a['pass_score'] !== null ? (int) $a['pass_score'] : null,
+            'lock_material_during_test' => (int) ($a['lock_material_during_test'] ?? 0) === 1,
+            'retake_from_test' => (int) ($a['retake_from_test'] ?? 0) === 1,
+            // 期限の後の受講(認める配信だけここに来る)。画面は「期限後の受講として記録」と添える
+            'after_deadline' => take_is_expired($a['token_expiry'] ?? null),
+            'start_at_test' => take_start_at_test($a),
         ],
-        'material' => take_delivery_material((int) $a['delivery_id']),
+        // テストを始めた後は教材を返さない(テスト中は教材を閉じる配信)
+        'material' => $materialLocked ? null : take_delivery_material((int) $a['delivery_id']),
+        'material_locked' => $materialLocked,
         'questions' => $out,
         'answered' => $answered,
+        // マイページのアカウントがある人にだけ、戻る先を返す(ない人にはアカウントの有無も知らせない)
+        'portal_url' => LearnerPortal::hasAccount((int) $a['tenant_id'], (int) $a['target_id']) ? 'my.php' : null,
     ]);
 }
 
@@ -549,7 +624,14 @@ function take_handle_submit(): never
         $qMeta[$qid] = $q;
     }
 
-    // 答え合わせ済みの設問は、固定した解答で採点する(提出の中身で書き換えさせない)
+    // 画面は表示の順の番号で送るので、元の選択肢の番号に戻す(並べ替えない配信は同じ番号のまま)
+    foreach ($submitted as $qid => $indexes) {
+        if (isset($qMeta[$qid])) {
+            $submitted[$qid] = EduOptionOrder::toOriginal(take_option_order($a, $qMeta[$qid]), $indexes);
+        }
+    }
+
+    // 答え合わせ済みの設問は、固定した解答で採点する(提出の中身で書き換えさせない。固定した解答は元の番号)
     $immediate = (string) ($a['feedback_mode'] ?? '') === 'immediate';
     if ($immediate) {
         foreach (take_locked_answers((int) $a['id']) as $qid => $answer) {
@@ -582,7 +664,7 @@ function take_handle_submit(): never
     $feedback = [];
     foreach ($questions as $q) {
         $qid = (int) $q['id'];
-        $feedback[] = take_question_feedback($q, $submitted[$qid] ?? []);
+        $feedback[] = take_question_feedback($q, $submitted[$qid] ?? [], $a);
     }
 
     take_json([
@@ -611,6 +693,9 @@ try {
     }
     if ($action === 'answer' && $method === 'POST') {
         take_handle_answer();
+    }
+    if ($action === 'begin_test' && $method === 'POST') {
+        take_handle_begin_test();
     }
     if ($action === 'page_image' && $method === 'GET') {
         $page = filter_var($_GET['page'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);

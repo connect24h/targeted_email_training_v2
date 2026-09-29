@@ -59,6 +59,26 @@ final class EduAttempts
         });
     }
 
+    /** 受講中の回で確認テストを始めた日時を残す(回がなければ開く。既に残っていれば変えない)。 */
+    public static function markTestStarted(array $assignment): void
+    {
+        $open = self::ensureOpen($assignment);
+        Db::run("UPDATE edu_attempts SET test_started_at = datetime('now','localtime') WHERE id = ? AND test_started_at IS NULL",
+            [(int) $open['id']]);
+    }
+
+    /**
+     * 期限を過ぎて受講できないか。期限の後の受講を認める配信(allow_after_deadline=1)は受講できる。
+     * $row は割当の token_expiry と、配信の deadline、allow_after_deadline を持つ。
+     */
+    public static function closedByDeadline(array $row): bool
+    {
+        if ((int) ($row['allow_after_deadline'] ?? 0) === 1) {
+            return false;
+        }
+        return self::isExpired($row['token_expiry'] ?? null) || self::isExpired($row['deadline'] ?? null);
+    }
+
     /**
      * 提出の結果で受講中の回を閉じる(呼ぶ側のトランザクションの中で使う)。回がなければ作ってから閉じる。
      * @param array{total_score:int,max_score:int,percentage:int,answers:list<array<string,mixed>>} $result
@@ -143,7 +163,7 @@ final class EduAttempts
         if ((string) ($row['delivery_status'] ?? '') !== 'running') {
             return self::MSG_CLOSED;
         }
-        if (self::isExpired($row['token_expiry'] ?? null) || self::isExpired($row['deadline'] ?? null)) {
+        if (self::closedByDeadline($row)) {
             return self::MSG_EXPIRED;
         }
         return null;

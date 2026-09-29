@@ -113,9 +113,19 @@ header('Cache-Control: no-store');
     <section class="mt-3" data-panel="home" aria-labelledby="tabHome">
       <h2 class="h6 text-muted mb-2">やること（期限の近い順）</h2>
       <div class="card-t" id="todoList"></div>
+      <div class="card-t p-3 mt-3 d-none" id="contactCard">
+        <h2 class="h6 mb-1"><i class="bi bi-question-circle" aria-hidden="true"></i> 社内の問い合わせ先</h2>
+        <div class="small" id="contactText" style="white-space:pre-wrap"></div>
+      </div>
     </section>
 
     <section class="mt-3 d-none" data-panel="grades" aria-labelledby="tabGrades">
+      <div class="card-t p-3 mb-3 d-none" id="gradeSummary">
+        <div class="d-flex align-items-center gap-3">
+          <div class="score" id="gradeRate"></div>
+          <div class="small text-muted" id="gradeRateNote"></div>
+        </div>
+      </div>
       <div class="card-t p-3 mb-3 d-none" id="trendCard">
         <h2 class="h6 mb-2">アウェアネス（小問）の正答率の推移</h2>
         <div class="table-responsive"><table class="table table-sm align-middle mb-0">
@@ -238,6 +248,9 @@ header('Cache-Control: no-store');
     const box = $('todoList');
     loading(box);
     const data = await call('home');
+    // テナントの社内の問い合わせ先(管理画面で設定した時だけ出す。文は textContent で入れる)
+    $('contactCard').classList.toggle('d-none', !data.contact);
+    $('contactText').textContent = data.contact || '';
     if (!data.todos.length) { box.innerHTML = empty('今やることはありません。'); return; }
     box.innerHTML = data.todos.map((t) => {
       const isEdu = t.kind === 'edu';
@@ -287,6 +300,10 @@ header('Cache-Control: no-store');
     const box = $('gradeList');
     loading(box);
     const data = await call('grades');
+    const sum = data.summary || {};
+    $('gradeSummary').classList.toggle('d-none', !sum.assigned);
+    $('gradeRate').textContent = sum.completion_rate !== null && sum.completion_rate !== undefined ? `${sum.completion_rate}%` : '—';
+    $('gradeRateNote').textContent = `自分の受講完了率（配信 ${Number(sum.assigned || 0)} 件のうち ${Number(sum.completed || 0)} 件を完了）`;
     const trend = data.awareness_trend || [];
     $('trendCard').classList.toggle('d-none', !trend.length);
     $('trendBody').innerHTML = trend.map((p) => `<tr><td class="text-nowrap small">${esc(dt(p.completed_at))}</td>
@@ -314,10 +331,12 @@ header('Cache-Control: no-store');
             ${g.pass_score !== null ? `<div class="small text-muted">合格点 ${g.pass_score}%</div>` : ''}</div>
         </div>
         <dl class="kv mt-2 mb-0">
+          <dt>配信日時</dt><dd class="delivered-at">${esc(dt(g.delivered_at)) || '—'}</dd>
           <dt>受講の開始</dt><dd>${esc(dt(g.started_at)) || '—'}</dd>
           <dt>完了</dt><dd>${esc(dt(g.completed_at)) || '—'}</dd>
           <dt>受講回数</dt><dd class="attempt-count">${g.attempt_count}回</dd>
-          <dt>期限</dt><dd>${g.deadline ? esc(dt(g.deadline)) + (g.expired ? '（期限切れ）' : '') : '期限なし'}</dd>
+          ${g.question_count ? `<dt>正解</dt><dd class="correct-count">正解 ${Number(g.correct_count)}/${Number(g.question_count)}</dd>` : ''}
+          <dt>期限</dt><dd>${g.deadline ? esc(dt(g.deadline)) + (g.expired ? '（期限切れ）' : (g.past_deadline ? '（期限後も受講できます）' : '')) : '期限なし'}</dd>
         </dl>
         ${actions.length ? `<div class="d-flex gap-2 flex-wrap mt-2">${actions.join('')}</div>` : ''}${blocked}
         ${attempts.length > 1 ? `<details class="mt-2"><summary>回ごとの結果（${attempts.length}回）</summary>

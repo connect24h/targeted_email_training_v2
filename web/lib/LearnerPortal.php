@@ -17,6 +17,12 @@ final class LearnerPortal
     /** 答え合わせを見せてよい配信の feedback_mode。ここにない値(見せない設定)の配信は、解答と正解と解説を出さない。 */
     public const REVIEW_FEEDBACK_MODES = ['after_submit', 'immediate'];
 
+    /**
+     * マイページを使える管理画面のユーザの役割(LearnerAuth::ADMIN_ROLES と同じ。learner_portal_test で一致を確かめる)。
+     * 受講の API(edu_take.php)は LearnerAuth を読まないので、ここに持つ。
+     */
+    public const ACCOUNT_ADMIN_ROLES = ['viewer', 'operator', 'tenant_admin'];
+
     /** 受講者に見せない配信の状態(開始前と中止)。 */
     private const HIDDEN_DELIVERY_STATUSES = "('draft','scheduled','cancelled')";
 
@@ -28,7 +34,7 @@ final class LearnerPortal
     {
         $items = [];
         $edu = Db::all(
-            'SELECT a.status, a.access_token, a.token_expiry, d.title, d.delivery_type, d.deadline
+            'SELECT a.status, a.access_token, a.token_expiry, d.title, d.delivery_type, d.deadline, d.allow_after_deadline
              FROM edu_assignments a
              INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
              WHERE a.tenant_id = ? AND a.target_id = ? AND a.status IN (\'assigned\', \'started\')
@@ -36,8 +42,8 @@ final class LearnerPortal
             [$tenantId, $targetId]
         );
         foreach ($edu as $r) {
-            if (EduAttempts::isExpired($r['token_expiry']) || EduAttempts::isExpired($r['deadline'])) {
-                continue; // 期限切れは受講できないので ToDo に出さない(成績の画面には出る)
+            if (EduAttempts::closedByDeadline($r)) {
+                continue; // 期限切れは受講できないので ToDo に出さない(成績の画面には出る)。期限の後の受講を認める配信は出す
             }
             $items[] = [
                 'kind' => 'edu',
@@ -73,16 +79,17 @@ final class LearnerPortal
     }
 
     /**
-     * 自分の成績: 配信ごとの状態、点数、合否、受講の日時、受講回数、回の一覧、完了した配信の答え合わせ。
-     * アウェアネス(小問)の正答率の推移も返す。
-     * @return array{deliveries: list<array<string,mixed>>, awareness_trend: list<array<string,mixed>>}
+     * 自分の成績: 配信ごとの状態、点数、合否、配信の日時、受講の日時、受講回数、回の一覧、最新の提出の正解の数、
+     * 完了した配信の答え合わせ。アウェアネス(小問)の正答率の推移と、自分の受講完了率も返す。
+     * @return array{deliveries: list<array<string,mixed>>, awareness_trend: list<array<string,mixed>>, summary: array<string,mixed>}
      */
     public static function grades(int $tenantId, int $targetId): array
     {
         $rows = Db::all(
             'SELECT a.id, a.tenant_id, a.status, a.score, a.started_at, a.completed_at, a.access_token, a.token_expiry,
                     d.id AS delivery_id, d.title, d.delivery_type, d.pass_score, d.deadline, d.feedback_mode,
-                    d.status AS delivery_status, d.allow_retake_after_pass
+                    d.status AS delivery_status, d.allow_retake_after_pass, d.allow_after_deadline,
+                    COALESCE(d.scheduled_at, a.created_at) AS delivered_at
              FROM edu_assignments a
              INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
              WHERE a.tenant_id = ? AND a.target_id = ? AND d.status NOT IN ' . self::HIDDEN_DELIVERY_STATUSES . '
@@ -96,7 +103,7 @@ final class LearnerPortal
             $submitted = array_values(array_filter($attempts, static fn(array $t): bool => $t['completed_at'] !== null));
             $latest = $submitted !== [] ? $submitted[count($submitted) - 1] : null;
             $retaking = EduAttempts::retakeOpen($r);
-            $expired = EduAttempts::isExpired($r['token_expiry']) || EduAttempts::isExpired($r['deadline']);
+            $expired = EduAttempts::closedByDeadline($r);
             $status = (string) $r['status'];
             $passScore = $r['pass_score'] !== null ? (int) $r['pass_score'] : null;
             $retakeReason = $status === 'completed' ? EduAttempts::retakeBlockReason($r) : null;
@@ -110,10 +117,17 @@ final class LearnerPortal
                 'score' => $r['score'] !== null ? (int) $r['score'] : null,
                 'pass_score' => $passScore,
                 'passed' => $latest !== null && $latest['passed'] !== null ? (int) $latest['passed'] === 1 : null,
+                // 配信の日時: 予約の日時、なければ自分に割り当てられた日時(開始の日時)
+                'delivered_at' => $r['delivered_at'],
                 'started_at' => $r['started_at'],
                 'completed_at' => $r['completed_at'],
+                // 最新の提出の回の「正解 n/m」(設問の数で数える。得点は配点で計算するので別)
+                'correct_count' => $latest !== null ? self::correctCount($latest)['correct'] : null,
+                'question_count' => $latest !== null ? self::correctCount($latest)['total'] : null,
                 'deadline' => self::deadlineOf($r['deadline'], $r['token_expiry']),
                 'expired' => $expired,
+                // 期限は過ぎたが、期限の後の受講を認める配信なので受講できる(完了は期限後として記録される)
+                'past_deadline' => !$expired && (EduAttempts::isExpired($r['token_expiry']) || EduAttempts::isExpired($r['deadline'])),
                 'attempt_count' => count($submitted),
                 'attempts' => array_map(static fn(array $t): array => [
                     'attempt_no' => (int) $t['attempt_no'],
@@ -158,7 +172,45 @@ final class LearnerPortal
             unset($p['seq']);
             return $p;
         }, $trend);
-        return ['deliveries' => $out, 'awareness_trend' => $trend];
+        $completed = count(array_filter($out, static fn(array $d): bool => $d['status'] === 'completed'));
+        return ['deliveries' => $out, 'awareness_trend' => $trend, 'summary' => [
+            'assigned' => count($out),
+            'completed' => $completed,
+            'completion_rate' => $out !== [] ? round($completed / count($out) * 100, 1) : null,
+        ]];
+    }
+
+    /**
+     * 受講の API が、受講を終えた画面にマイページへ戻るリンクを出してよいか。その対象者がマイページにログインできる
+     * アカウント(LearnerAuth::targetFor と同じつながり方で、パスワードを設定済みの有効なアカウント)を持つ時だけ true。
+     */
+    public static function hasAccount(int $tenantId, int $targetId): bool
+    {
+        $roles = implode(',', array_fill(0, count(self::ACCOUNT_ADMIN_ROLES), '?'));
+        return Db::one(
+            "SELECT 1 FROM users u
+             INNER JOIN targets t ON t.id = ? AND t.tenant_id = ? AND t.status = 'active'
+             WHERE u.tenant_id = t.tenant_id AND u.status = 'active' AND u.password_pending = 0
+               AND lower(u.email) = lower(t.email)
+               AND ((u.role = 'learner' AND u.target_id = t.id) OR u.role IN ($roles))
+             LIMIT 1",
+            array_merge([$targetId, $tenantId], self::ACCOUNT_ADMIN_ROLES)
+        ) !== null;
+    }
+
+    /** テナントの社内の問い合わせ先(管理画面のテナントの設定)。未設定は null。 */
+    public static function contact(int $tenantId): ?string
+    {
+        $value = trim((string) (Db::one('SELECT edu_contact FROM tenants WHERE id = ?', [$tenantId])['edu_contact'] ?? ''));
+        return $value !== '' ? $value : null;
+    }
+
+    /** @return array{correct:int,total:int} 提出した回の正解の数と設問の数 */
+    private static function correctCount(array $attempt): array
+    {
+        $answers = json_decode((string) ($attempt['answers'] ?? ''), true) ?: [];
+        $correct = count(array_filter($answers, static fn($a): bool => is_array($a) && ($a['is_correct'] ?? false) === true));
+        return ['correct' => $correct, 'total' => count($answers)];
     }
 
     /**
@@ -169,7 +221,7 @@ final class LearnerPortal
     public static function retake(int $tenantId, int $targetId, int $deliveryId): string
     {
         $row = Db::one(
-            'SELECT a.*, d.status AS delivery_status, d.deadline, d.allow_retake_after_pass
+            'SELECT a.*, d.status AS delivery_status, d.deadline, d.allow_retake_after_pass, d.allow_after_deadline
              FROM edu_assignments a
              INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
              WHERE a.tenant_id = ? AND a.target_id = ? AND a.delivery_id = ?
@@ -179,7 +231,7 @@ final class LearnerPortal
         if ($row === null) {
             throw new OutOfBoundsException('配信が見つかりません');
         }
-        if (EduAttempts::isExpired($row['token_expiry']) || EduAttempts::isExpired($row['deadline'])) {
+        if (EduAttempts::closedByDeadline($row)) {
             throw new DomainException(EduAttempts::MSG_EXPIRED);
         }
         if ((string) $row['status'] === 'completed') {

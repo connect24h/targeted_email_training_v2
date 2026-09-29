@@ -73,6 +73,8 @@ sudo systemctl enable --now tet2-edu-scheduler.timer
 - 受講者のサイト（sat.cojp.online）の許可のリストに、`my.php`（`<Files>`は名前で合うので`api/my.php`も同じ1行で許可される）、`set_password.php`、`password_set.php`を足す。管理APIの`api/learners.php`は公開しない。Apacheの変更は別承認。反映後、`https://sat.cojp.online/my.php`がログイン画面を出すこと、`api/learners.php`と`index.html`が403のままであることを実HTTPで確かめる。
 - 招待のメールのURLの基点は`TET2_LEARNER_BASE_URL`（既定`https://sat.cojp.online`）。リンクは`set_password.php?token=...&site=my`で、設定の後に`my.php`へ案内する。
 - 招待は管理画面の対象者の一覧（組織管理者以上）からだけ送る。timerはない。
+
+配信ごとの受講の設定（選択肢の並べ替え、テスト中の教材、期限後の受講、テストからの受け直し）と社内の問い合わせ先を含む配備では、`20261020-edu-delivery-options` migrationを**コードより先に**適用する。`edu_deliveries`へ4列（既定0。既存の配信は今と同じ動き）、`edu_attempts.test_started_at`、`tenants.edu_contact`を足すだけ。新しい`edu_take.php`はこれらの列を毎回読むため、migration前にコードを配備すると受講が500になる。教育レポートの概要と推移（段0）はmigrationなしで変わる（テスト用と削除済みの対象者を除き、推移は`edu_responses`から月ごとに集計）。
 - セッションのクッキーは`TET2MYSESID`（path `/`）で、管理画面の`TET2SESID`とは別。
 
 ```bash

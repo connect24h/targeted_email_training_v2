@@ -20,6 +20,11 @@ const EDU_DELIVERY_STATUSES = ['draft', 'scheduled', 'running', 'done', 'cancell
  * new_target_days 日以内の対象者を継続的に自動投入する。manual は launch 操作でのみ対象を確定する。
  */
 const EDU_TRIGGERED_BY = ['manual', 'phishing_failure', 'new_target'];
+/**
+ * 配信ごとの受講の設定(真偽値)。shuffle_options=確認テストの選択肢の並べ替え、lock_material_during_test=テスト中は教材を閉じる、
+ * allow_after_deadline=期限の後も受講できる、retake_from_test=不合格の後はテストから受け直す。
+ */
+const EDU_DELIVERY_OPTION_FLAGS = ['shuffle_options', 'lock_material_during_test', 'allow_after_deadline', 'retake_from_test'];
 
 function edu_d_query_int(string $key): ?int
 {
@@ -436,6 +441,11 @@ function edu_d_parse_config(array $body, int $tenantId): array
             'send_invites' => edu_d_flag($body, 'send_invites', 0),
             // 完了(合格)した後もマイページから受け直せるか(既定は許す)
             'allow_retake_after_pass' => edu_d_flag($body, 'allow_retake_after_pass', 1),
+            // 受講の設定(段A)。選択肢の並べ替えは新しい配信だけ既定で有効、ほかは今と同じ動きが既定
+            'shuffle_options' => edu_d_flag($body, 'shuffle_options', 1),
+            'lock_material_during_test' => edu_d_flag($body, 'lock_material_during_test', 0),
+            'allow_after_deadline' => edu_d_flag($body, 'allow_after_deadline', 0),
+            'retake_from_test' => edu_d_flag($body, 'retake_from_test', 0),
             'target_positions' => edu_d_target_positions($body, $targetType),
             'risk_results' => edu_d_risk_results($body, $targetType, $triggeredBy, $phishCampaignId, $tenantId),
             'new_target_days' => edu_d_new_target_days($body, $triggeredBy),
@@ -532,9 +542,14 @@ function edu_d_handle_update(array $actor): never
     $feedbackMode = edu_d_feedback_mode($body, null);
     $sendInvites = array_key_exists('send_invites', $body) ? edu_d_flag($body, 'send_invites', 0) : null;
     $allowRetake = array_key_exists('allow_retake_after_pass', $body) ? edu_d_flag($body, 'allow_retake_after_pass', 1) : null;
+    $options = [];
+    foreach (EDU_DELIVERY_OPTION_FLAGS as $key) {
+        $options[$key] = array_key_exists($key, $body) ? edu_d_flag($body, $key, 0) : null;
+    }
 
     if ($title === null && $passScore === null && $scheduledAt === null && !$clearSchedule && $deadline === null
-        && $triggeredBy === null && $feedbackMode === null && $sendInvites === null && $allowRetake === null) {
+        && $triggeredBy === null && $feedbackMode === null && $sendInvites === null && $allowRetake === null
+        && array_filter($options, static fn(?int $v): bool => $v !== null) === []) {
         json_error('更新項目がありません', 400);
     }
     // 下書きに予約の日時を入れたら予約にする(その日時に edu_scheduler.php が開始する)。予約を解除したら下書きに戻す
@@ -550,9 +565,15 @@ function edu_d_handle_update(array $actor): never
              feedback_mode = COALESCE(?, feedback_mode),
              send_invites = COALESCE(?, send_invites),
              allow_retake_after_pass = COALESCE(?, allow_retake_after_pass),
+             shuffle_options = COALESCE(?, shuffle_options),
+             lock_material_during_test = COALESCE(?, lock_material_during_test),
+             allow_after_deadline = COALESCE(?, allow_after_deadline),
+             retake_from_test = COALESCE(?, retake_from_test),
              status = COALESCE(?, status)
          WHERE id = ? AND tenant_id = ? AND status IN (\'draft\',\'scheduled\')',
-        [$title, $passScore, $clearSchedule ? 1 : 0, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $allowRetake, $status, $id, $tenantId]
+        [$title, $passScore, $clearSchedule ? 1 : 0, $scheduledAt, $deadline, $triggeredBy, $feedbackMode, $sendInvites, $allowRetake,
+            $options['shuffle_options'], $options['lock_material_during_test'], $options['allow_after_deadline'],
+            $options['retake_from_test'], $status, $id, $tenantId]
     );
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
@@ -689,6 +710,38 @@ function edu_d_handle_launch(array $actor): never
     ]);
 }
 
+/** 受講者のマイページに出す社内の問い合わせ先(テナントの設定)の長さの上限。 */
+const EDU_CONTACT_MAX = 500;
+
+/** 社内の問い合わせ先を読む(配信の画面を見られる人)。 */
+function edu_d_handle_contact_get(array $actor): never
+{
+    $tenantId = effective_tenant_id($actor, edu_d_query_int('tenant_id'));
+    $row = Db::one('SELECT edu_contact FROM tenants WHERE id = ?', [$tenantId]);
+    json_out(['success' => true, 'edu_contact' => $row['edu_contact'] ?? null,
+        'can_edit' => in_array((string) $actor['role'], ['tenant_admin', 'superadmin'], true)]);
+}
+
+/** 社内の問い合わせ先を変える(組織管理者とシステム管理者)。空にすると表示しない。 */
+function edu_d_handle_contact_update(array $actor): never
+{
+    tet2_require_csrf();
+    $actor = require_role('tenant_admin');
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
+    $value = $body['edu_contact'] ?? null;
+    if ($value !== null && !is_string($value)) {
+        json_error('edu_contact が不正です', 400);
+    }
+    $value = $value === null ? '' : trim(str_replace("\r\n", "\n", $value));
+    if (mb_strlen($value) > EDU_CONTACT_MAX) {
+        json_error('問い合わせ先は' . EDU_CONTACT_MAX . '文字以内で入力してください', 400);
+    }
+    Db::run('UPDATE tenants SET edu_contact = ? WHERE id = ?', [$value !== '' ? $value : null, $tenantId]);
+    audit('tenant.edu_contact', 'tenant_id=' . $tenantId . ',length=' . mb_strlen($value));
+    json_out(['success' => true, 'edu_contact' => $value !== '' ? $value : null]);
+}
+
 /**
  * remind: 指定配信の未完了受講者(status assigned/started)へ受講URL付き催促メールを送る。
  * launch 済み(running)の配信が対象。トークンは既存 assignment のものを再利用(新規発行しない)。
@@ -810,6 +863,12 @@ try {
     }
     if ($action === 'series_stop' && $method === 'POST') {
         edu_d_handle_series_stop($actor);
+    }
+    if ($action === 'contact' && $method === 'GET') {
+        edu_d_handle_contact_get($actor);
+    }
+    if ($action === 'contact' && $method === 'POST') {
+        edu_d_handle_contact_update($actor);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

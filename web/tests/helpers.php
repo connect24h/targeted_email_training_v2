@@ -44,6 +44,9 @@ function tet2_test_boot(?string $seedSql = null): string
     require_once __DIR__ . '/../lib/TenantStatus.php';
     // load_api は require の行を外すので、受講の API(edu_take)が使う受講の回の処理もここで読む
     require_once __DIR__ . '/../lib/EduAttempts.php';
+    // 選択肢の並べ替えと、マイページのアカウントの有無(受講を終えた画面の戻るリンク)も受講の API が使う
+    require_once __DIR__ . '/../lib/EduOptionOrder.php';
+    require_once __DIR__ . '/../lib/LearnerPortal.php';
     if ($seedSql !== null) {
         Db::run($seedSql);
     }

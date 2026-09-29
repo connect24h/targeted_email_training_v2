@@ -492,19 +492,21 @@ function edu_rep_norm_deadline(?string $v): ?string
 
 /**
  * 割当1件の合否と期限内合格。$row は percentage、completed_at、pass_score、deadline、token_expiry を持つ。
- * @return array{passed: ?bool, on_time: ?bool, deadline: ?string}
+ * late は期限の後に完了したか(期限の後の受講を認める配信で起きる。合格点のない配信も出す)。
+ * @return array{passed: ?bool, on_time: ?bool, deadline: ?string, late: bool}
  */
 function edu_rep_judge(array $row): array
 {
     $deadline = edu_rep_norm_deadline($row['deadline'] ?? null) ?? edu_rep_norm_deadline($row['token_expiry'] ?? null);
+    $completedAt = edu_rep_norm_deadline($row['completed_at'] ?? null);
+    $late = $deadline !== null && $completedAt !== null && $completedAt > $deadline;
     if ($row['pass_score'] === null) {
-        return ['passed' => null, 'on_time' => null, 'deadline' => $deadline];
+        return ['passed' => null, 'on_time' => null, 'deadline' => $deadline, 'late' => $late];
     }
     $passed = $row['percentage'] !== null && (int) $row['percentage'] >= (int) $row['pass_score'];
-    $completedAt = edu_rep_norm_deadline($row['completed_at'] ?? null);
     // 期限のない配信は、合格をすべて期限内として数える
     $onTime = $passed && ($deadline === null || ($completedAt !== null && $completedAt <= $deadline));
-    return ['passed' => $passed, 'on_time' => $onTime, 'deadline' => $deadline];
+    return ['passed' => $passed, 'on_time' => $onTime, 'deadline' => $deadline, 'late' => $late];
 }
 
 /**
@@ -563,6 +565,7 @@ function edu_rep_present_person(array $row): array
         'score' => $row['percentage'] !== null ? (int) $row['percentage'] : null,
         'passed' => $judge['passed'],
         'on_time' => $judge['on_time'],
+        'late' => $judge['late'],
         'attempt_count' => (int) $row['attempt_count'],
         'deadline' => $judge['deadline'],
         'completed_at' => $row['completed_at'],

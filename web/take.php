@@ -8,6 +8,9 @@
  *   - immediate   : 1問ごとに「答え合わせ」して正誤と選択肢ごとの解説を見てから次へ(08 設計書の G18)
  *   - after_submit: 全問に答えてから提出し、結果でまとめて解説を見る(従来の形)
  * 画像(教材のページ、設問の画像)は edu_take.php がトークンを確かめてから返す。
+ * 配信の受講の設定: 選択肢はサーバーが並べた順で表示し、表示の順の番号で送る(元の番号への変換はサーバー)。
+ * テスト中は教材を閉じる配信では、テストを始めると「教材を見直す」を出さない(API も教材を返さない)。
+ * 不合格の後にテストから受け直す配信では、教材を飛ばして確認テストを開く。
  * ロジックは edu_take.php API を叩く。ここでは token を JS に渡す土台だけを描画する。
  */
 $token = isset($_GET['token']) && is_string($_GET['token']) ? trim($_GET['token']) : '';
@@ -178,6 +181,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       <div class="d-flex gap-2 justify-content-center mt-3 flex-wrap">
         <button class="btn btn-outline-secondary d-none" id="rLesson"><i class="bi bi-book"></i> 教材を見直す</button>
         <button class="btn btn-action d-none" id="rRetry"><i class="bi bi-arrow-repeat"></i> もう一度受講する</button>
+        <a class="btn btn-outline-secondary d-none" id="rPortal" href="#"><i class="bi bi-person-circle"></i> マイページへ戻る</a>
       </div>
     </div>
     <h6 class="fw-bold mb-2"><i class="bi bi-list-check"></i> 振り返り</h6>
@@ -210,6 +214,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 
   let delivery = {};
   let material = null;
+  let portalUrl = null;   // マイページのアカウントがある人だけ API が返す
   let questions = [];
   const answers = {};    // question_id -> [index]
   const feedbacks = {};  // question_id -> 答え合わせの結果(immediate)
@@ -238,6 +243,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       const j = await api('start');
       delivery = j.delivery;
       material = j.material;
+      portalUrl = j.portal_url || null;
       questions = j.questions;
       (j.answered || []).forEach((a) => { feedbacks[a.question_id] = a.feedback; answers[a.question_id] = a.feedback.your_answer; });
       $('headTitle').textContent = delivery.title || 'セキュリティ教育';
@@ -250,9 +256,13 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       meta.push(`<li class="mb-1"><i class="bi bi-patch-question text-secondary"></i> 確認テスト ${questions.length} 問`
         + (delivery.pass_score && delivery.delivery_type === 'elearning' ? `（合格は ${delivery.pass_score}% 以上）` : '') + '</li>');
       $('landingMeta').innerHTML = meta.join('');
-      $('landingNote').textContent = delivery.feedback_mode === 'immediate'
+      const notes = [delivery.feedback_mode === 'immediate'
         ? '1問ずつ「答え合わせ」をして、正解と解説を確かめながら進みます。'
-        : 'すべての問題に答えてから「結果を見る」を押すと、正解と解説がまとめて表示されます。';
+        : 'すべての問題に答えてから「結果を見る」を押すと、正解と解説がまとめて表示されます。'];
+      if (delivery.lock_material_during_test) notes.push(j.material_locked ? 'テストの途中です。提出するまで教材は見られません。' : '確認テストを始めると、提出するまで教材は見られません。');
+      if (delivery.start_at_test) notes.push('前回は不合格でした。確認テストから受け直します。');
+      if (delivery.after_deadline) notes.push('受講の期限を過ぎています。期限後の受講として記録されます。');
+      $('landingNote').textContent = notes.join(' ');
       const answeredCount = Object.keys(feedbacks).length;
       $('startLabel').textContent = answeredCount ? `続きから（${answeredCount} 問 回答済み）` : 'はじめる';
       only('landingView');
@@ -260,7 +270,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
   }
 
   function begin() {
-    if (Object.keys(feedbacks).length) { openQuiz(firstUnanswered()); return; }
+    if (Object.keys(feedbacks).length || delivery.start_at_test) { openQuiz(firstUnanswered()); return; }
     if (material && material.format === 'page_images' && material.pages.length) { openPages(); return; }
     if (material && material.slides && material.slides.length) { lessonCur = 0; only('lessonView'); renderLesson(); return; }
     openQuiz(0);
@@ -335,10 +345,12 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
   const immediate = () => delivery.feedback_mode === 'immediate';
   const firstUnanswered = () => { const i = questions.findIndex((q) => !feedbacks[q.id]); return i === -1 ? questions.length - 1 : i; };
 
-  function openQuiz(index) {
+  async function openQuiz(index) {
     if (!questions.length) { fail('出題する設問がありません'); return; }
+    // テストを始めたことをサーバーに残す(テスト中は教材を閉じる配信は、ここから提出まで教材を返さない)
+    try { await api('begin_test', {}); } catch (e) { fail(e.message); return; }
     cur = index; only('quizView');
-    $('backToLesson').classList.toggle('d-none', !material);
+    $('backToLesson').classList.toggle('d-none', !material || !!delivery.lock_material_during_test);
     renderQuestion();
   }
 
@@ -455,6 +467,9 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
       : '<span class="badge text-bg-primary fs-6"><i class="bi bi-flag"></i> 受講完了</span>';
     $('rRetry').classList.toggle('d-none', res.passed !== false);
     $('rLesson').classList.toggle('d-none', !material);
+    // マイページのアカウントがある人にだけ戻るリンクを出す(ない人には何も出さない)
+    $('rPortal').classList.toggle('d-none', !portalUrl);
+    if (portalUrl) $('rPortal').href = portalUrl;
     const list = $('reviewList');
     list.innerHTML = '';
     j.feedback.forEach((f, n) => {
@@ -527,7 +542,8 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
     Object.keys(answers).forEach((k) => delete answers[k]);
     Object.keys(feedbacks).forEach((k) => delete feedbacks[k]);
     reachedEnd = false; cur = 0;
-    if (material) toMaterial(false); else openQuiz(0);
+    // テストから受け直す配信は、教材を飛ばして確認テストを開く
+    if (material && !delivery.retake_from_test) toMaterial(false); else openQuiz(0);
   });
 
   start();
