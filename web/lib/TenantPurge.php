@@ -37,6 +37,8 @@ final class TenantPurge
         ['campaign_automations', 'tenant_id = ?'],
         ['report_mail_matches', 'tenant_id = ?'],
         ['suspicious_mail_history', 'suspicious_mail_id IN (SELECT id FROM suspicious_mails WHERE tenant_id = ?)'],
+        // 報告者への返信の記録(D4)
+        ['suspicious_mail_replies', 'suspicious_mail_id IN (SELECT id FROM suspicious_mails WHERE tenant_id = ?)'],
         ['suspicious_mails', 'tenant_id = ?'],
         ['suspicious_mail_rules', 'tenant_id = ?'],
         ['credential_captures', 'tenant_id = ?'],
@@ -54,6 +56,8 @@ final class TenantPurge
         ['edu_delivery_targets', 'delivery_id IN (SELECT id FROM edu_deliveries WHERE tenant_id = ?)'],
         ['edu_score_snapshots', 'tenant_id = ?'],
         ['edu_auto_enroll_runs', 'tenant_id = ?'],
+        // 受講期間の終了時の集計通知の台帳(D5)
+        ['edu_delivery_summaries', 'tenant_id = ?'],
         ['edu_deliveries', 'tenant_id = ?'],
         ['edu_delivery_series', 'tenant_id = ?'],
         ['edu_questions', 'tenant_id = ?'],
@@ -61,6 +65,8 @@ final class TenantPurge
         ['edu_material_pages', 'material_id IN (SELECT id FROM edu_materials WHERE tenant_id = ?)'],
         ['edu_material_versions', 'material_id IN (SELECT id FROM edu_materials WHERE tenant_id = ?)'],
         ['edu_materials', 'tenant_id = ?'],
+        // 訓練後のアンケートの設定(D6)。アンケートの配信とキャンペーンを参照するので、その前に消す
+        ['campaign_survey_followups', 'tenant_id = ?'],
         ['survey_answers', 'response_id IN (SELECT id FROM survey_responses WHERE tenant_id = ?)'],
         ['survey_responses', 'tenant_id = ?'],
         ['survey_assignments', 'tenant_id = ?'],
@@ -86,6 +92,8 @@ final class TenantPurge
         ['tenant_security_policies', 'tenant_id = ?'],
         // 通知の文面の上書き(C2)
         ['notification_templates', 'tenant_id = ?'],
+        // 集計通知の設定(D5)
+        ['edu_summary_settings', 'tenant_id = ?'],
         ['users', 'tenant_id = ?'],
     ];
 

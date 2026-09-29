@@ -111,6 +111,13 @@ function seedTenant(int $t, string $tag): void
     $surveyResponse = $id("INSERT INTO survey_responses (tenant_id, delivery_id, assignment_id, submitted_at) VALUES (?, ?, ?, '2026-09-04 09:00:00')",
         [$t, $surveyDelivery, $surveyAssignment]);
     Db::run("INSERT INTO survey_answers (response_id, question_id, value) VALUES (?, ?, 'ok')", [$surveyResponse, $surveyQuestion]);
+    // 段D の D4〜D6(報告者への返信、集計通知、訓練後のアンケート)
+    Db::run("INSERT INTO suspicious_mail_replies (tenant_id, suspicious_mail_id, kind, to_email, subject, sent_by, status)
+        VALUES (?, ?, 'report_reply_checking', ?, 's', 'x@purge.test', 'sent')", [$t, $suspicious, "t-{$tag}@purge.test"]);
+    Db::run("INSERT INTO edu_summary_settings (tenant_id, enabled, recipients) VALUES (?, 0, '[]')", [$t]);
+    Db::run("INSERT INTO edu_delivery_summaries (tenant_id, delivery_id, status) VALUES (?, ?, 'sent')", [$t, $delivery]);
+    Db::run("INSERT INTO campaign_survey_followups (campaign_id, tenant_id, enabled, survey_id, delivery_id) VALUES (?, ?, 1, ?, ?)",
+        [$campaign, $t, $survey, $surveyDelivery]);
 }
 
 /** audit_log を除く全テーブルの全行(rowid の順)。比べるための写し。 */
