@@ -83,13 +83,30 @@ test('material bank keeps viewer read-only while operator can edit tenant materi
     context.api = async () => ({ materials: [] });
     context.emptyRow = (columns) => `<td colspan="${columns}">なし</td>`;
     await context.renderEduMaterials();
-    assert.match(body.innerHTML, /colspan="5"/);
+    assert.match(body.innerHTML, /colspan="6"/);
   }
 });
 
-test('education screens explain retention and material header matches five columns', () => {
+test('material bank shows the kind and how many deliveries use each material', async () => {
+  const source = app.slice(app.indexOf('async function renderEduMaterials()'), app.indexOf('let eduMaterialPreviewIndex'));
+  const body = { innerHTML: '' };
+  const context = vm.createContext({
+    State: { user: { role: 'viewer' } }, Cache: {}, $: () => body,
+    roleAtLeast: () => false, esc: String, emptyRow: () => '',
+    api: async () => ({ materials: [
+      { id: 1, title: '本', is_shared: 0, format: 'page_images', page_count: 25, kind: 'book', delivery_count: 3 },
+      { id: 2, title: '要点', is_shared: 0, format: 'page_images', page_count: 13, kind: 'slide', delivery_count: 0 },
+    ] }),
+  });
+  vm.runInContext(source, context);
+  await context.renderEduMaterials();
+  assert.match(body.innerHTML, /本の版 PDF 25ページ<\/td>\s*<td>3<\/td>/);
+  assert.match(body.innerHTML, /スライド版 PDF 13ページ<\/td>\s*<td>0<\/td>/);
+});
+
+test('education screens explain retention and material header matches six columns', () => {
   const index = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(index, /<th>#<\/th><th>教材名<\/th><th>説明<\/th><th>スライド<\/th><th>操作<\/th>/);
+  assert.match(index, /<th>#<\/th><th>教材名<\/th><th>説明<\/th><th>スライド<\/th><th[^>]*>使っている配信<\/th><th>操作<\/th>/);
   assert.match(index, /キャンペーンを削除しても、教育配信と受講履歴は保持され/);
   assert.match(index, /削除できるのは受講開始前の配信です/);
 });

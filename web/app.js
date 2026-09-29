@@ -505,6 +505,7 @@ function applyActiveTenant(id) {
   State.activeTenantId = id;
   clearTenantCache();
   reportSelectedId = null;
+  resetEduRep();
   State.workspaceReview = null;
 }
 
@@ -3863,19 +3864,11 @@ async function remindEduDelivery(id) {
     toast(msg, r.failed > 0 ? 'err' : 'ok');
   } catch (e) { toast(e.message, 'err'); }
 }
-async function viewEduDelivery(id) {
-  const r = await api('api/edu_report.php', { query: { action: 'delivery', id } });
-  const s = r.summary;
-  const rows = (r.by_question || []).map((q) => `
-    <tr><td>${esc(q.title)}</td><td>難${q.difficulty}</td><td>${q.correct}/${q.answered}</td><td>${q.correct_rate}%</td></tr>`).join('');
-  const html = `
-    <div class="mb-3">
-      <div>受講率: <b>${s.completion_rate}%</b> (${s.completed}/${s.assigned})</div>
-      <div>平均正答率: <b>${s.average_score}%</b>${s.pass_rate!==null?` / 合格率: <b>${s.pass_rate}%</b>`:''}</div>
-    </div>
-    <table class="table table-sm"><thead><tr><th>設問</th><th>難易度</th><th>正答</th><th>正答率</th></tr></thead>
-    <tbody>${rows || emptyRow(4)}</tbody></table>`;
-  showModal(`配信レポート: ${esc(r.delivery.title)}`, html, null);
+// 教育配信の一覧の「レポート」は、教育レポートの「配信ごと」のタブで、その配信の詳細を開く
+function viewEduDelivery(id) {
+  eduRep.tab = 'deliveries';
+  selectEduRepDelivery(id);
+  navigate('eduReport');
 }
 
 /* ========== セキュリティ教育: 教材バンク ========== */
@@ -3894,15 +3887,34 @@ async function renderEduMaterials() {
     }
     $('#eduPdfImportBtn')?.classList.toggle('d-none', !roleAtLeast(State.user.role, 'operator'));
   }
+  renderEduMaterialRows();
+}
+// 教材の形式(API の kind)。本の版とスライド版は、題名とページの向きから API が推定する
+const EDU_MATERIAL_KIND = { book: '本の版', slide: 'スライド版' };
+function eduMaterialSize(material) {
+  if (material.format !== 'page_images') return `文字 ${Number(material.slide_count)}枚`;
+  const kind = EDU_MATERIAL_KIND[material.kind];
+  return `${kind ? `${kind} ` : ''}PDF ${Number(material.page_count)}ページ`;
+}
+/** 教材の一覧を、形式と題名の絞り込みに合わせて描く(取り直さない)。 */
+function renderEduMaterialRows() {
+  const all = Cache.eduMaterialList || [];
+  const kind = $('#eduMaterialKind')?.value || '';
+  const q = String($('#eduMaterialSearch')?.value || '').trim().toLowerCase();
+  const list = all.filter((m) => (!kind || m.kind === kind) && (!q || String(m.title).toLowerCase().includes(q)));
+  const count = $('#eduMaterialCount');
+  if (count && all.length) count.textContent = list.length === all.length ? `${all.length}本` : `${all.length}本中 ${list.length}本`;
   const canEdit = (material) => roleAtLeast(State.user.role, 'operator')
     && (Number(material.is_shared) !== 1 || State.user.role === 'superadmin');
-  $('#eduMaterialsBody').innerHTML = Cache.eduMaterialList.length ? Cache.eduMaterialList.map((material, index) => `
+  $('#eduMaterialsBody').innerHTML = list.length ? list.map((material, index) => `
     <tr><td>${index + 1}</td><td>${esc(material.title)}${Number(material.is_shared) === 1 ? ' <span class="badge bg-info">共有</span>' : ''}</td>
-      <td class="small text-muted">${esc(material.description || '')}</td><td>${material.format === 'page_images' ? `PDF ${Number(material.page_count)}ページ` : `文字 ${Number(material.slide_count)}枚`}</td>
+      <td class="small text-muted">${esc(material.description || '')}</td><td>${esc(eduMaterialSize(material))}</td>
+      <td>${Number(material.delivery_count || 0)}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduMaterial(${material.id})"><i class="bi bi-play-circle"></i> 教材を試行</button>
         ${!canEdit(material) ? '<span class="small text-muted ms-1">閲覧のみ</span>'
           : material.format === 'page_images' ? `<button class="btn btn-sm btn-outline-secondary" onclick="replaceEduMaterialPdf(${material.id})"><i class="bi bi-file-earmark-arrow-up"></i> PDF差し替え</button>`
-          : `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>`}</td></tr>`).join('') : emptyRow(5);
+          : `<button class="btn btn-sm btn-outline-secondary" onclick="editEduMaterial(${material.id})"><i class="bi bi-pencil"></i> 差し替え</button>`}</td></tr>`).join('')
+    : all.length ? '<tr><td colspan="6" class="text-center text-muted py-4">条件に合う教材がありません</td></tr>' : emptyRow(6);
 }
 
 let eduMaterialPreviewIndex = 0;
@@ -4437,7 +4449,261 @@ async function deleteEduQuestion(id) {
 }
 
 /* ========== セキュリティ教育: レポート ========== */
+// タブ(概要、配信ごと、受講者ごと、訓練と教育)の状態。配信ごとの詳細は、同じタブの中で一覧と切り替える
+const eduRep = { tab: 'overview', deliveryId: null, sub: 'people', incomplete: false, q: '', learnerQ: '', personId: null, campaignId: null };
+function resetEduRep() { Object.assign(eduRep, { deliveryId: null, personId: null, campaignId: null, incomplete: false, q: '', learnerQ: '' }); }
+const EDU_ASSIGN_STATUS = {
+  assigned: ['未受講', 'bg-light text-dark border'], started: ['受講中', 'bg-info text-dark'],
+  completed: ['完了', 'bg-success'], expired: ['期限切れ', 'bg-secondary'],
+};
+function eduAssignStatusBadge(status) {
+  const [label, cls] = EDU_ASSIGN_STATUS[status] || [status, 'bg-light text-dark border'];
+  return `<span class="badge ${cls}">${esc(label)}</span>`;
+}
+function eduRate(v) { return v === null || v === undefined ? '—' : `${esc(String(v))}%`; }
+// 合否: 点数のない人(未受講)と合格点のない配信は「—」。期限の後の合格は注記する
+function eduPassedCell(p) {
+  if (p.passed === null || p.passed === undefined || p.score === null) return '—';
+  if (!p.passed) return '<span class="text-danger">不合格</span>';
+  return `<span class="text-success">合格</span>${p.on_time === false ? ' <span class="small text-muted">期限後</span>' : ''}`;
+}
+function eduNoteRow(cols, text) { return `<tr><td colspan="${cols}" class="text-center text-muted py-4">${esc(text)}</td></tr>`; }
+/** 表を「読み込み中」にしてから load の返す HTML で埋める。失敗は理由と再読み込み。後から来た古い応答は捨てる。 */
+async function eduRepFill(selector, load) {
+  const tb = $(selector);
+  if (!tb) return;
+  const token = `${Date.now()}-${Math.random()}`;
+  tb.dataset.req = token;
+  tb.innerHTML = loadingRow(tableColumns(tb));
+  try {
+    const html = await load(() => tb.dataset.req === token);
+    if (tb.dataset.req === token) tb.innerHTML = html;
+  } catch (e) {
+    if (tb.dataset.req === token) tb.innerHTML = errorRow(tableColumns(tb), e.message);
+  }
+}
+function eduRepCsvUrl(action, extra = {}) {
+  const params = new URLSearchParams({ action, id: String(eduRep.deliveryId), format: 'csv', ...extra });
+  if (State.user?.role === 'superadmin' && State.activeTenantId) params.set('tenant_id', State.activeTenantId);
+  return `api/edu_report.php?${params}`;
+}
+function eduRepPeopleFilter() {
+  return { ...(eduRep.incomplete ? { incomplete: '1' } : {}), ...(eduRep.q ? { q: eduRep.q } : {}) };
+}
+
 async function renderEduReport() {
+  const overview = renderEduReportOverview();
+  const tab = $(`#eduRepTab-${eduRep.tab}`);
+  // タブを切り替えると shown.bs.tab でそのタブを読む。今のタブのままなら、ここで読み直す
+  if (tab && !tab.classList.contains('active')) bootstrap.Tab.getOrCreateInstance(tab).show();
+  else await eduRepRenderTab(eduRep.tab);
+  await overview;
+}
+function eduRepRenderTab(tab) {
+  if (tab === 'deliveries') return eduRep.deliveryId ? renderEduRepDetail() : renderEduRepDeliveries();
+  if (tab === 'people') return renderEduRepLearners();
+  if (tab === 'cross') return renderEduRepCross();
+  return Promise.resolve();
+}
+
+function renderEduRepDeliveries() {
+  $('#eduRepDeliveryList').classList.remove('d-none');
+  $('#eduRepDeliveryDetail').classList.add('d-none');
+  return eduRepFill('#eduRepDeliveriesBody', async () => {
+    const { deliveries } = await api('api/edu_report.php', { query: { action: 'deliveries' } });
+    return (deliveries || []).length ? deliveries.map((d) => `
+      <tr><td>${esc(d.title)}<div class="small text-muted">${esc(EDU_DTYPE[d.delivery_type] || d.delivery_type)}</div></td>
+        <td>${eduStatusCell(d)}</td><td>${esc(fmtDate(d.scheduled_at || d.created_at))}</td>
+        <td>${d.deadline ? esc(fmtDate(d.deadline)) : 'なし'}</td>
+        <td>${Number(d.assigned)}</td><td>${Number(d.completed)}</td><td>${Number(d.incomplete)}</td>
+        <td>${eduRate(d.pass_rate)}</td><td>${eduRate(d.on_time_pass_rate)}</td>
+        <td><button type="button" class="btn btn-sm btn-outline-primary" onclick="openEduRepDelivery(${Number(d.id)})"><i class="bi bi-list-check" aria-hidden="true"></i> 詳細</button></td></tr>`).join('')
+      : emptyRow(10);
+  });
+}
+// 配信を選ぶ。前に開いた配信の絞り込み(未完了だけ、検索)は持ち越さない
+function selectEduRepDelivery(id) {
+  Object.assign(eduRep, { deliveryId: Number(id), q: '' });
+  $('#eduRepPeopleSearch').value = '';
+  setEduRepIncomplete(false);
+}
+function openEduRepDelivery(id) {
+  selectEduRepDelivery(id);
+  renderEduRepDetail();
+  $('#eduRepBackBtn').focus();
+}
+function closeEduRepDelivery() {
+  eduRep.deliveryId = null;
+  renderEduRepDeliveries();
+  $('#eduRepTab-deliveries').focus();
+}
+function setEduRepIncomplete(on) {
+  eduRep.incomplete = on;
+  for (const b of $$('[data-edu-rep-incomplete]')) {
+    const active = (b.dataset.eduRepIncomplete === '1') === on;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-pressed', String(active));
+  }
+}
+function renderEduRepDetail() {
+  $('#eduRepDeliveryList').classList.add('d-none');
+  $('#eduRepDeliveryDetail').classList.remove('d-none');
+  const jobs = [renderEduRepPeople()];
+  if (eduRep.sub === 'depts') jobs.push(renderEduRepDepts());
+  if (eduRep.sub === 'questions') jobs.push(renderEduRepQuestions());
+  return Promise.all(jobs);
+}
+function renderEduRepDetailHeader(delivery, s) {
+  $('#eduRepDetailTitle').textContent = delivery.title;
+  $('#eduRepDetailMeta').textContent = [EDU_DTYPE[delivery.delivery_type] || delivery.delivery_type,
+    delivery.pass_score !== null ? `合格点 ${delivery.pass_score}%` : '合格点なし',
+    `期限 ${delivery.deadline ? fmtDate(delivery.deadline) : 'なし'}`].join(' ・ ');
+  $('#eduRepDetailKpi').innerHTML = [
+    { label: '完了 / 対象', value: `${s.completed} / ${s.assigned}`, icon: 'bi-clipboard-check' },
+    { label: '未完了', value: s.incomplete, icon: 'bi-hourglass-split', cls: s.incomplete > 0 ? 'val-warning' : '' },
+    { label: '合格率', value: s.pass_rate === null ? '—' : `${s.pass_rate}%`, icon: 'bi-award' },
+    { label: '期限内合格率', value: s.on_time_pass_rate === null ? '—' : `${s.on_time_pass_rate}%`, icon: 'bi-alarm' },
+  ].map(kpiCard).join('');
+}
+function renderEduRepPeople() {
+  const id = eduRep.deliveryId;
+  $('#eduRepPeopleCsv').href = eduRepCsvUrl('delivery_people', eduRepPeopleFilter());
+  return eduRepFill('#eduRepPeopleBody', async (current) => {
+    const r = await api('api/edu_report.php', { query: { action: 'delivery_people', id, ...eduRepPeopleFilter() } });
+    if (!current() || eduRep.deliveryId !== id) return '';
+    renderEduRepDetailHeader(r.delivery, r.summary);
+    if (!(r.people || []).length) return eduNoteRow(8, eduRep.incomplete || eduRep.q ? '条件に合う受講者がいません' : 'データがありません');
+    return r.people.map((p) => `
+      <tr><td>${eduAssignStatusBadge(p.status)}</td>
+        <td>${esc(p.name || p.email)}${Number(p.is_test) === 1 ? ' <span class="badge bg-light text-dark border">テスト</span>' : ''}<div class="small text-muted">${esc(p.email)}</div></td>
+        <td>${esc(p.department)}</td><td>${p.score === null ? '—' : `${Number(p.score)}%`}</td>
+        <td>${eduPassedCell(p)}</td><td>${Number(p.attempt_count)}</td>
+        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}</td></tr>`).join('');
+  });
+}
+function renderEduRepDepts() {
+  const id = eduRep.deliveryId;
+  $('#eduRepDeptsCsv').href = eduRepCsvUrl('delivery_depts');
+  return eduRepFill('#eduRepDeptsBody', async () => {
+    const r = await api('api/edu_report.php', { query: { action: 'delivery_depts', id } });
+    return (r.departments || []).length ? r.departments.map((d) => `
+      <tr><td>${esc(d.department)}</td><td>${Number(d.assigned)}</td><td>${Number(d.completed)}</td><td>${Number(d.incomplete)}</td>
+        <td>${d.passed === null ? '—' : Number(d.passed)}</td><td>${eduRate(d.pass_rate)}</td><td>${eduRate(d.on_time_pass_rate)}</td></tr>`).join('')
+      : emptyRow(7);
+  });
+}
+function renderEduRepQuestions() {
+  const id = eduRep.deliveryId;
+  return eduRepFill('#eduRepQuestionsBody', async () => {
+    const r = await api('api/edu_report.php', { query: { action: 'delivery', id } });
+    const s = r.summary;
+    $('#eduRepQuestionsNote').textContent = `回答者 ${s.respondent_count}人 ・ 平均正答率 ${s.average_score}%${s.pass_rate !== null ? ` ・ 合格率(回答者のうち) ${s.pass_rate}%` : ''}`;
+    return (r.by_question || []).length ? r.by_question.map((q) => `
+      <tr><td>${esc(q.title)}</td><td>難${Number(q.difficulty)}</td><td>${Number(q.correct)}/${Number(q.answered)}</td><td>${eduRate(q.correct_rate)}</td></tr>`).join('')
+      : emptyRow(4);
+  });
+}
+
+function renderEduRepLearners() {
+  const learners = eduRepFill('#eduRepLearnersBody', async () => {
+    const { learners: rows } = await api('api/edu_report.php', { query: { action: 'learners', q: eduRep.learnerQ } });
+    if (!(rows || []).length) return eduNoteRow(5, eduRep.learnerQ ? '条件に合う受講者がいません' : 'データがありません');
+    return rows.map((p) => `
+      <tr${p.id === eduRep.personId ? ' class="table-active"' : ''}><td>${esc(p.name || p.email)}<div class="small text-muted">${esc(p.email)}</div></td>
+        <td>${esc(p.department)}</td><td>${Number(p.completed)} / ${Number(p.assigned)}</td><td>${Number(p.incomplete)}</td>
+        <td><button type="button" class="btn btn-sm btn-outline-primary" onclick="openEduRepPerson(${Number(p.id)})" aria-label="${esc(p.name || p.email)} の受講状況を見る">見る</button></td></tr>`).join('');
+  });
+  return Promise.all([learners, renderEduRepPerson()]);
+}
+function openEduRepPerson(id) {
+  eduRep.personId = Number(id);
+  for (const tr of $$('#eduRepLearnersBody tr')) tr.classList.toggle('table-active', tr.querySelector(`[onclick="openEduRepPerson(${Number(id)})"]`) !== null);
+  renderEduRepPerson();
+}
+function renderEduRepPerson() {
+  const id = eduRep.personId;
+  if (!id) {
+    $('#eduRepPersonTitle').textContent = '受講者を選んでください';
+    $('#eduRepPersonBody').innerHTML = eduNoteRow(7, '左の一覧から受講者を選ぶと、配信ごとの状況が出ます');
+    return Promise.resolve();
+  }
+  return eduRepFill('#eduRepPersonBody', async (current) => {
+    const r = await api('api/edu_report.php', { query: { action: 'person', target_id: id } });
+    if (!current()) return '';
+    $('#eduRepPersonTitle').textContent = `${r.person.name || r.person.email}（${r.person.department}）`;
+    return (r.deliveries || []).length ? r.deliveries.map((p) => `
+      <tr><td>${esc(p.delivery_title)}<div class="small text-muted">${esc(EDU_DTYPE[p.delivery_type] || p.delivery_type)}</div></td>
+        <td>${eduAssignStatusBadge(p.status)}</td><td>${p.score === null ? '—' : `${Number(p.score)}%`}</td>
+        <td>${eduPassedCell(p)}</td><td>${Number(p.attempt_count)}</td>
+        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}</td></tr>`).join('')
+      : emptyRow(7);
+  });
+}
+
+async function renderEduRepCross() {
+  const select = $('#eduRepCrossCampaign');
+  const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } }).catch((e) => {
+    $('#eduRepCrossBody').innerHTML = errorRow(6, e.message);
+    return { campaigns: null };
+  });
+  if (!campaigns) return;
+  if (!campaigns.length) {
+    select.innerHTML = '<option value="">キャンペーンがありません</option>';
+    $('#eduRepCrossBody').innerHTML = emptyRow(6);
+    return;
+  }
+  if (!campaigns.some((c) => Number(c.id) === eduRep.campaignId)) eduRep.campaignId = Number(campaigns[0].id);
+  select.innerHTML = campaigns.map((c) => `<option value="${Number(c.id)}"${Number(c.id) === eduRep.campaignId ? ' selected' : ''}>${esc(c.name)}${Number(c.is_test) === 1 ? '（テスト）' : ''}</option>`).join('');
+  await renderEduRepCrossResult();
+}
+function renderEduRepCrossResult() {
+  const campaignId = eduRep.campaignId;
+  return eduRepFill('#eduRepCrossBody', async () => {
+    const { cross: c } = await api('api/edu_report.php', { query: { action: 'cross', campaign_id: campaignId } });
+    return `<tr><td>${Number(c.failer_count)}人</td><td>${Number(c.educated_count)}人</td><td>${eduRate(c.education_coverage_rate)}</td>
+      <td>${Number(c.completed_count)}人</td><td>${eduRate(c.education_completion_rate)}</td><td>${eduRate(c.average_score_after)}</td></tr>`;
+  });
+}
+
+let eduRepSearchTimer = null;
+function eduRepDebounce(fn) {
+  clearTimeout(eduRepSearchTimer);
+  eduRepSearchTimer = setTimeout(fn, 300);
+}
+// 教育レポートと教材バンクのタブ、絞り込み、戻るボタン(起動時に1回だけつなぐ)
+function bindEduReportControls() {
+  $$('#eduReportTabs [data-edu-rep-tab]').forEach((tab) => tab.addEventListener('shown.bs.tab', () => {
+    eduRep.tab = tab.dataset.eduRepTab;
+    if (eduRep.tab === 'overview') eduTrendChart?.resize();
+    else eduRepRenderTab(eduRep.tab);
+  }));
+  $$('#eduRepDetailTabs [data-edu-rep-sub]').forEach((tab) => tab.addEventListener('shown.bs.tab', () => {
+    eduRep.sub = tab.dataset.eduRepSub;
+    if (eduRep.sub === 'depts') renderEduRepDepts();
+    if (eduRep.sub === 'questions') renderEduRepQuestions();
+  }));
+  $('#eduRepBackBtn')?.addEventListener('click', closeEduRepDelivery);
+  $$('[data-edu-rep-incomplete]').forEach((b) => b.addEventListener('click', () => {
+    setEduRepIncomplete(b.dataset.eduRepIncomplete === '1');
+    renderEduRepPeople();
+  }));
+  $('#eduRepPeopleSearch')?.addEventListener('input', (e) => eduRepDebounce(() => {
+    eduRep.q = e.target.value.trim();
+    renderEduRepPeople();
+  }));
+  $('#eduRepLearnerSearch')?.addEventListener('input', (e) => eduRepDebounce(() => {
+    eduRep.learnerQ = e.target.value.trim();
+    renderEduRepLearners();
+  }));
+  $('#eduRepCrossCampaign')?.addEventListener('change', (e) => {
+    eduRep.campaignId = Number(e.target.value);
+    renderEduRepCrossResult();
+  });
+  $('#eduMaterialKind')?.addEventListener('change', renderEduMaterialRows);
+  $('#eduMaterialSearch')?.addEventListener('input', renderEduMaterialRows);
+}
+
+async function renderEduReportOverview() {
   const r = await api('api/edu_report.php', { query: { action: 'overview' } });
   const s = r.summary;
   $('#eduReportKpi').innerHTML = [
@@ -5165,6 +5431,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (reportSelectedId) renderReportDetail(reportSelectedId);
   });
   $('#reportExportBtn')?.addEventListener('click', exportReportXlsx);
+  bindEduReportControls();
   $('#reportCommitBtn')?.addEventListener('click', commitReport);
   $('#reportUncommitBtn')?.addEventListener('click', uncommitReport);
   $('#reportCloseBtn')?.addEventListener('click', closeReport);

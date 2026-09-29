@@ -522,4 +522,7 @@ h6, .h6 { font-weight: 600; }
 .report-tabs .nav-link.active { color: var(--tet-accent); background: transparent; border-bottom-color: var(--tet-accent); font-weight: 600; }
 .report-tabs .nav-link:focus-visible { outline: 2px solid var(--tet-accent); outline-offset: -2px; }
 .report-tab-content { padding-top: 1rem; }
+/* 教材バンクと教育レポートの検索欄。狭い幅では1行を使う */
+.edu-filter-search { width: 16rem; max-width: 100%; }
+@media (max-width: 767px) { .edu-filter-search { width: 100%; } }
 .report-toolbar .card-body { padding: .75rem 1rem; }

@@ -23,6 +23,8 @@ async function openEducationBank() {
   await page.locator('#appView:not(.d-none)').waitFor();
   await page.evaluate(() => document.querySelector('[data-view="eduQuestions"]')?.click());
   await educationPanel.getByRole('button', { name: /PowerPoint読込/ }).waitFor();
+  // 設問の操作は「確認テストの設問」のタブにある
+  await page.locator('#eduBankTab-questions').click();
 }
 
 try {
@@ -34,6 +36,7 @@ try {
 
   await page.evaluate(() => document.querySelector('[data-view="eduQuestions"]')?.click());
   await educationPanel.getByRole('button', { name: /PowerPoint読込/ }).waitFor();
+  await page.locator('#eduBankTab-questions').click();
   await page.getByRole('link', { name: /全カテゴリ/ }).waitFor();
   await page.getByText('既存の確認問題', { exact: true }).waitFor();
 
@@ -65,6 +68,7 @@ try {
   await page.getByText('1問を追加しました', { exact: true }).waitFor();
   await page.getByText('Excel追加問題', { exact: true }).waitFor();
 
+  await page.locator('#eduBankTab-materials').click();
   await educationPanel.getByRole('button', { name: /PowerPoint読込/ }).click();
   await page.locator('#eduPptxFile').setInputFiles(`${fixtureDir}/material.pptx`);
   await page.locator('.modal.show #appModalSave').click();

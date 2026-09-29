@@ -25,6 +25,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('response', (r) => { if (/action=(page_image|image)/.test(r.url()) && r.status() !== 200) errors.push(`${r.status()} ${r.url()}`); });
 const openBank = async () => {
   await page.evaluate(() => document.querySelector('[data-view="eduQuestions"]')?.click());
+  await page.locator('#eduBankTab-materials').click();
   await page.locator('#eduPdfImportBtn').waitFor();
 };
 const save = async () => { await page.locator('#appModalSave').click(); };
@@ -100,6 +101,7 @@ try {
 
   // 設問の試行で画像と選択肢ごとの解説が出る
   await openBank();
+  await page.locator('#eduBankTab-questions').click();
   await page.getByRole('link', { name: /全カテゴリ/ }).click().catch(() => {});
   const qRow = page.locator('tr', { hasText: '不審なメールのリンクを開いたが' }).first();
   await qRow.getByRole('button', { name: /試行/ }).click();
