@@ -38,6 +38,7 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-ops-b2a.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-reveal-pages.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-material-versions.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-tags.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

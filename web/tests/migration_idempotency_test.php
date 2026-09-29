@@ -57,8 +57,8 @@ $pdo->exec("INSERT INTO groups (tenant_id, name, kind) VALUES (1, '全職員', '
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 29, '未適用migrationが29件ある');
-check($runner->migrate() === 29, '初回はmigrationを29件適用する');
+check(count($runner->pending()) === 30, '未適用migrationが30件ある');
+check($runner->migrate() === 30, '初回はmigrationを30件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
@@ -334,10 +334,59 @@ $pdo->exec('UPDATE targets SET employee_no = NULL');
 $pdo->exec("DELETE FROM schema_migrations WHERE version = '20261027-ops-b2a'");
 check($runner->migrate() === 1 && $runner->migrate() === 0, '段B2 の運用のmigrationも冪等');
 
+// 分野のタグ(C1、G09)。既存のカテゴリごとに同じ名前と持ち主の親のタグを作り、そのカテゴリの設問に付ける。
+// カテゴリと設問の category_id は変えない。同じ持ち主の同じ名前のカテゴリは1つのタグにまとめる。
+$pdo->exec("INSERT INTO edu_categories (id, tenant_id, name, slug, sort_order, is_shared) VALUES
+    (9101, NULL, '共有の分野', 'mig-shared', 3, 1), (9102, 1, 'フィッシング', 'mig-phish', 1, 0),
+    (9103, 1, 'フィッシング', 'mig-phish-2', 2, 0), (9104, 2, 'フィッシング', 'mig-phish', 1, 0),
+    (9105, 1, 'A>B', 'mig-gt', 4, 0), (9106, 1, '設問なし', 'mig-empty', 5, 0)");
+$pdo->exec("INSERT INTO edu_questions (id, tenant_id, category_id, title, options, correct_answer, is_shared) VALUES
+    (9201, NULL, 9101, '共有の設問', '[\"a\",\"b\"]', '[0]', 1), (9202, 1, 9102, '設問1', '[\"a\",\"b\"]', '[0]', 0),
+    (9203, 1, 9103, '設問2', '[\"a\",\"b\"]', '[0]', 0), (9204, 2, 9104, '組織2の設問', '[\"a\",\"b\"]', '[0]', 0),
+    (9205, 1, 9105, '設問3', '[\"a\",\"b\"]', '[0]', 0)");
+$categoriesBefore = $pdo->query('SELECT id, tenant_id, name, slug, sort_order FROM edu_categories ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$questionCatsBefore = $pdo->query('SELECT id, category_id FROM edu_questions ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$pdo->exec('DROP TABLE edu_question_tags');
+$pdo->exec('DROP TABLE edu_tags');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261101-edu-tags'");
+check($runner->pending() === ['20261101-edu-tags'], '分野のタグのmigrationだけがpending');
+check($runner->migrate() === 1, '既存DBへ分野のタグの表を作り、カテゴリを親のタグとして写す');
+$tagOf = static function (string $sql) use ($pdo): array {
+    return $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+};
+$tags = $tagOf('SELECT id, tenant_id, parent_id, name, sort_order FROM edu_tags ORDER BY id');
+$tagKey = static fn(array $t): string => ($t['tenant_id'] ?? 'shared') . ':' . $t['name'];
+$byKey = array_column(array_map(static fn(array $t): array => $t + ['key' => $tagKey($t)], $tags), null, 'key');
+$categoryCount = (int) $pdo->query('SELECT COUNT(DISTINCT COALESCE(tenant_id, 0) || name) FROM edu_categories')->fetchColumn();
+check(count($tags) === $categoryCount, 'カテゴリ(同じ持ち主の同じ名前は1つ)と同じ数の親のタグができる');
+check(array_filter($tags, static fn(array $t): bool => $t['parent_id'] !== null) === [], '作るのは親のタグだけ');
+check(isset($byKey['shared:共有の分野']) && (int) $byKey['shared:共有の分野']['sort_order'] === 3, '共有のカテゴリは共有のタグ(並び順も写す)');
+check(isset($byKey['1:フィッシング'], $byKey['2:フィッシング']), '組織ごとのカテゴリは、その組織のタグ(同じ名前でも組織ごとに別)');
+check(isset($byKey['1:A＞B']), 'Excel の区切りの > は全角に置き換える');
+check(isset($byKey['1:設問なし']), '設問のないカテゴリもタグにする');
+$links = $tagOf('SELECT qt.question_id, g.tenant_id, g.name FROM edu_question_tags qt JOIN edu_tags g ON g.id = qt.tag_id ORDER BY qt.question_id');
+check(array_map(static fn(array $l): string => $l['question_id'] . '=' . $tagKey($l), $links) === [
+    '9201=shared:共有の分野', '9202=1:フィッシング', '9203=1:フィッシング', '9204=2:フィッシング', '9205=1:A＞B',
+], '各設問に、そのカテゴリの持ち主と名前のタグが付く(同じ名前の2つのカテゴリは同じタグ)');
+$untagged = (int) $pdo->query('SELECT COUNT(*) FROM edu_questions q WHERE NOT EXISTS (SELECT 1 FROM edu_question_tags qt WHERE qt.question_id = q.id)')->fetchColumn();
+check($untagged === 0, 'タグの付かない既存の設問はない');
+check($pdo->query('SELECT id, tenant_id, name, slug, sort_order FROM edu_categories ORDER BY id')->fetchAll(PDO::FETCH_ASSOC) === $categoriesBefore
+    && $pdo->query('SELECT id, category_id FROM edu_questions ORDER BY id')->fetchAll(PDO::FETCH_ASSOC) === $questionCatsBefore,
+    'カテゴリと設問の category_id は変えない');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261101-edu-tags'");
+check($runner->migrate() === 1 && $runner->migrate() === 0, '分野のタグのmigrationも冪等');
+check($tagOf('SELECT id, tenant_id, parent_id, name, sort_order FROM edu_tags ORDER BY id') === $tags
+    && $tagOf('SELECT qt.question_id, g.tenant_id, g.name FROM edu_question_tags qt JOIN edu_tags g ON g.id = qt.tag_id ORDER BY qt.question_id') === $links,
+    '流し直してもタグと結び付けは増えない');
+$pdo->exec('DELETE FROM edu_question_tags');
+$pdo->exec('DELETE FROM edu_tags');
+$pdo->exec('DELETE FROM edu_questions WHERE id BETWEEN 9201 AND 9205');
+$pdo->exec('DELETE FROM edu_categories WHERE id BETWEEN 9101 AND 9106');
+
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 29,
-    'schema_migrationsへ29件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 30,
+    'schema_migrationsへ30件だけ記録される');
 check(in_array('credential_capture_approval_ref', array_column(
     $pdo->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name'
 ), true), 'campaignsへ顧客承認参照を追加する');
@@ -417,8 +466,9 @@ check($currentRunner->pending() === [
     '20261025-measurement-b1',
     '20261027-ops-b2a',
     '20261028-ops-b2b',
-], '現行DBは28件の後続migrationがpending');
-check($currentRunner->migrate() === 28, '現行DBへ残りのmigrationを適用する');
+    '20261101-edu-tags',
+], '現行DBは29件の後続migrationがpending');
+check($currentRunner->migrate() === 29, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
@@ -446,7 +496,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 27, '既存automation DBへ27件の後続migrationを適用する');
+check($rotationRunner->migrate() === 28, '既存automation DBへ28件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -470,9 +520,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 29, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 29,
-    'version tableを作成して29件記録する');
+check($unversionedRunner->migrate() === 30, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 30,
+    'version tableを作成して30件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -485,7 +535,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 29, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 30, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets
