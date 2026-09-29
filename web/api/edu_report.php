@@ -66,10 +66,11 @@ function edu_rep_delivery_counts(int $deliveryId, int $tenantId): array
     $row = Db::one(
         "SELECT
             COUNT(*) AS assigned,
-            SUM(CASE WHEN status = 'started'   THEN 1 ELSE 0 END) AS started,
-            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
-         FROM edu_assignments
-         WHERE tenant_id = ? AND delivery_id = ?",
+            SUM(CASE WHEN a.status = 'started'   THEN 1 ELSE 0 END) AS started,
+            SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed
+         FROM edu_assignments a
+         INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
+         WHERE a.tenant_id = ? AND a.delivery_id = ? AND " . EDU_REP_REAL_TARGET_SQL,
         [$tenantId, $deliveryId]
     ) ?? [];
     return [
@@ -86,7 +87,8 @@ function edu_rep_delivery_scores(int $deliveryId, int $tenantId, ?int $passScore
         'SELECT r.percentage
          FROM edu_responses r
          INNER JOIN edu_assignments a ON a.id = r.assignment_id
-         WHERE a.tenant_id = ? AND a.delivery_id = ?',
+         INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
+         WHERE a.tenant_id = ? AND a.delivery_id = ? AND ' . EDU_REP_REAL_TARGET_SQL,
         [$tenantId, $deliveryId]
     );
     $n = count($rows);
@@ -119,7 +121,8 @@ function edu_rep_delivery_by_question(int $deliveryId, int $tenantId): array
               AND ra.response_id IN (
                   SELECT r.id FROM edu_responses r
                   INNER JOIN edu_assignments a ON a.id = r.assignment_id
-                  WHERE a.tenant_id = ? AND a.delivery_id = ?
+                  INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
+                  WHERE a.tenant_id = ? AND a.delivery_id = ? AND " . EDU_REP_REAL_TARGET_SQL . "
               )
          WHERE dq.delivery_id = ?
          GROUP BY q.id
@@ -190,6 +193,7 @@ function edu_rep_handle_deliveries(array $user): never
                 AVG(r.percentage) AS avg_pct
          FROM edu_deliveries d
          LEFT JOIN edu_assignments a ON a.delivery_id = d.id
+              AND EXISTS (SELECT 1 FROM targets t WHERE t.id = a.target_id AND t.tenant_id = a.tenant_id AND " . EDU_REP_REAL_TARGET_SQL . ")
          LEFT JOIN edu_responses r ON r.assignment_id = a.id
          WHERE d.tenant_id = ?
          GROUP BY d.id
@@ -517,6 +521,10 @@ function edu_rep_assignment_rows(int $tenantId, array $filter): array
 {
     $where = ['a.tenant_id = ?'];
     $params = [$tenantId, $tenantId];
+    // 配信ごとの表と一覧は概要と同じく実対象者だけ。受講者を1人指定した表示(person)は指定された人をそのまま見せる
+    if (!isset($filter['target_id'])) {
+        $where[] = EDU_REP_REAL_TARGET_SQL;
+    }
     foreach (['delivery_id', 'target_id'] as $key) {
         if (isset($filter[$key])) {
             $where[] = "a.$key = ?";
@@ -758,7 +766,7 @@ function edu_rep_handle_learners(array $user): never
                 SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed
          FROM targets t
          INNER JOIN edu_assignments a ON a.target_id = t.id AND a.tenant_id = t.tenant_id
-         WHERE t.tenant_id = ?
+         WHERE t.tenant_id = ? AND " . EDU_REP_REAL_TARGET_SQL . "
            AND (? = '' OR t.name LIKE ? ESCAPE '\\' OR t.email LIKE ? ESCAPE '\\' OR t.department LIKE ? ESCAPE '\\')
          GROUP BY t.id
          ORDER BY t.name, t.id
