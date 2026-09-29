@@ -148,7 +148,7 @@ final class HumanRiskScore
              INNER JOIN campaigns c ON c.id = ct.campaign_id
              WHERE ct.target_id = ? AND e.tenant_id = ?
                AND c.is_test = 0 AND c.deleted_at IS NULL
-               AND e.event_type IN ('open','click','auth','report')
+               AND e.event_type IN ('open','click','auth','report') AND e.verdict = 'user'
              ORDER BY e.occurred_at, e.id",
             [$date . ' 23:59:59', $targetId, $tenantId]
         );
@@ -206,7 +206,7 @@ final class HumanRiskScore
                AND NOT EXISTS (
                      SELECT 1 FROM events e
                      WHERE e.tracking_id = ct.tracking_id
-                       AND e.event_type IN ('open','click','auth')
+                       AND e.event_type IN ('open','click','auth') AND e.verdict = 'user'
                    )",
             [$targetId, $tenantId, $date]
         );

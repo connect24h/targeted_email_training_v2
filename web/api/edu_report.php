@@ -377,7 +377,7 @@ function edu_rep_handle_cross(array $user): never
         "SELECT DISTINCT ct.target_id AS id
          FROM events e
          INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
-         WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('auth','click')",
+         WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('auth','click') AND e.verdict = 'user'",
         [$tenantId, $campaignId]
     );
     $failerIds = array_map(fn($r) => (int) $r['id'], $failers);

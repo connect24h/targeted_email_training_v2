@@ -42,6 +42,8 @@ final class TenantPurge
         ['credential_captures', 'tenant_id = ?'],
         ['campaign_template_snapshots', 'tenant_id = ?'],
         ['campaign_report_snapshots', 'tenant_id = ?'],
+        // 返信の取込の台帳(段B1)。突き合わせられずテナントの決まらない行(tenant_id NULL)は、どのテナントのものでもないので残す
+        ['reply_mails', 'tenant_id = ?'],
         ['events', 'tenant_id = ?'],
         ['edu_attempts', 'tenant_id = ?'],
         ['edu_answer_locks', 'assignment_id IN (SELECT id FROM edu_assignments WHERE tenant_id = ?)'],

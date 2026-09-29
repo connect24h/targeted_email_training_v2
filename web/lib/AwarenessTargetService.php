@@ -392,7 +392,7 @@ final class AwarenessTargetService
             MAX(CASE WHEN e.event_type='auth' THEN e.occurred_at END) auth_at
           FROM campaign_targets ct JOIN campaigns c ON c.id=ct.campaign_id
           JOIN targets t ON t.id=ct.target_id AND t.tenant_id=c.tenant_id
-          LEFT JOIN events e ON e.campaign_id=c.id AND e.tracking_id=ct.tracking_id AND e.tenant_id=c.tenant_id
+          LEFT JOIN events e ON e.campaign_id=c.id AND e.tracking_id=ct.tracking_id AND e.tenant_id=c.tenant_id AND e.verdict='user'
           WHERE c.tenant_id=? AND t.is_test=0 AND ct.id>? GROUP BY ct.id ORDER BY ct.id LIMIT ?";
     }
 

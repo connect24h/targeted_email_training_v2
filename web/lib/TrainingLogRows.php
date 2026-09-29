@@ -106,7 +106,7 @@ function training_log_detail_rows(int $tenantId): array
     $endDate   = (isset($_GET['end_date'])   && $_GET['end_date']   !== '') ? (string) $_GET['end_date']   : '';
     $typeFilter = isset($_GET['type']) ? (string) $_GET['type'] : '';
 
-    $where = "e.tenant_id = ? AND e.event_type IN ('click','auth','report')";
+    $where = "e.tenant_id = ? AND e.event_type IN ('click','auth','report') AND e.verdict = 'user'";
     $params = [$tenantId];
     if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
     if ($startDate !== '') { $where .= ' AND e.occurred_at >= ?'; $params[] = $startDate; }
@@ -241,7 +241,7 @@ function training_results_rows(int $tenantId): array
          INNER JOIN campaigns c ON c.id = ct.campaign_id
          INNER JOIN targets t   ON t.id = ct.target_id
          LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
-               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth','report')
+               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth','report') AND e.verdict = 'user'
          WHERE {$where}
          GROUP BY ct.id
          ORDER BY ct.campaign_id DESC, ct.koban",

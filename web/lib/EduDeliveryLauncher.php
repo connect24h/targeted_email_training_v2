@@ -237,7 +237,7 @@ final class EduDeliveryLauncher
              FROM campaign_targets ct
              INNER JOIN targets t ON t.id = ct.target_id
              LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
-                   AND e.tenant_id = ? AND e.event_type IN ('open','click','auth','report')
+                   AND e.tenant_id = ? AND e.event_type IN ('open','click','auth','report') AND e.verdict = 'user'
              WHERE ct.campaign_id = ? AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
              GROUP BY ct.target_id
              ORDER BY ct.target_id",
@@ -285,7 +285,7 @@ final class EduDeliveryLauncher
                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
                 INNER JOIN targets t ON t.id = ct.target_id
-                WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')
+                WHERE e.tenant_id = ? AND e.event_type IN ('auth','click') AND e.verdict = 'user'
                   AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0";
         $params = [$tenantId, $tenantId];
         if ($campaignId > 0) {

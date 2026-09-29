@@ -45,7 +45,7 @@ function followup_failures_sql(): string
         FROM events e
         JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id AND ct.campaign_id = e.campaign_id
         JOIN targets t ON t.id = ct.target_id
-        WHERE e.campaign_id = ? AND e.tenant_id = ? AND e.event_type IN ('click','auth')
+        WHERE e.campaign_id = ? AND e.tenant_id = ? AND e.event_type IN ('click','auth') AND e.verdict = 'user'
         GROUP BY t.id, t.email, t.name, t.company, t.department";
 }
 

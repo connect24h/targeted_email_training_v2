@@ -115,31 +115,31 @@ function report_summary_row(int $campaignId, int $tenantId): array
              WHERE c.tenant_id = ? AND ct.campaign_id = ? AND ct.send_status = 'sent' AND t.is_test = 0) AS sent_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'open'
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type = 'open'
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
                                WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS open_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'click'
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type = 'click'
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
                                WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS click_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'auth'
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type = 'auth'
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
                                WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS auth_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'report'
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type = 'report'
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
                                WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS report_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
-             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN " . REPORT_FAILURE_EVENTS_SQL . "
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type IN " . REPORT_FAILURE_EVENTS_SQL . "
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
                                WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS failure_count,
@@ -247,7 +247,7 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
                     COUNT(DISTINCT CASE WHEN e.event_type = 'report' THEN e.tracking_id END) AS report_count,
                     COUNT(DISTINCT CASE WHEN e.event_type IN " . REPORT_FAILURE_EVENTS_SQL . " THEN e.tracking_id END) AS failure_count
              FROM events e
-             WHERE e.tenant_id = ? AND e.event_type IN ('open', 'click', 'auth', 'report')
+             WHERE e.tenant_id = ? AND e.verdict = 'user' AND e.event_type IN ('open', 'click', 'auth', 'report')
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct3
                                INNER JOIN targets t3 ON t3.id = ct3.target_id
                                WHERE ct3.tracking_id = e.tracking_id AND t3.is_test = 1)
@@ -360,6 +360,7 @@ function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, 
                AND e.campaign_id = ct.campaign_id
                AND e.tenant_id = ?
                AND e.event_type IN ('open','click','auth','report')
+               AND e.verdict = 'user'
                {$periodClause}
          WHERE c.tenant_id = ? AND ct.campaign_id = ?" . $testWhere . "
          GROUP BY {$axisGroup}
@@ -448,7 +449,7 @@ function report_detail_timeline(int $campaignId, int $tenantId, string $periodCl
                 COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.tracking_id END) AS beacon,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'auth' THEN e.tracking_id END) AS auth
          FROM events e
-         WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN ('click','auth')
+         WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type IN ('click','auth')
                {$periodClause}
          GROUP BY d
          ORDER BY d";
@@ -675,6 +676,7 @@ function report_handle_individuals(): never
                AND e.campaign_id = ct.campaign_id
                AND e.tenant_id = ?
                AND e.event_type IN ('open','click','auth')
+               AND e.verdict = 'user'
          WHERE t.tenant_id = ?" . $testWhere . "
          GROUP BY t.id
          HAVING campaigns > 0
@@ -746,6 +748,7 @@ function report_handle_beacons(): never
                AND e.campaign_id = ct.campaign_id
                AND e.tenant_id = ?
                AND e.event_type IN ('open','click','auth')
+               AND e.verdict = 'user'
          WHERE c.tenant_id = ? AND ct.campaign_id = ?
          GROUP BY ct.tracking_id
          ORDER BY t.name, ct.content_no",
@@ -1031,7 +1034,7 @@ function report_retrain_rows(int $tenantId, string $date, array $filter): array
             INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id AND ct.campaign_id = e.campaign_id
             INNER JOIN campaigns c ON c.id = ct.campaign_id AND c.tenant_id = e.tenant_id
             INNER JOIN candidates p ON p.id = ct.target_id
-            WHERE e.tenant_id = ? AND c.is_test = 0 AND c.deleted_at IS NULL
+            WHERE e.tenant_id = ? AND c.is_test = 0 AND c.deleted_at IS NULL AND e.verdict = 'user'
               AND e.event_type IN ('click', 'auth') AND e.occurred_at <= ?
         )
         SELECT p.*, f.event_type, f.occurred_at, f.campaign_id, f.campaign_name, f.is_attachment,
