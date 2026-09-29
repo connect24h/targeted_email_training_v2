@@ -103,6 +103,12 @@ sudo systemctl enable --now tet2-delivery-ingest.timer
 - 解答の1問1行の CSV は 50000 行で打ち切り、`X-Tet2-Truncated`ヘッダーで知らせる（画面は警告を出す）。
 - 実行履歴は自動の投入が配信を処理するたびに1行増える（消す仕組みはまだない）。timer（`tet2-edu-enroll`、`tet2-edu-scheduler`）は今も無効のままで、この配備で有効にはしない。
 
+通知の文面（C2、G35）を含む配備では、`20261102-notification-templates` migrationを**コードより先に**適用する。`notification_templates`表を足すだけで行は作らないので、配備の直後は全テナントが既定の文面（以前の直書きと同じ文字列）のまま送る。
+- migration 前にコードが先に入っても、送信の文面の読み込みは表がなければ既定の文面で送る（送信は止めない）。ただし「通知の文面」のタブの保存と既定に戻すは 500 になるので、順番は守る。
+- テスト送信（ユーザ管理 → 通知の文面 → 自分にテスト送信）は、ログインしている本人のアドレスにだけ、1人10分に5回まで送る（監査ログ `notification_template.test_send` で数える）。件名の先頭に `[テスト送信]` が付き、URL は見本のトークンで使えない。
+- 送信の有効・無効（`TET2_SURVEY_MAIL_ENABLED`、配信の「案内メールを送る」、無効の timer）は変えない。文面を変えても、送らない設定のものは送らない。
+- 新しいアセット `web/assets/notification-templates.js` は `deploy/tet2-cache-bust.sh` の対象に入れてある。
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```
