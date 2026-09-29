@@ -109,6 +109,22 @@ sudo systemctl enable --now tet2-delivery-ingest.timer
 - 送信の有効・無効（`TET2_SURVEY_MAIL_ENABLED`、配信の「案内メールを送る」、無効の timer）は変えない。文面を変えても、送らない設定のものは送らない。
 - 新しいアセット `web/assets/notification-templates.js` は `deploy/tet2-cache-bust.sh` の対象に入れてある。
 
+### 段D の D4〜D6(報告者への返信、受講期間の終了時の集計通知、訓練後のアンケート)とアンケートの「その他」
+
+`20261106-sending-db` migrationを**コードより先に**適用する。`suspicious_mail_replies`・`edu_summary_settings`・`edu_delivery_summaries`・`campaign_survey_followups`の4表と、`survey_questions.allow_other`・`survey_answers.other_text`の列を足すだけで、設定の行は作らない。配備の直後はどの送信も切のまま。新しい`SurveyService`は設問と回答の読み書きで新しい列を使うため、migration前にコードを配備するとアンケートの作成・回答・集計が500になる。通知の文面の種類が5つ増える(返信4つと集計通知)が、表は C2 のまま。
+- D4 報告者への返信: 不審メールの詳細の「報告者へ返信」タブで、オペレータ以上が押した時だけ、その報告の報告者へ1通送る(`EduMailer`、`TET2_EDU_MAIL_FROM`)。自動では送らない。「訓練メールでした」は、報告が結び付く訓練のキャンペーンをクローズした後だけ送れる(API が断る)。同じ報告へ同じ定型文は1回だけ。timer はない。
+- D5 集計通知: 教育配信の画面で組織管理者以上が有効にし、担当者のアドレスを登録した組織だけが対象。送るのは`web/db/edu_delivery_summary.php`と`deploy/systemd/tet2-edu-summary.{service,timer}`(毎時20分)で、**timer は配備では有効にならない。有効化は利用者の承認が要る**。有効にする前に期限を過ぎた配信の分は送らない。
+- D6 訓練後のアンケート: キャンペーンの一覧の「訓練後のアンケート」で設定したキャンペーンだけ、クローズした時に1回だけ配信を作る。案内メールは既存の`TET2_SURVEY_MAIL_ENABLED=1`の時だけ送る(未設定なら配信だけ作り、回答用 URL の CSV で配る)。テスト用のキャンペーンでは配らない。
+- 新しい API(`api/suspicious_mail_replies.php`、`api/edu_summary.php`、`api/campaign_survey_followup.php`)は管理画面の中だけで使う。受講者のサイトの許可のリストには足さない。`survey.php`と`api/survey_take.php`は既存の公開のまま(「その他」の記述を受け付ける)。
+
+```bash
+# 本番のコピーで結果を確かめる(設定の行がないので deliveries=0 になる)
+TET2_DB_PATH=/abs/path/tet2-copy.sqlite TET2_EDU_MAIL_DISABLE=1 php web/db/edu_delivery_summary.php
+# 承認後だけ
+sudo systemctl daemon-reload
+sudo systemctl enable --now tet2-edu-summary.timer
+```
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```
