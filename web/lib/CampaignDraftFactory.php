@@ -227,13 +227,14 @@ final class CampaignDraftFactory
         return Db::insert(
             'INSERT INTO campaigns
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
-              from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_zip, send_mode,
+              from_address, from_domain, beacon_base, beacon_bases, from_addresses, link_mode, attachment_ext, attachment_zip, send_mode,
               split_count, split_interval_min, weekdays_only, business_start, business_end,
               start_at, end_at, is_test, content_delivery, test_redirect_emails, reveal_page_id, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $source['tenant_id'], $name, 'draft', $source['subject_template_id'], $source['body_template_id'],
                 $source['phish_template_id'], $source['from_address'], $source['from_domain'], $source['beacon_base'],
+                $source['beacon_bases'] ?? null, $source['from_addresses'] ?? null,
                 $source['link_mode'], $source['attachment_ext'], $source['attachment_zip'], $source['send_mode'],
                 $source['split_count'], $source['split_interval_min'], $source['weekdays_only'],
                 $source['business_start'], $source['business_end'], null, null, $source['is_test'],
@@ -258,13 +259,14 @@ final class CampaignDraftFactory
             Db::run(
                 'INSERT INTO campaign_contents
                  (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, suppress_body_url,
+                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, beacon_bases, from_addresses, suppress_body_url,
                   suppress_prefill_email)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $draftId, $content['content_no'], $content['subject_template_id'], $content['body_template_id'],
                     $content['phish_template_id'], $content['link_mode'], $content['attachment_ext'],
                     $content['attachment_zip'], $content['from_address'], $content['beacon_base'],
+                    $content['beacon_bases'] ?? null, $content['from_addresses'] ?? null,
                     $content['suppress_body_url'] ?? 0,
                     $content['suppress_prefill_email'] ?? 0,
                 ]

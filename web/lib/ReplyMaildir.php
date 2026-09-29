@@ -212,13 +212,29 @@ function reply_maildir_campaign_from_addresses(): ?array
     $cid = (int) $_GET['campaign_id'];
     if ($cid < 1) { json_error('campaign_id が不正です', 400); }
     $emails = [];
-    foreach (Db::all('SELECT from_address FROM campaigns WHERE id = ?', [$cid]) as $r) {
-        $a = strtolower(trim((string) ($r['from_address'] ?? '')));
+    $addOne = static function ($a) use (&$emails): void {
+        $a = strtolower(trim((string) $a));
         if ($a !== '') { $emails[$a] = true; }
+    };
+    // JSON 配列(複数指定)の各要素も取り込む。
+    $addList = static function ($json) use (&$emails, $addOne): void {
+        if ($json === null || $json === '') { return; }
+        $decoded = json_decode((string) $json, true);
+        if (is_array($decoded)) {
+            foreach ($decoded as $v) { if (is_string($v)) { $addOne($v); } }
+        }
+    };
+    foreach (Db::all('SELECT from_address, from_addresses FROM campaigns WHERE id = ?', [$cid]) as $r) {
+        $addOne($r['from_address'] ?? '');
+        $addList($r['from_addresses'] ?? null);
     }
-    foreach (Db::all('SELECT from_address FROM campaign_contents WHERE campaign_id = ?', [$cid]) as $r) {
-        $a = strtolower(trim((string) ($r['from_address'] ?? '')));
-        if ($a !== '') { $emails[$a] = true; }
+    foreach (Db::all('SELECT from_address, from_addresses FROM campaign_contents WHERE campaign_id = ?', [$cid]) as $r) {
+        $addOne($r['from_address'] ?? '');
+        $addList($r['from_addresses'] ?? null);
+    }
+    // 送信時に対象者ごとへ確定した送信元も含める(複数指定を散らした場合の取りこぼし防止)。
+    foreach (Db::all('SELECT DISTINCT resolved_from_address FROM campaign_targets WHERE campaign_id = ? AND resolved_from_address IS NOT NULL', [$cid]) as $r) {
+        $addOne($r['resolved_from_address'] ?? '');
     }
     // 送信元が1つも設定されていない場合は空配列を返す(=どの Maildir にも一致せず0件)。
     return array_keys($emails);

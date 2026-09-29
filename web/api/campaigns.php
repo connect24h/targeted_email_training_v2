@@ -116,6 +116,79 @@ function campaigns_optional_beacon_base(array $body, string $key = 'beacon_base'
 }
 
 /**
+ * ビーコンベースURL の複数指定(任意)。キーが無ければ null(=変更/指定なし)。
+ * 配列で受け、各要素を http(s):// URL として検証し、trim・空要素除去・重複除去した配列を返す。
+ * 空配列になった場合も [] を返す(呼び出し側が「指定なし」として単数列/フォールバックへ倒す)。
+ * @return array<int,string>|null
+ */
+function campaigns_optional_beacon_bases(array $src, string $key = 'beacon_bases'): ?array
+{
+    if (!array_key_exists($key, $src) || $src[$key] === null) {
+        return null;
+    }
+    if (!is_array($src[$key])) {
+        json_error($key . ' が不正です', 400);
+    }
+    $out = [];
+    foreach ($src[$key] as $v) {
+        if (!is_string($v)) {
+            json_error($key . ' の要素が不正です', 400);
+        }
+        $v = trim($v);
+        if ($v === '') {
+            continue;
+        }
+        if (!preg_match('#^https?://[^\s/][^\s]*$#', $v)) {
+            json_error($key . ' は http:// または https:// で始まる URL を指定してください', 400);
+        }
+        if (!in_array($v, $out, true)) {
+            $out[] = $v;
+        }
+    }
+    return $out;
+}
+
+/**
+ * 送信元アドレスの複数指定(任意)。キーが無ければ null。各要素をメール形式で検証し、trim・空除去・重複除去。
+ * @return array<int,string>|null
+ */
+function campaigns_optional_from_addresses(array $src, string $key = 'from_addresses'): ?array
+{
+    if (!array_key_exists($key, $src) || $src[$key] === null) {
+        return null;
+    }
+    if (!is_array($src[$key])) {
+        json_error($key . ' が不正です', 400);
+    }
+    $out = [];
+    foreach ($src[$key] as $v) {
+        if (!is_string($v)) {
+            json_error($key . ' の要素が不正です', 400);
+        }
+        $v = trim($v);
+        if ($v === '') {
+            continue;
+        }
+        if (filter_var($v, FILTER_VALIDATE_EMAIL) === false) {
+            json_error($key . ' はメールアドレス形式で指定してください', 400);
+        }
+        if (!in_array($v, $out, true)) {
+            $out[] = $v;
+        }
+    }
+    return $out;
+}
+
+/** 配列を JSON 文字列にする。null または空配列は null(列を空に=従来フォールバック)。 */
+function campaigns_endpoints_json(?array $list): ?string
+{
+    if ($list === null || $list === []) {
+        return null;
+    }
+    return json_encode(array_values($list), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+/**
  * コンテンツ別の送信元アドレス(任意)。未指定/空は NULL(キャンペーン単位にフォールバック)。
  * 指定時はメール形式を検証する。
  */
@@ -458,7 +531,7 @@ function campaigns_handle_get(array $actor): never
     $contents = Db::all(
         'SELECT content_no, subject_template_id, body_template_id, phish_template_id,
                 link_mode, attachment_ext, attachment_filename, attachment_zip, from_address, beacon_base,
-                suppress_body_url, suppress_prefill_email
+                beacon_bases, from_addresses, suppress_body_url, suppress_prefill_email
          FROM campaign_contents WHERE campaign_id = ? ORDER BY content_no',
         [$id]
     );
@@ -495,6 +568,8 @@ function campaigns_create_data(array $body): array
         'from_address' => campaigns_string($body, 'from_address'),
         'from_domain' => campaigns_optional_string($body, 'from_domain'),
         'beacon_base' => campaigns_optional_beacon_base($body),
+        'beacon_bases' => campaigns_optional_beacon_bases($body),
+        'from_addresses' => campaigns_optional_from_addresses($body),
         'link_mode' => campaigns_string($body, 'link_mode'),
         'attachment_ext' => campaigns_optional_string($body, 'attachment_ext'),
         'attachment_filename' => campaigns_optional_attachment_filename($body),
@@ -564,6 +639,15 @@ function campaigns_parse_contents(array $body, int $tenantId): array
         // コンテンツ別の送信元アドレス/ビーコンURL(任意。未指定ならキャンペーン単位にフォールバック)。
         $contentFromAddress = campaigns_optional_content_email($content, 'from_address', $idx);
         $contentBeaconBase = campaigns_optional_beacon_base($content, 'beacon_base');
+        // コンテンツ別の複数指定(任意)。単数列は先頭を入れる(後方互換)。
+        $contentBeaconBases = campaigns_optional_beacon_bases($content, 'beacon_bases');
+        $contentFromAddresses = campaigns_optional_from_addresses($content, 'from_addresses');
+        if (!empty($contentBeaconBases) && $contentBeaconBase === null) {
+            $contentBeaconBase = $contentBeaconBases[0];
+        }
+        if (!empty($contentFromAddresses) && $contentFromAddress === null) {
+            $contentFromAddress = $contentFromAddresses[0];
+        }
 
         // IDOR検証: テンプレートはテナント内のものか、共有テンプレートのみ
         campaigns_assert_template_visible($subjectId, $tenantId, 'subject');
@@ -585,6 +669,8 @@ function campaigns_parse_contents(array $body, int $tenantId): array
             'suppress_prefill_email' => $suppressPrefillEmail,
             'from_address' => $contentFromAddress,
             'beacon_base' => $contentBeaconBase,
+            'beacon_bases' => $contentBeaconBases,
+            'from_addresses' => $contentFromAddresses,
         ];
     }
 
@@ -616,6 +702,8 @@ function campaigns_handle_create(array $actor): never
             'from_address' => campaigns_string($body, 'from_address'),
             'from_domain' => campaigns_optional_string($body, 'from_domain'),
             'beacon_base' => campaigns_optional_beacon_base($body),
+            'beacon_bases' => campaigns_optional_beacon_bases($body),
+            'from_addresses' => campaigns_optional_from_addresses($body),
             'link_mode' => $firstContent['link_mode'],
             'attachment_ext' => $firstContent['attachment_ext'],
             'attachment_filename' => $firstContent['attachment_filename'] ?? null,
@@ -660,16 +748,24 @@ function campaigns_handle_create(array $actor): never
     // 種明かしページの選択(G29)。他テナントのページは選べない。
     $data['reveal_page_id'] = campaigns_optional_reveal_page_id($body, $tenantId);
 
+    // 複数指定があれば、後方互換の単数列を先頭要素にそろえる(古い経路/表示の保険)。
+    if (!empty($data['beacon_bases']) && ($data['beacon_base'] ?? null) === null) {
+        $data['beacon_base'] = $data['beacon_bases'][0];
+    }
+    if (!empty($data['from_addresses'])) {
+        $data['from_address'] = $data['from_addresses'][0];
+    }
+
     $targetIds = campaigns_collect_target_ids($body, $tenantId);
 
     $id = Db::tx(function () use ($tenantId, $actor, $data, $targetIds, $phishTemplate, $parsedContents): int {
         $campaignId = Db::insert(
             'INSERT INTO campaigns
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
-              from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_filename, attachment_zip, send_mode,
+              from_address, from_domain, beacon_base, beacon_bases, from_addresses, link_mode, attachment_ext, attachment_filename, attachment_zip, send_mode,
               split_count, split_interval_min, weekdays_only, business_start, business_end,
               start_at, end_at, is_test, content_delivery, test_redirect_emails, reveal_page_id, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $tenantId,
                 $data['name'],
@@ -680,6 +776,8 @@ function campaigns_handle_create(array $actor): never
                 $data['from_address'],
                 $data['from_domain'],
                 $data['beacon_base'],
+                campaigns_endpoints_json($data['beacon_bases'] ?? null),
+                campaigns_endpoints_json($data['from_addresses'] ?? null),
                 $data['link_mode'],
                 $data['attachment_ext'],
                 $data['attachment_filename'] ?? null,
@@ -707,8 +805,8 @@ function campaigns_handle_create(array $actor): never
                 'INSERT INTO campaign_contents
                  (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
                   link_mode, attachment_ext, attachment_filename, attachment_zip, suppress_body_url, suppress_prefill_email,
-                  from_address, beacon_base)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                  from_address, beacon_base, beacon_bases, from_addresses)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $campaignId,
                     $contentNo,
@@ -723,6 +821,8 @@ function campaigns_handle_create(array $actor): never
                     $content['suppress_prefill_email'] ?? 0,
                     $content['from_address'] ?? null,
                     $content['beacon_base'] ?? null,
+                    campaigns_endpoints_json($content['beacon_bases'] ?? null),
+                    campaigns_endpoints_json($content['from_addresses'] ?? null),
                 ]
             );
         }
@@ -766,6 +866,21 @@ function campaigns_update_fields(array $body): array
     if (array_key_exists('beacon_base', $body)) {
         $fields['beacon_base'] = campaigns_optional_beacon_base($body);
     }
+    // 複数指定(JSON)。指定があれば JSON 化して保存し、後方互換の単数列も先頭要素へそろえる。
+    if (array_key_exists('beacon_bases', $body)) {
+        $list = campaigns_optional_beacon_bases($body);
+        $fields['beacon_bases'] = campaigns_endpoints_json($list);
+        if (!empty($list) && !array_key_exists('beacon_base', $fields)) {
+            $fields['beacon_base'] = $list[0];
+        }
+    }
+    if (array_key_exists('from_addresses', $body)) {
+        $list = campaigns_optional_from_addresses($body);
+        $fields['from_addresses'] = campaigns_endpoints_json($list);
+        if (!empty($list)) {
+            $fields['from_address'] = $list[0];
+        }
+    }
     // attachment_filename はファイル名サニタイズ・cp932検証を伴うため個別に処理する。
     if (array_key_exists('attachment_filename', $body)) {
         $fields['attachment_filename'] = campaigns_optional_attachment_filename($body);
@@ -776,8 +891,8 @@ function campaigns_update_fields(array $body): array
 function campaigns_apply_update(int $campaignId, int $tenantId, array $fields): void
 {
     $allowed = [
-        'name', 'subject_template_id', 'body_template_id', 'phish_template_id', 'from_address',
-        'from_domain', 'beacon_base', 'link_mode', 'attachment_ext', 'attachment_filename', 'attachment_zip', 'send_mode', 'split_count',
+        'name', 'subject_template_id', 'body_template_id', 'phish_template_id', 'from_address', 'from_addresses',
+        'from_domain', 'beacon_base', 'beacon_bases', 'link_mode', 'attachment_ext', 'attachment_filename', 'attachment_zip', 'send_mode', 'split_count',
         'split_interval_min', 'weekdays_only', 'business_start', 'business_end', 'start_at',
         'end_at', 'is_test', 'content_delivery', 'test_redirect_emails', 'reveal_page_id',
     ];
@@ -869,10 +984,12 @@ function campaigns_handle_update(array $actor): never
                         $content['suppress_prefill_email'] ?? 0,
                         $content['from_address'] ?? null,
                         $content['beacon_base'] ?? null,
+                        campaigns_endpoints_json($content['beacon_bases'] ?? null),
+                        campaigns_endpoints_json($content['from_addresses'] ?? null),
                     ]
                 );
             }
-            
+
             // target_ids が無くても contents[] があれば targets を再設定
             if (!$replaceTargets) {
                 // 既存の targets を削除して再採番
@@ -1045,25 +1162,73 @@ function campaigns_handle_duplicate(array $actor): never
     json_out(['success' => true, 'campaign' => campaigns_row($newId, $tenantId)]);
 }
 
-/** ビーコンベースURLの候補一覧(既定値 + 既存キャンペーンで使われた beacon_base の重複除き)。 */
+/**
+ * ビーコンベースURLの候補一覧。
+ * 送信エンドポイントのマスタ(共有＋自テナント、kind='beacon'、有効)を先頭に、
+ * 既存キャンペーン・コンテンツで使われた beacon_base の値を続けて、重複を除いて返す。
+ * マスタが空でも既定 IP を必ず1件含める(従来動作の保険)。
+ */
 function campaigns_handle_beacon_bases(array $actor): never
 {
     $tenantId = effective_tenant_id($actor, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
-    // 既定値を先頭に。訓練メールの追跡サーバの既定 IP。
-    $bases = ['http://85.131.251.224/'];
-    $rows = Db::all(
-        "SELECT DISTINCT beacon_base FROM campaigns
-         WHERE tenant_id = ? AND beacon_base IS NOT NULL AND beacon_base != ''
-         ORDER BY beacon_base",
-        [$tenantId]
-    );
-    foreach ($rows as $r) {
-        $b = (string) $r['beacon_base'];
-        if (!in_array($b, $bases, true)) {
-            $bases[] = $b;
-        }
-    }
+    $bases = campaigns_endpoint_candidates($tenantId, 'beacon', 'beacon_base', 'http://85.131.251.224/');
     json_out(['success' => true, 'beacon_bases' => $bases]);
+}
+
+/** 送信元アドレスの候補一覧(マスタ kind='from' ＋ 既存キャンペーン/コンテンツで使われた from_address)。 */
+function campaigns_handle_from_addresses(array $actor): never
+{
+    $tenantId = effective_tenant_id($actor, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    $addrs = campaigns_endpoint_candidates($tenantId, 'from', 'from_address', null);
+    json_out(['success' => true, 'from_addresses' => $addrs]);
+}
+
+/**
+ * 候補一覧を組み立てる。マスタ(send_endpoints、共有＋自テナント、有効)→ 過去に使った単数列の値の順。
+ * $default が非 null なら必ず先頭に含める。重複は除く。
+ * @return array<int,string>
+ */
+function campaigns_endpoint_candidates(int $tenantId, string $kind, string $legacyColumn, ?string $default): array
+{
+    $out = [];
+    $add = static function (?string $v) use (&$out): void {
+        $v = $v !== null ? trim($v) : '';
+        if ($v !== '' && !in_array($v, $out, true)) {
+            $out[] = $v;
+        }
+    };
+    if ($default !== null) {
+        $add($default);
+    }
+    // マスタ(共有＋自テナント)。sort_order→id 順。
+    foreach (Db::all(
+        'SELECT value FROM send_endpoints
+         WHERE (tenant_id = ? OR tenant_id IS NULL) AND kind = ? AND is_active = 1
+         ORDER BY (tenant_id IS NULL), sort_order, id',
+        [$tenantId, $kind]
+    ) as $r) {
+        $add((string) $r['value']);
+    }
+    // 過去にキャンペーン本体で使った値。
+    foreach (Db::all(
+        "SELECT DISTINCT {$legacyColumn} AS v FROM campaigns
+         WHERE tenant_id = ? AND {$legacyColumn} IS NOT NULL AND {$legacyColumn} != ''
+         ORDER BY {$legacyColumn}",
+        [$tenantId]
+    ) as $r) {
+        $add((string) $r['v']);
+    }
+    // 過去にコンテンツで使った値(コンテンツ別上書き)。
+    foreach (Db::all(
+        "SELECT DISTINCT cc.{$legacyColumn} AS v FROM campaign_contents cc
+         JOIN campaigns c ON c.id = cc.campaign_id
+         WHERE c.tenant_id = ? AND cc.{$legacyColumn} IS NOT NULL AND cc.{$legacyColumn} != ''
+         ORDER BY cc.{$legacyColumn}",
+        [$tenantId]
+    ) as $r) {
+        $add((string) $r['v']);
+    }
+    return $out;
 }
 
 try {
@@ -1100,6 +1265,9 @@ try {
     }
     if ($action === 'beacon_bases' && $method === 'GET') {
         campaigns_handle_beacon_bases($actor);
+    }
+    if ($action === 'from_addresses' && $method === 'GET') {
+        campaigns_handle_from_addresses($actor);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

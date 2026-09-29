@@ -500,7 +500,7 @@ function campaign_files_rows(int $tenantId): array
     $campaignBase = PipelineRunner::beaconUrlBase(['beacon_base' => $c['beacon_base'] ?? null]);
 
     $targets = Db::all(
-        'SELECT ct.tracking_id, ct.koban, ct.content_no, ct.send_status,
+        'SELECT ct.tracking_id, ct.koban, ct.content_no, ct.send_status, ct.resolved_beacon_base,
                 t.email AS to_email, t.name AS to_name, t.company
          FROM campaign_targets ct
          JOIN targets t ON t.id = ct.target_id
@@ -513,11 +513,17 @@ function campaign_files_rows(int $tenantId): array
     foreach ($targets as $t) {
         $tid = (string) $t['tracking_id'];
         if ($tid === '') { continue; }
-        // 対象者に割り当てられた content の base を優先、無ければキャンペーン base。
-        $cno = isset($t['content_no']) ? (int) $t['content_no'] : 0;
-        $base = ($cno > 0 && !empty($contentBase[$cno]))
-            ? PipelineRunner::beaconUrlBase(['beacon_base' => $contentBase[$cno]])
-            : $campaignBase;
+        // 送信時に確定した値(resolved_beacon_base)を最優先で使う。無い(古いキャンペーン)なら従来どおり再計算する。
+        // これで送信・測定・表示のホストが必ず一致する(複数指定でも対象者ごとに確定済み)。
+        if (!empty($t['resolved_beacon_base'])) {
+            $base = (string) $t['resolved_beacon_base'];
+        } else {
+            // 対象者に割り当てられた content の base を優先、無ければキャンペーン base。
+            $cno = isset($t['content_no']) ? (int) $t['content_no'] : 0;
+            $base = ($cno > 0 && !empty($contentBase[$cno]))
+                ? PipelineRunner::beaconUrlBase(['beacon_base' => $contentBase[$cno]])
+                : $campaignBase;
+        }
         $baseNoSlash = rtrim($base, '/');
         $linkFile   = 'link-' . $tid . '.html';
         $beaconFile = 'kunren-beacon-' . $tid . '.png';

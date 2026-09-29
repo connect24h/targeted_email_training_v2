@@ -178,17 +178,22 @@ final class PipelineRunner
         $rows = [self::LIST_HEADER];
         $fromAddr = (string) ($c['from_address'] ?? '');
         $suppressPrefillEmail = (int) ($c['suppress_prefill_email'] ?? 0);
+        // 対象者ごとに beacon/from を確定して保存する(キャンペーンの複数指定があればラウンドロビン、
+        // 無ければ従来フォールバック=単数列/config/既定。単数のみのキャンペーンは従来と同じ値になる)。
+        $resolved = self::resolveEndpoints($c, [], $targets);
         // link_mode で「リンク型 or 添付型」を排他にする。
         //  - link / form : 本文URL = {base}/link-{tracking_id}.html(クリック追跡)、添付なし
         //  - attachment  : 添付あり、本文URLはトップ(#$1$# には誘い文だけで追跡は添付ビーコン)
         $linkMode = (string) ($c['link_mode'] ?? 'link');
-        $base = rtrim($urlBase, '/');
         // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
         $redirect = self::resolveTestRedirect($c);
         $ri = 0;
         foreach ($targets as $t) {
             $surname = self::surname((string) $t['to_name']);
             $tid = (string) $t['tracking_id'];
+            $r = $resolved[(int) $t['id']] ?? null;
+            $base = rtrim($r !== null ? $r['beacon'] : $urlBase, '/');
+            $rowFromAddr = $r !== null ? $r['from'] : $fromAddr;
             // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
             $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
             $ri++;
@@ -209,7 +214,7 @@ final class PipelineRunner
                 '',                                 // 本文差し込み3 #$3$#
                 $authFlag,                          // 認証フラグ
                 $attachNo,                          // 添付ファイル番号(link/form型は空=添付なし)
-                $fromAddr,                          // 送信元メールアドレス
+                $rowFromAddr,                       // 送信元メールアドレス
                 $surname,                           // 苗字
                 (string) $t['to_name'],             // 表示氏名（姓名）
                 (string) $t['to_email'],            // メールアドレス（会社）
@@ -302,6 +307,9 @@ final class PipelineRunner
             $contentMap[(int) $content['content_no']] = $content;
         }
 
+        // 対象者ごとに beacon/from を1つに確定して保存する(ラウンドロビン、決定的)。
+        $resolved = self::resolveEndpoints($c, $contentMap, $targets);
+
         $rows = [self::LIST_HEADER];
         $fromAddr = (string) ($c['from_address'] ?? '');
         // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
@@ -334,9 +342,10 @@ final class PipelineRunner
             $surname = self::surname((string) $t['to_name']);
             $tid = (string) $t['tracking_id'];
 
-            // コンテンツ別のビーコンURL/送信元(無ければキャンペーン既定にフォールバック)。
-            $contentBase = rtrim(self::beaconUrlBase(['beacon_base' => $targetContent['beacon_base'] ?? ($c['beacon_base'] ?? null)]), '/');
-            $contentFromAddr = (string) ($targetContent['from_address'] ?? $fromAddr);
+            // 対象者ごとに確定した beacon/from を使う(resolveEndpoints が複数指定/コンテンツ別/キャンペーン既定を解決済み)。
+            $r = $resolved[(int) $t['id']] ?? null;
+            $contentBase = rtrim($r !== null ? $r['beacon'] : self::beaconUrlBase(['beacon_base' => $targetContent['beacon_base'] ?? ($c['beacon_base'] ?? null)]), '/');
+            $contentFromAddr = $r !== null ? $r['from'] : (string) ($targetContent['from_address'] ?? $fromAddr);
 
             if ($linkMode === 'attachment' || $linkMode === 'qr') {
                 // 添付型/QR型: 本文はトップ、添付を付ける(添付番号=content_no)。
@@ -423,6 +432,108 @@ final class PipelineRunner
             }
         }
         return 'http://85.131.251.224/';
+    }
+
+    /**
+     * JSON 配列文字列を string[] へ復元する。空/不正/空要素だけなら []。
+     * @return array<int,string>
+     */
+    private static function decodeList($json): array
+    {
+        if ($json === null || $json === '') {
+            return [];
+        }
+        $decoded = json_decode((string) $json, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+        $out = [];
+        foreach ($decoded as $v) {
+            if (is_string($v)) {
+                $v = trim($v);
+                if ($v !== '') {
+                    $out[] = $v;
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * 起動時に、対象者ごとの beacon ベースURL と 送信元アドレスを1つに確定して
+     * campaign_targets.resolved_beacon_base / resolved_from_address に保存する。
+     *
+     * 確定の順序(対象者ごと):
+     *   1. その対象者のコンテンツに複数指定(beacon_bases/from_addresses)があればその中から
+     *   2. 無ければキャンペーンの複数指定から
+     *   3. どちらも無ければ従来のフォールバック(コンテンツ単数→キャンペーン単数→設定/既定)
+     * 複数から1つを選ぶのは koban 順のラウンドロビン(同じリストを使う対象者だけで循環)。
+     * 同じ起動なら毎回同じ割り当て(決定的)。
+     *
+     * @param array<int,array<string,mixed>> $contentMap content_no => campaign_contents 行(単一コンテンツ経路では空)
+     * @param array<int,array<string,mixed>> $targets    koban 順の campaign_targets 行(id, koban, content_no を含む)
+     * @return array<int,array{beacon:string,from:string}> campaign_targets.id => 確定値
+     */
+    private static function resolveEndpoints(array $c, array $contentMap, array $targets): array
+    {
+        // キャンペーンの複数指定リスト。
+        $campaignBeaconList = self::decodeList($c['beacon_bases'] ?? null);
+        $campaignFromList   = self::decodeList($c['from_addresses'] ?? null);
+        $campaignFromSingle = (string) ($c['from_address'] ?? '');
+
+        // 「同じリスト(=同じ選択肢の並び)を使う対象者」ごとにラウンドロビンの通し番号を持つ。
+        // リストの中身(JSON)をキーにすることで、同じ選択の対象者だけで循環し均等配分になる。
+        $beaconCounters = [];
+        $fromCounters = [];
+
+        $resolved = [];
+        foreach ($targets as $t) {
+            $ctId = (int) $t['id'];
+            $cno = isset($t['content_no']) ? (int) $t['content_no'] : 0;
+            $content = ($cno > 0 && isset($contentMap[$cno])) ? $contentMap[$cno] : null;
+
+            // ---- beacon の確定 ----
+            $contentBeaconList = $content !== null ? self::decodeList($content['beacon_bases'] ?? null) : [];
+            $beaconList = $contentBeaconList !== [] ? $contentBeaconList : $campaignBeaconList;
+            if ($beaconList !== []) {
+                $key = 'b:' . implode("\x1f", $beaconList);
+                $idx = $beaconCounters[$key] ?? 0;
+                $beaconCounters[$key] = $idx + 1;
+                $beaconRaw = $beaconList[$idx % count($beaconList)];
+                $beacon = rtrim($beaconRaw, '/') . '/';
+            } else {
+                // 従来フォールバック: コンテンツ単数→キャンペーン単数→config/既定。
+                $singleBase = $content !== null ? ($content['beacon_base'] ?? ($c['beacon_base'] ?? null)) : ($c['beacon_base'] ?? null);
+                $beacon = self::beaconUrlBase(['beacon_base' => $singleBase]);
+            }
+
+            // ---- from の確定 ----
+            $contentFromList = $content !== null ? self::decodeList($content['from_addresses'] ?? null) : [];
+            $fromList = $contentFromList !== [] ? $contentFromList : $campaignFromList;
+            if ($fromList !== []) {
+                $key = 'f:' . implode("\x1f", $fromList);
+                $idx = $fromCounters[$key] ?? 0;
+                $fromCounters[$key] = $idx + 1;
+                $from = $fromList[$idx % count($fromList)];
+            } else {
+                // 従来フォールバック: コンテンツ単数→キャンペーン単数。
+                $contentFromSingle = $content !== null ? ($content['from_address'] ?? null) : null;
+                $from = $contentFromSingle !== null && $contentFromSingle !== ''
+                    ? (string) $contentFromSingle
+                    : $campaignFromSingle;
+            }
+
+            $resolved[$ctId] = ['beacon' => $beacon, 'from' => $from];
+        }
+
+        // 確定値を保存(送信・測定・表示の一致の要)。
+        foreach ($resolved as $ctId => $r) {
+            Db::run(
+                'UPDATE campaign_targets SET resolved_beacon_base = ?, resolved_from_address = ? WHERE id = ?',
+                [$r['beacon'], $r['from'], $ctId]
+            );
+        }
+        return $resolved;
     }
 
     private static function ensureDir(string $dir): void
