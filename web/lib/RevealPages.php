@@ -52,6 +52,25 @@ final class RevealPages
         }
     }
 
+    /**
+     * 種明かしページだけに当てる追加の規則。種明かしは訓練の後に受講者へ見せるページなので、
+     * 入力フォーム、リンクの基準の書き換え、javascript: と data: の URL を使わせない。
+     * 偽のログイン画面(認証マスタ)は入力フォームが要るので、共通の validate には入れない。
+     */
+    public static function validateReveal(string $html): void
+    {
+        self::validate($html);
+        if (preg_match('/<\s*base\b/i', $html)) {
+            throw new DomainException('base タグは使用できません', 400);
+        }
+        if (preg_match('/<\s*form\b/i', $html)) {
+            throw new DomainException('種明かしページに入力フォーム（form タグ）は使用できません', 400);
+        }
+        if (preg_match('/\b(?:href|src|action|formaction)\s*=\s*["\']?\s*(?:javascript|data|vbscript)\s*:/i', $html)) {
+            throw new DomainException('javascript: や data: の URL は使用できません', 400);
+        }
+    }
+
     /** @return list<array<string,mixed>> 自テナントのページ(名前順) */
     public static function all(int $tenantId): array
     {
@@ -88,7 +107,7 @@ final class RevealPages
      */
     public static function save(int $tenantId, ?int $id, string $name, string $html, string $actor): int
     {
-        self::validate($html);
+        self::validateReveal($html);
         $name = trim($name);
         if ($name === '' || mb_strlen($name) > 100) {
             throw new DomainException('ページ名を入力してください（100文字以内）', 400);

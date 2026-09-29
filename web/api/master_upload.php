@@ -163,6 +163,11 @@ try {
         }
 
         if ($kind === 'reveal') {
+            try {
+                RevealPages::validateReveal($html);
+            } catch (DomainException $e) {
+                json_error($e->getMessage(), 400);
+            }
             // 種明かしはテナント別 → 自テナント(superadmin は tenant_id 指定可)
             $tenantId = effective_tenant_id($actor, isset($body['tenant_id']) && is_int($body['tenant_id']) ? $body['tenant_id'] : null);
             $t = Db::one('SELECT data_dir FROM tenants WHERE id = ?', [$tenantId]);

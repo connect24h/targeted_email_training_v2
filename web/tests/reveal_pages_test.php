@@ -116,4 +116,23 @@ $threw = false;
 try { RevealPages::delete($id1, 1); } catch (DomainException $e) { $threw = $e->getCode() === 404; }
 check($threw, 'delete: 無い id は 404');
 
+// 種明かしページだけに当てる追加の規則(入力フォーム、base、javascript: と data: の URL)。認証マスタの共通の規則には入れない
+$rejects = [
+    'base' => '<!DOCTYPE html><html><head><base href="https://evil.example.test/"></head><body>x</body></html>',
+    'form' => '<!DOCTYPE html><html><body><form action="/x"><input name="p"></form></body></html>',
+    'js' => '<!DOCTYPE html><html><body><a href="javascript:alert(1)">x</a></body></html>',
+    'data' => '<!DOCTYPE html><html><body><a href = \'data:text/html,x\'>x</a></body></html>',
+];
+foreach ($rejects as $label => $bad) {
+    $threw = false;
+    try { RevealPages::save(1, null, '拒否の確認 ' . $label, $bad, 'test'); } catch (DomainException $e) { $threw = $e->getCode() === 400; }
+    check($threw, "validateReveal: {$label} を含む種明かしページは保存できない");
+}
+$formOk = true;
+try { RevealPages::validate($rejects['form']); } catch (DomainException) { $formOk = false; }
+check($formOk, 'validate(共通): 認証マスタ用の入力フォームは今までどおり通す');
+$linkOk = true;
+try { RevealPages::validateReveal('<!DOCTYPE html><html><body><a href="https://example.test/">x</a><img src="/img/a.png"></body></html>'); } catch (DomainException) { $linkOk = false; }
+check($linkOk, 'validateReveal: 普通のリンクと画像は通す');
+
 echo "ALL TESTS PASSED\n";
