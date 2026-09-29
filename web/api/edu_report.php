@@ -4,7 +4,8 @@
  * 教育レポート API(集計・閲覧のみ)。report.php と同じ流儀。
  * - action=delivery  : 配信1件の集計(受講率/平均正答率/合格率/カテゴリ別/設問別)
  * - action=deliveries: 配信一覧の集計サマリ
- * - action=overview  : テナント全体(受講率/平均リテラシースコア/部署別ランキング/カテゴリ別)
+ * - action=overview  : テナント全体(受講率、種類ごとの平均点と合格率、部署別ランキング、カテゴリ別)。テスト用と削除済みの対象者を除く
+ * - action=trend     : 月ごとの推移(受講の記録から直接集計、種類ごとの系列)
  * - action=cross     : 訓練×教育クロス(訓練失敗者が教育で改善したか)
  * - action=delivery_people: 配信1件の受講者ごと(状態、点数、合否、受講回数、期限、完了日時)。format=csv で CSV
  * - action=delivery_depts : 配信1件の部署ごと(対象、完了、未完了、合格、合格率、期限内合格率)。format=csv で CSV
@@ -228,26 +229,73 @@ function edu_rep_handle_deliveries(array $user): never
     json_out(['success' => true, 'deliveries' => $out]);
 }
 
+/**
+ * 全社の数字に入れる受講者の条件(対象者の別名 t)。テスト用の対象者と、削除済み(active でない)の対象者を除く。
+ * 部署別、種類別、カテゴリ別、推移で同じ条件を使う。
+ */
+const EDU_REP_REAL_TARGET_SQL = "t.is_test = 0 AND t.status = 'active'";
+
+/** 配信の種類(概要と推移で分けて出す順)。 */
+const EDU_REP_DELIVERY_TYPES = ['elearning', 'awareness_quiz'];
+
+/**
+ * 配信の種類ごとの割当、完了、提出の平均点と合格率。合格率は合格点のある配信(eラーニング)の提出だけで数え、
+ * 合格点のない種類は null。
+ * @return array<string, array<string, mixed>>
+ */
+function edu_rep_overview_by_type(int $tenantId): array
+{
+    $counts = Db::all(
+        "SELECT d.delivery_type, COUNT(*) AS assigned,
+                SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completed
+         FROM edu_assignments a
+         INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
+         INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
+         WHERE a.tenant_id = ? AND " . EDU_REP_REAL_TARGET_SQL . '
+         GROUP BY d.delivery_type',
+        [$tenantId]
+    );
+    $scores = Db::all(
+        'SELECT d.delivery_type, COUNT(r.id) AS n, AVG(r.percentage) AS avg_pct,
+                SUM(CASE WHEN d.pass_score IS NOT NULL THEN 1 ELSE 0 END) AS judged,
+                SUM(CASE WHEN d.pass_score IS NOT NULL AND r.percentage >= d.pass_score THEN 1 ELSE 0 END) AS passed
+         FROM edu_responses r
+         INNER JOIN edu_assignments a ON a.id = r.assignment_id AND a.tenant_id = r.tenant_id
+         INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
+         INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
+         WHERE r.tenant_id = ? AND ' . EDU_REP_REAL_TARGET_SQL . '
+         GROUP BY d.delivery_type',
+        [$tenantId]
+    );
+    $countBy = array_column($counts, null, 'delivery_type');
+    $scoreBy = array_column($scores, null, 'delivery_type');
+    $out = [];
+    foreach (EDU_REP_DELIVERY_TYPES as $type) {
+        $assigned = (int) ($countBy[$type]['assigned'] ?? 0);
+        $completed = (int) ($countBy[$type]['completed'] ?? 0);
+        $n = (int) ($scoreBy[$type]['n'] ?? 0);
+        $judged = (int) ($scoreBy[$type]['judged'] ?? 0);
+        $avg = $scoreBy[$type]['avg_pct'] ?? null;
+        $out[$type] = [
+            'assigned' => $assigned,
+            'completed' => $completed,
+            'completion_rate' => edu_rep_rate($completed, $assigned),
+            'respondent_count' => $n,
+            'average_score' => $avg !== null ? round((float) $avg, 1) : null,
+            'pass_rate' => $judged > 0 ? edu_rep_rate((int) $scoreBy[$type]['passed'], $judged) : null,
+        ];
+    }
+    return $out;
+}
+
 function edu_rep_handle_overview(array $user): never
 {
     $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
 
-    // 全体の受講状況
-    $counts = Db::one(
-        "SELECT COUNT(*) AS assigned,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
-         FROM edu_assignments WHERE tenant_id = ?",
-        [$tenantId]
-    ) ?? [];
-    $assigned = (int) ($counts['assigned'] ?? 0);
-    $completed = (int) ($counts['completed'] ?? 0);
-
-    // 平均リテラシースコア(完了レスポンスの平均%)
-    $litRow = Db::one(
-        'SELECT AVG(percentage) AS avg_pct, COUNT(*) AS n FROM edu_responses WHERE tenant_id = ?',
-        [$tenantId]
-    ) ?? [];
-    $literacy = $litRow['avg_pct'] !== null ? round((float) $litRow['avg_pct'], 1) : 0.0;
+    // eラーニング(合格制)とアウェアネス(小問)は点数の意味が違うので、平均点は種類ごとに出す(1つにまとめない)
+    $byType = edu_rep_overview_by_type($tenantId);
+    $assigned = array_sum(array_column($byType, 'assigned'));
+    $completed = array_sum(array_column($byType, 'completed'));
 
     // 部署別ランキング(target.department 単位の平均%・完了数)
     $byDept = Db::all(
@@ -257,9 +305,9 @@ function edu_rep_handle_overview(array $user): never
          FROM edu_responses r
          INNER JOIN edu_assignments a ON a.id = r.assignment_id
          INNER JOIN targets t ON t.id = a.target_id
-         WHERE r.tenant_id = ? AND t.is_test = 0
+         WHERE r.tenant_id = ? AND " . EDU_REP_REAL_TARGET_SQL . '
          GROUP BY department
-         ORDER BY avg_pct DESC",
+         ORDER BY avg_pct DESC',
         [$tenantId]
     );
     $dept = [];
@@ -273,16 +321,18 @@ function edu_rep_handle_overview(array $user): never
 
     // カテゴリ別正答率(全配信横断・苦手カテゴリ分布)
     $byCat = Db::all(
-        "SELECT c.slug, c.name,
+        'SELECT c.slug, c.name,
                 COUNT(ra.id) AS answered,
                 SUM(CASE WHEN ra.is_correct = 1 THEN 1 ELSE 0 END) AS correct
          FROM edu_response_answers ra
          INNER JOIN edu_responses r ON r.id = ra.response_id
+         INNER JOIN edu_assignments a ON a.id = r.assignment_id AND a.tenant_id = r.tenant_id
+         INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
          INNER JOIN edu_questions q ON q.id = ra.question_id
          INNER JOIN edu_categories c ON c.id = q.category_id
-         WHERE r.tenant_id = ?
+         WHERE r.tenant_id = ? AND ' . EDU_REP_REAL_TARGET_SQL . '
          GROUP BY c.id
-         ORDER BY c.sort_order, c.id",
+         ORDER BY c.sort_order, c.id',
         [$tenantId]
     );
     $cat = [];
@@ -304,8 +354,8 @@ function edu_rep_handle_overview(array $user): never
             'assigned' => $assigned,
             'completed' => $completed,
             'completion_rate' => edu_rep_rate($completed, $assigned),
-            'literacy_score' => $literacy,
         ],
+        'by_type' => $byType,
         'by_department' => $dept,
         'by_category' => $cat,
     ]);
@@ -381,60 +431,47 @@ function edu_rep_handle_cross(array $user): never
 }
 
 /**
- * 経年トレンド: edu_score_snapshots から company(全体)の日次系列 +
- * group(部署別)の直近日の系列を返す。company は折れ線、group は最新日の部署比較用。
+ * 経年トレンド: 受講の記録(edu_responses の完了日時)から月ごとに直接集計する。種類(eラーニング、アウェアネス)ごとの系列で、
+ * 月ごとに平均点、受講完了の数(割当が完了の提出)、回答者の数(提出した対象者の数)を返す。
+ * edu_responses は割当ごとの最新の提出なので、受け直した人はその提出の月に数える。
+ * テスト用と削除済みの対象者は入れない(概要と同じ条件)。積んだ記録(edu_score_snapshots)は読まない。
  */
 function edu_rep_handle_trend(array $user): never
 {
     $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
-
-    // company: 日付昇順の平均スコア + 回答者数(折れ線グラフ用)
-    $companyRows = Db::all(
-        "SELECT snapshot_date, average_score, respondent_count
-         FROM edu_score_snapshots
-         WHERE tenant_id = ? AND snapshot_type = 'company'
-         ORDER BY snapshot_date ASC",
+    $rows = Db::all(
+        "SELECT substr(r.completed_at, 1, 7) AS month, d.delivery_type,
+                AVG(r.percentage) AS avg_pct,
+                SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) AS completions,
+                COUNT(DISTINCT a.target_id) AS respondents
+         FROM edu_responses r
+         INNER JOIN edu_assignments a ON a.id = r.assignment_id AND a.tenant_id = r.tenant_id
+         INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
+         INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
+         WHERE r.tenant_id = ? AND r.completed_at IS NOT NULL AND " . EDU_REP_REAL_TARGET_SQL . '
+         GROUP BY month, d.delivery_type
+         ORDER BY month',
         [$tenantId]
     );
-    $company = [];
-    foreach ($companyRows as $r) {
-        $company[] = [
-            'date' => (string) $r['snapshot_date'],
-            'average_score' => $r['average_score'] !== null ? round((float) $r['average_score'], 1) : 0.0,
-            'respondent_count' => (int) $r['respondent_count'],
-        ];
+    $months = array_values(array_unique(array_map(static fn(array $r): string => (string) $r['month'], $rows)));
+    $cells = [];
+    foreach ($rows as $r) {
+        $cells[(string) $r['delivery_type']][(string) $r['month']] = $r;
     }
-
-    // group: 最新スナップショット日の部署別平均(横並び比較用)
-    $latest = Db::one(
-        "SELECT MAX(snapshot_date) AS d FROM edu_score_snapshots WHERE tenant_id = ? AND snapshot_type = 'group'",
-        [$tenantId]
-    );
-    $groups = [];
-    if ($latest !== null && $latest['d'] !== null) {
-        $groupRows = Db::all(
-            "SELECT average_score, respondent_count, category_scores
-             FROM edu_score_snapshots
-             WHERE tenant_id = ? AND snapshot_type = 'group' AND snapshot_date = ?
-             ORDER BY average_score DESC",
-            [$tenantId, (string) $latest['d']]
-        );
-        foreach ($groupRows as $r) {
-            $cs = $r['category_scores'] !== null ? (json_decode((string) $r['category_scores'], true) ?: []) : [];
-            $groups[] = [
-                'department' => isset($cs['department']) ? (string) $cs['department'] : '(不明)',
-                'average_score' => $r['average_score'] !== null ? round((float) $r['average_score'], 1) : 0.0,
-                'respondent_count' => (int) $r['respondent_count'],
+    // 系列は月の並びをそろえ、受講のない月は平均なし(null)、数は0にする(折れ線のすき間になる)
+    $series = [];
+    foreach (EDU_REP_DELIVERY_TYPES as $type) {
+        $series[$type] = array_map(static function (string $month) use ($cells, $type): array {
+            $cell = $cells[$type][$month] ?? null;
+            return [
+                'month' => $month,
+                'average_score' => $cell !== null ? round((float) $cell['avg_pct'], 1) : null,
+                'completions' => $cell !== null ? (int) $cell['completions'] : 0,
+                'respondents' => $cell !== null ? (int) $cell['respondents'] : 0,
             ];
-        }
+        }, $months);
     }
-
-    json_out([
-        'success' => true,
-        'company' => $company,
-        'group_latest_date' => $latest !== null ? ($latest['d'] ?? null) : null,
-        'groups' => $groups,
-    ]);
+    json_out(['success' => true, 'months' => $months, 'series' => $series]);
 }
 
 /** 期限などの日時をそろえる('YYYY-MM-DD HH:MM:SS')。空は null、日付だけはその日の終わり。 */

@@ -4706,11 +4706,15 @@ function bindEduReportControls() {
 async function renderEduReportOverview() {
   const r = await api('api/edu_report.php', { query: { action: 'overview' } });
   const s = r.summary;
+  // eラーニング(合格制)とアウェアネス(小問)は点数の意味が違うので、平均点を分けて出す。テスト用と削除済みの対象者は数えない
+  const el = (r.by_type || {}).elearning || {};
+  const aw = (r.by_type || {}).awareness_quiz || {};
+  const pct = (v) => (v === null || v === undefined ? '—' : `${v}%`);
   $('#eduReportKpi').innerHTML = [
-    { label: '受講率', value: `${s.completion_rate}%`, icon: 'bi-check2-circle' },
-    { label: 'リテラシースコア', value: `${s.literacy_score}`, icon: 'bi-mortarboard' },
-    { label: '割当', value: s.assigned, icon: 'bi-people' },
-    { label: '完了', value: s.completed, icon: 'bi-clipboard-check' },
+    { label: '受講完了率（全体）', value: `${s.completion_rate}%`, icon: 'bi-check2-circle' },
+    { label: `eラーニングの平均点（合格率 ${pct(el.pass_rate)}）`, value: pct(el.average_score), icon: 'bi-mortarboard' },
+    { label: `アウェアネスの平均点（回答 ${Number(aw.respondent_count || 0)}件）`, value: pct(aw.average_score), icon: 'bi-lightbulb' },
+    { label: '割当 / 完了', value: `${s.assigned} / ${s.completed}`, icon: 'bi-people' },
   ].map(kpiCard).join('');
   $('#eduReportDeptBody').innerHTML = (r.by_department || []).length ? r.by_department.map((d) =>
     `<tr><td>${esc(d.department)}</td><td>${d.average_score}%</td><td>${d.respondent_count}</td></tr>`).join('') : emptyRow(3);
@@ -4721,34 +4725,41 @@ async function renderEduReportOverview() {
 }
 
 let eduTrendChart = null;
+/** 月ごとの平均点の推移(受講の記録から集計)。eラーニングとアウェアネスを別の線にする。 */
 async function renderEduTrend() {
   let t;
   try { t = await api('api/edu_report.php', { query: { action: 'trend' } }); }
   catch (e) { return; }
-  const company = t.company || [];
+  const months = t.months || [];
+  const series = t.series || {};
   const note = $('#eduTrendNote');
   if (eduTrendChart) { eduTrendChart.destroy(); eduTrendChart = null; }
-  if (!company.length) {
-    if (note) note.textContent = 'スナップショット未生成（日次バッチが積むと表示されます）';
+  if (!months.length) {
+    if (note) note.textContent = '受講の記録がまだありません';
     return;
   }
-  if (note) note.textContent = `${company.length}日分 / 部署比較日: ${t.group_latest_date || '-'}`;
+  if (note) note.textContent = `${months.length}か月分（受講を終えた月で集計）`;
+  const lines = [
+    ['elearning', 'eラーニングの平均点（%）', '#2563eb', 'rgba(37,99,235,.12)'],
+    ['awareness_quiz', 'アウェアネスの平均点（%）', '#067647', 'rgba(6,118,71,.12)'],
+  ];
   eduTrendChart = new Chart($('#eduTrendChart'), {
     type: 'line',
     data: {
-      labels: company.map((p) => p.date),
-      datasets: [{
-        label: 'リテラシースコア（%）',
-        data: company.map((p) => p.average_score),
-        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)',
-        fill: true, tension: 0.25, pointRadius: 3,
-      }],
+      labels: months,
+      datasets: lines.map(([type, label, color, fill]) => ({
+        label, data: (series[type] || []).map((p) => p.average_score),
+        borderColor: color, backgroundColor: fill, fill: false, tension: 0.25, pointRadius: 3, spanGaps: true,
+      })),
     },
     options: {
       responsive: true, maintainAspectRatio: true,
       scales: { y: { beginAtZero: true, max: 100, ticks: { callback: (v) => v + '%' } } },
       plugins: { legend: { display: true, position: 'bottom' },
-        tooltip: { callbacks: { afterLabel: (ctx) => `回答者 ${company[ctx.dataIndex].respondent_count} 名` } } },
+        tooltip: { callbacks: { afterLabel: (ctx) => {
+          const p = (series[lines[ctx.datasetIndex][0]] || [])[ctx.dataIndex] || {};
+          return `回答者 ${Number(p.respondents || 0)} 名 / 完了 ${Number(p.completions || 0)} 件`;
+        } } } },
     },
   });
 }
