@@ -162,6 +162,24 @@ function campaigns_optional_bool_int(array $body, string $key): ?int
     json_error($key . ' が不正です', 400);
 }
 
+/**
+ * 種明かしページの選択(G29)。null / 0 は既定(reveal.html)。指定時は自テナントのページだけ許す(他テナントは選べない)。
+ */
+function campaigns_optional_reveal_page_id(array $body, int $tenantId, string $key = 'reveal_page_id'): ?int
+{
+    if (!array_key_exists($key, $body) || $body[$key] === null || $body[$key] === 0 || $body[$key] === '') {
+        return null;
+    }
+    if (!is_int($body[$key]) || $body[$key] < 1) {
+        json_error($key . ' が不正です', 400);
+    }
+    require_once __DIR__ . '/../lib/RevealPages.php';
+    if (RevealPages::find($body[$key], $tenantId) === null) {
+        json_error('選択した種明かしページが見つかりません', 400);
+    }
+    return $body[$key];
+}
+
 function campaigns_query_int(string $key): ?int
 {
     if (!array_key_exists($key, $_GET) || $_GET[$key] === '') {
@@ -639,6 +657,9 @@ function campaigns_handle_create(array $actor): never
         ];
     }
 
+    // 種明かしページの選択(G29)。他テナントのページは選べない。
+    $data['reveal_page_id'] = campaigns_optional_reveal_page_id($body, $tenantId);
+
     $targetIds = campaigns_collect_target_ids($body, $tenantId);
 
     $id = Db::tx(function () use ($tenantId, $actor, $data, $targetIds, $phishTemplate, $parsedContents): int {
@@ -647,8 +668,8 @@ function campaigns_handle_create(array $actor): never
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
               from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_filename, attachment_zip, send_mode,
               split_count, split_interval_min, weekdays_only, business_start, business_end,
-              start_at, end_at, is_test, content_delivery, test_redirect_emails, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              start_at, end_at, is_test, content_delivery, test_redirect_emails, reveal_page_id, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $tenantId,
                 $data['name'],
@@ -674,6 +695,7 @@ function campaigns_handle_create(array $actor): never
                 $data['is_test'],
                 $data['content_delivery'],
                 $data['test_redirect_emails'] ?? null,
+                $data['reveal_page_id'] ?? null,
                 $actor['id'],
             ]
         );
@@ -757,7 +779,7 @@ function campaigns_apply_update(int $campaignId, int $tenantId, array $fields): 
         'name', 'subject_template_id', 'body_template_id', 'phish_template_id', 'from_address',
         'from_domain', 'beacon_base', 'link_mode', 'attachment_ext', 'attachment_filename', 'attachment_zip', 'send_mode', 'split_count',
         'split_interval_min', 'weekdays_only', 'business_start', 'business_end', 'start_at',
-        'end_at', 'is_test', 'content_delivery', 'test_redirect_emails',
+        'end_at', 'is_test', 'content_delivery', 'test_redirect_emails', 'reveal_page_id',
     ];
     foreach ($allowed as $key) {
         if (!array_key_exists($key, $fields)) {
@@ -782,6 +804,10 @@ function campaigns_handle_update(array $actor): never
     $replaceTargets = array_key_exists('target_ids', $body) || array_key_exists('group_ids', $body);
 
     $fields = campaigns_update_fields($body);
+    // 種明かしページの選択(G29)。他テナントのページは選べない。
+    if (array_key_exists('reveal_page_id', $body)) {
+        $fields['reveal_page_id'] = campaigns_optional_reveal_page_id($body, $tenantId);
+    }
     if (array_key_exists('link_mode', $fields) && $fields['link_mode'] !== null) {
         campaigns_validate_in((string) $fields['link_mode'], CAMPAIGN_LINK_MODES, 'link_mode');
     }

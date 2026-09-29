@@ -55,14 +55,16 @@ def capture_enabled_for_page(beacon_base, tracking_id, auth_flag, db_path='/opt/
 
 
 def resolve_tenant_reveal(tracking_id):
-    """tracking_id(=乱数列)から所属テナントの reveal.html パスを返す。無ければ None。
+    """tracking_id(=乱数列)から使う種明かしページのパスを返す。無ければ None。
 
-    (2026-08-06) テナント別の種明かし対応。認証なし(auth_flag=0)の link ページは
-    生成時に種明かしを直接埋め込むため、共通 master.html ではなく、そのテナントの
-    reveal.html があれば優先する(例: Goldwin 専用の種明かし)。
-    DB が読めない・reveal.html が無い・例外は全て None を返し、呼び出し側で
+    優先順: キャンペーンが選んだ種明かしページ(reveal_pages, G29) > テナント既定の
+    reveal.html。認証なし(auth_flag=0)の link ページは生成時に種明かしを直接埋め込むため、
+    共通 master.html ではなくこれらを優先する。
+    (2026-08-06) テナント別の種明かし対応。
+    (2026-10-28) キャンペーンごとに種明かしページを選べるようにした(G29)。
+    DB が読めない・ファイルが無い・例外は全て None を返し、呼び出し側で
     共通 master.html にフォールバックさせる(訓練を止めない・常に安全側)。
-    training_log.php(認証あり経路)と同じ解決ロジックを Python 側にも置く。
+    credential_capture.php(認証あり経路)と同じ解決ロジックを Python 側にも置く。
     """
     if not tracking_id or tracking_id == 'unknown':
         return None
@@ -73,7 +75,7 @@ def resolve_tenant_reveal(tracking_id):
         conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
         try:
             row = conn.execute(
-                'SELECT t.data_dir FROM campaign_targets ct '
+                'SELECT t.data_dir, c.reveal_page_id FROM campaign_targets ct '
                 'JOIN campaigns c ON c.id = ct.campaign_id '
                 'JOIN tenants   t ON t.id = c.tenant_id '
                 'WHERE ct.tracking_id = ? LIMIT 1',
@@ -82,7 +84,15 @@ def resolve_tenant_reveal(tracking_id):
         finally:
             conn.close()
         if row and row[0]:
-            reveal = os.path.join(str(row[0]).rstrip('/'), 'reveal.html')
+            data_dir = str(row[0]).rstrip('/')
+            reveal_page_id = row[1]
+            # キャンペーンが選んだ種明かしページを優先する。
+            if reveal_page_id:
+                selected = os.path.join(data_dir, 'reveal-pages', f'reveal-{int(reveal_page_id)}.html')
+                if os.path.isfile(selected) and os.access(selected, os.R_OK):
+                    return selected
+            # 無ければテナント既定の reveal.html にフォールバックする。
+            reveal = os.path.join(data_dir, 'reveal.html')
             if os.path.isfile(reveal) and os.access(reveal, os.R_OK):
                 return reveal
     except Exception:

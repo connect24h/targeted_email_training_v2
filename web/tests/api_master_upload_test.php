@@ -18,6 +18,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/helpers.php';
+// mu_validate_html は RevealPages::validate に検証を一本化している(複数の種明かしページ G29 と同じ規則)。
+require_once __DIR__ . '/../lib/RevealPages.php';
 
 tet2_test_boot();
 load_api('master_upload');

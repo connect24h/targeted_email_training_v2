@@ -229,15 +229,15 @@ final class CampaignDraftFactory
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
               from_address, from_domain, beacon_base, link_mode, attachment_ext, attachment_zip, send_mode,
               split_count, split_interval_min, weekdays_only, business_start, business_end,
-              start_at, end_at, is_test, content_delivery, test_redirect_emails, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              start_at, end_at, is_test, content_delivery, test_redirect_emails, reveal_page_id, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $source['tenant_id'], $name, 'draft', $source['subject_template_id'], $source['body_template_id'],
                 $source['phish_template_id'], $source['from_address'], $source['from_domain'], $source['beacon_base'],
                 $source['link_mode'], $source['attachment_ext'], $source['attachment_zip'], $source['send_mode'],
                 $source['split_count'], $source['split_interval_min'], $source['weekdays_only'],
                 $source['business_start'], $source['business_end'], null, null, $source['is_test'],
-                $source['content_delivery'], $source['test_redirect_emails'] ?? null, $createdBy,
+                $source['content_delivery'], $source['test_redirect_emails'] ?? null, $source['reveal_page_id'] ?? null, $createdBy,
             ]
         );
     }
