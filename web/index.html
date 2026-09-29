@@ -8,7 +8,7 @@
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=9ebf27ba" rel="stylesheet">
+  <link href="assets/app.css?v=0fc800a0" rel="stylesheet">
 </head>
 <body>
 
@@ -683,6 +683,7 @@
           <li class="nav-item" role="presentation"><button class="nav-link active" id="eduRepTab-overview" data-edu-rep-tab="overview" data-bs-toggle="tab" data-bs-target="#eduRepPane-overview" type="button" role="tab" aria-controls="eduRepPane-overview" aria-selected="true"><i class="bi bi-graph-up me-1" aria-hidden="true"></i>概要</button></li>
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-deliveries" data-edu-rep-tab="deliveries" data-bs-toggle="tab" data-bs-target="#eduRepPane-deliveries" type="button" role="tab" aria-controls="eduRepPane-deliveries" aria-selected="false"><i class="bi bi-send me-1" aria-hidden="true"></i>配信ごと</button></li>
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-people" data-edu-rep-tab="people" data-bs-toggle="tab" data-bs-target="#eduRepPane-people" type="button" role="tab" aria-controls="eduRepPane-people" aria-selected="false"><i class="bi bi-person-lines-fill me-1" aria-hidden="true"></i>受講者ごと</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-awareness" data-edu-rep-tab="awareness" data-bs-toggle="tab" data-bs-target="#eduRepPane-awareness" type="button" role="tab" aria-controls="eduRepPane-awareness" aria-selected="false"><i class="bi bi-lightbulb me-1" aria-hidden="true"></i>アウェアネスの成績</button></li>
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-cross" data-edu-rep-tab="cross" data-bs-toggle="tab" data-bs-target="#eduRepPane-cross" type="button" role="tab" aria-controls="eduRepPane-cross" aria-selected="false"><i class="bi bi-arrow-left-right me-1" aria-hidden="true"></i>訓練と教育</button></li>
         </ul>
         <div class="tab-content report-tab-content">
@@ -715,6 +716,15 @@
         <!-- 配信ごと: 一覧から行を開くと、同じタブの中で詳細(受講者ごと、部署ごと、設問ごと)に切り替える -->
         <div class="tab-pane fade" id="eduRepPane-deliveries" role="tabpanel" aria-labelledby="eduRepTab-deliveries" tabindex="0">
           <div id="eduRepDeliveryList">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2" id="eduRepAnswersBox">
+              <span class="small text-muted">解答の CSV（1問1行、全部の配信）</span>
+              <label class="visually-hidden" for="eduRepAnswersFrom">提出日の始まり</label>
+              <input type="date" class="form-control form-control-sm w-auto" id="eduRepAnswersFrom">
+              <span class="small text-muted">〜</span>
+              <label class="visually-hidden" for="eduRepAnswersTo">提出日の終わり</label>
+              <input type="date" class="form-control form-control-sm w-auto" id="eduRepAnswersTo">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="eduRepAnswersCsvBtn"><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV</button>
+            </div>
             <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
               <thead><tr><th>配信</th><th>状態</th><th>配信日</th><th>期限</th><th>対象</th><th>完了</th><th>未完了</th><th title="合格した人÷対象者">合格率</th><th title="期限までに合格した人÷対象者。期限のない配信は、合格をすべて期限内として数えます">期限内合格率</th><th></th></tr></thead>
               <tbody id="eduRepDeliveriesBody"></tbody>
@@ -734,6 +744,7 @@
               <li class="nav-item" role="presentation"><button class="nav-link active" id="eduRepSub-people" data-edu-rep-sub="people" data-bs-toggle="tab" data-bs-target="#eduRepSubPane-people" type="button" role="tab" aria-controls="eduRepSubPane-people" aria-selected="true">受講者ごと</button></li>
               <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepSub-depts" data-edu-rep-sub="depts" data-bs-toggle="tab" data-bs-target="#eduRepSubPane-depts" type="button" role="tab" aria-controls="eduRepSubPane-depts" aria-selected="false">部署ごと</button></li>
               <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepSub-questions" data-edu-rep-sub="questions" data-bs-toggle="tab" data-bs-target="#eduRepSubPane-questions" type="button" role="tab" aria-controls="eduRepSubPane-questions" aria-selected="false">設問ごと</button></li>
+              <li class="nav-item d-none" role="presentation" id="eduRepSubItem-auto"><button class="nav-link" id="eduRepSub-auto" data-edu-rep-sub="auto" data-bs-toggle="tab" data-bs-target="#eduRepSubPane-auto" type="button" role="tab" aria-controls="eduRepSubPane-auto" aria-selected="false">自動の投入</button></li>
             </ul>
             <div class="tab-content report-tab-content">
               <div class="tab-pane fade show active" id="eduRepSubPane-people" role="tabpanel" aria-labelledby="eduRepSub-people" tabindex="0">
@@ -761,10 +772,25 @@
                 </table></div>
               </div>
               <div class="tab-pane fade" id="eduRepSubPane-questions" role="tabpanel" aria-labelledby="eduRepSub-questions" tabindex="0">
-                <p class="small text-muted mb-2" id="eduRepQuestionsNote"></p>
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <p class="small text-muted mb-0" id="eduRepQuestionsNote"></p>
+                  <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="eduRepAnswersDeliveryCsv"><i class="bi bi-filetype-csv" aria-hidden="true"></i> 解答の CSV（1問1行）</button>
+                </div>
                 <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
                   <thead><tr><th>設問</th><th>難易度</th><th>正答</th><th>正答率</th></tr></thead>
                   <tbody id="eduRepQuestionsBody"></tbody>
+                </table></div>
+              </div>
+              <div class="tab-pane fade" id="eduRepSubPane-auto" role="tabpanel" aria-labelledby="eduRepSub-auto" tabindex="0">
+                <p class="small text-muted mb-2">自動の投入（訓練の失敗、新入社員）が、この配信を処理した記録です（新しい順に100回まで）。「当てはまった」は条件に合った人の数（前の回で入った人も含む）、「入れた」はその回で新しく割り当てた人の数です。</p>
+                <div class="table-responsive mb-3"><table class="table table-sm align-middle mb-0">
+                  <thead><tr><th>開始</th><th>終了</th><th>種類</th><th>当てはまった</th><th>入れた</th><th>結果</th></tr></thead>
+                  <tbody id="eduRepAutoRunsBody"></tbody>
+                </table></div>
+                <div class="fw-semibold small mb-1">当てはまって入った人</div>
+                <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+                  <thead><tr><th>氏名</th><th>従業員番号</th><th>部署</th><th>入った日時</th><th>状態</th></tr></thead>
+                  <tbody id="eduRepAutoLearnersBody"></tbody>
                 </table></div>
               </div>
             </div>
@@ -790,6 +816,25 @@
                 </table></div></div>
             </div>
           </div>
+        </div>
+        <!-- アウェアネスの成績: 受講者ごとの正解、不正解、未回答(API の action=awareness_people) -->
+        <div class="tab-pane fade" id="eduRepPane-awareness" role="tabpanel" aria-labelledby="eduRepTab-awareness" tabindex="0">
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+            <label class="visually-hidden" for="eduRepAwDelivery">配信</label>
+            <select class="form-select form-select-sm w-auto mw-100" id="eduRepAwDelivery"><option value="">すべてのアウェアネスの配信</option></select>
+            <label class="small text-muted mb-0" for="eduRepAwFrom">配信日</label>
+            <input type="date" class="form-control form-control-sm w-auto" id="eduRepAwFrom">
+            <span class="small text-muted">〜</span>
+            <label class="visually-hidden" for="eduRepAwTo">配信日の終わり</label>
+            <input type="date" class="form-control form-control-sm w-auto" id="eduRepAwTo">
+            <a class="btn btn-sm btn-outline-secondary ms-auto" id="eduRepAwCsv" href="#" download><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV</a>
+          </div>
+          <p class="small text-muted mb-2" id="eduRepAwNote"></p>
+          <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+            <thead><tr><th>氏名</th><th>部署</th><th title="受講を終えた配信 / 割り当てた配信">受講</th><th>設問</th><th>正解</th><th>不正解</th><th title="受講していない配信の設問を含む">未回答</th><th title="答えた設問のうちの正解">正答率</th></tr></thead>
+            <tbody id="eduRepAwBody"></tbody>
+          </table></div>
+          <p class="small text-muted">設問はその人に割り当てた配信の設問の数、未回答は答えていない設問（受講していない配信の設問を含む）、正答率は答えた設問のうちの正解です。テスト用と削除済みの対象者は数えません。</p>
         </div>
         <!-- 訓練と教育: 訓練で失敗した人が、その後の教育を受けて合格したか(API の action=cross) -->
         <div class="tab-pane fade" id="eduRepPane-cross" role="tabpanel" aria-labelledby="eduRepTab-cross" tabindex="0">
@@ -821,7 +866,11 @@
         <div class="tab-content">
           <div class="tab-pane fade show active" id="participantsPane" role="tabpanel" aria-labelledby="participantsTab" tabindex="0">
             <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-              <div class="small text-muted">教育配信と標的型メール訓練の共通対象者</div>
+              <div class="d-flex gap-2 align-items-center flex-wrap">
+                <div class="small text-muted">教育配信と標的型メール訓練の共通対象者</div>
+                <label class="visually-hidden" for="targetSearch">メール、氏名、従業員番号、メモで検索</label>
+                <input type="search" class="form-control form-control-sm edu-filter-search" id="targetSearch" placeholder="メール、氏名、従業員番号、メモで検索" maxlength="100">
+              </div>
               <div class="d-flex gap-2 align-items-center flex-wrap">
                 <div class="form-check form-switch me-1">
                   <input class="form-check-input" type="checkbox" role="switch" id="showArchivedTargets">
@@ -840,7 +889,7 @@
               </div>
             </div>
             <div class="table-responsive"><table class="table table-hover align-middle">
-              <thead><tr><th data-role="tenant_admin"><input class="form-check-input" type="checkbox" id="targetsSelectAll" aria-label="表示中の対象者をすべて選ぶ"></th><th>#</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th data-role="tenant_admin">マイページ</th><th>操作</th></tr></thead>
+              <thead><tr><th data-role="tenant_admin"><input class="form-check-input" type="checkbox" id="targetsSelectAll" aria-label="表示中の対象者をすべて選ぶ"></th><th>#</th><th>従業員番号</th><th>メール</th><th>氏名</th><th>会社</th><th>部署</th><th>役職</th><th>役職カテゴリ</th><th>登録日</th><th>削除日</th><th data-role="tenant_admin">マイページ</th><th>操作</th></tr></thead>
               <tbody id="targetsBody"></tbody>
             </table></div>
           </div>
@@ -932,7 +981,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=562c358e"></script>
+<script src="app.js?v=f8e0bf4a"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
