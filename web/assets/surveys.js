@@ -124,7 +124,10 @@ function svRenderQuestions(readOnly) {
         <div class="col-12"><label class="form-label small mb-0">設問文</label>
           <textarea class="form-control form-control-sm" rows="2" data-q-field="title" data-q-index="${i}" maxlength="500"${dis}>${esc(q.title)}</textarea></div>
         ${q.question_type === 'text' ? '' : `<div class="col-12"><label class="form-label small mb-0">選択肢（1行に1つ、2〜20個）</label>
-          <textarea class="form-control form-control-sm" rows="3" data-q-field="options" data-q-index="${i}"${dis}>${esc(q.options.join('\n'))}</textarea></div>`}
+          <textarea class="form-control form-control-sm" rows="3" data-q-field="options" data-q-index="${i}"${dis}>${esc(q.options.join('\n'))}</textarea></div>
+        <div class="col-12"><div class="form-check">
+          <input class="form-check-input" type="checkbox" id="svOther${i}" data-q-field="allow_other" data-q-index="${i}"${q.allow_other ? ' checked' : ''}${dis}>
+          <label class="form-check-label small" for="svOther${i}">選択肢の最後に「その他（自由記述）」を足す（選んだ人に内容を書いてもらいます）</label></div></div>`}
         <div class="col-12"><label class="form-label small mb-0">表示条件</label>
           <select class="form-select form-select-sm" data-q-field="show_if" data-q-index="${i}"${dis}>${conditionOptions.join('')}</select></div>
       </div></div>`;
@@ -159,9 +162,10 @@ function svBindEditor() {
     if (!field) return;
     const q = SvEditor.questions[Number(e.target.dataset.qIndex)];
     if (field === 'is_required') q.is_required = e.target.checked;
+    if (field === 'allow_other') q.allow_other = e.target.checked;
     if (field === 'question_type') {
       q.question_type = e.target.value;
-      if (q.question_type === 'text') q.options = [];
+      if (q.question_type === 'text') { q.options = []; q.allow_other = false; }
       else if (q.options.length < 2) q.options = ['選択肢1', '選択肢2'];
     }
     if (field === 'options') q.options = e.target.value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -206,7 +210,7 @@ function svOpenEditor(survey, readOnly = false) {
   SvEditor.questions = (survey?.questions || []).map((q) => ({
     section: q.section || '', question_type: q.question_type, title: q.title,
     options: [...(q.options || [])], is_required: Boolean(q.is_required),
-    show_if: q.show_if ? { ...q.show_if } : null,
+    show_if: q.show_if ? { ...q.show_if } : null, allow_other: Boolean(q.allow_other),
   }));
   const dis = readOnly ? ' disabled' : '';
   const body = `
@@ -238,7 +242,7 @@ function svOpenEditor(survey, readOnly = false) {
   if (!readOnly) {
     svBindEditor();
     $('#svAddQuestion').addEventListener('click', () => {
-      SvEditor.questions.push({ section: '', question_type: 'single', title: '', options: ['選択肢1', '選択肢2'], is_required: false, show_if: null });
+      SvEditor.questions.push({ section: '', question_type: 'single', title: '', options: ['選択肢1', '選択肢2'], is_required: false, show_if: null, allow_other: false });
       svRenderQuestions(false);
     });
   }
@@ -300,6 +304,10 @@ async function svResults(deliveryId) {
         return `<div class="small d-flex justify-content-between"><span>${esc(label)}</span><span>${n}件（${pct}%）</span></div>
           <div class="progress mb-1" style="height:8px" role="img" aria-label="${esc(label)} ${pct}%"><div class="progress-bar" style="width:${pct}%"></div></div>`;
       }).join('');
+      // 「その他（自由記述）」の内容
+      if (q.allow_other && (q.other_texts || []).length) {
+        inner += `<div class="small text-muted mt-1">その他の内容</div><ul class="small mb-0">${q.other_texts.map((t) => `<li style="white-space:pre-wrap">${esc(t)}</li>`).join('')}</ul>`;
+      }
     }
     return `<div class="mb-3"><div class="fw-bold small mb-1">${i + 1}. ${esc(q.title)}
       <span class="text-muted fw-normal">（${SV_TYPE_LABEL[q.question_type]}、回答 ${Number(q.answered)}件）</span></div>${inner}</div>`;
@@ -321,6 +329,54 @@ async function svResults(deliveryId) {
       <tbody>${depts || emptyRow(3)}</tbody></table>
     <h6>設問ごとの回答</h6>${questions}`;
   showInfoModal(`結果: ${r.delivery.title}`, body, { size: 'lg' });
+}
+
+/* ========== 訓練後のアンケートの自動配信(段D の D6) ========== */
+
+/**
+ * キャンペーンごとの設定。訓練をクローズした時に1回だけ、防衛に失敗した人(か全員)へアンケートを配る。
+ * 既定は切。クローズする前は配らない(訓練だと気付かれないように)。案内メールはアンケートのメール送信が有効な時だけ。
+ * キャンペーンの一覧の操作から開く(app.js)。
+ */
+async function openCampaignSurveyFollowup(campaignId) {
+  let data;
+  try { data = await api('api/campaign_survey_followup.php', { query: { action: 'get', campaign_id: campaignId } }); }
+  catch (e) { toast(e.message, 'err'); return; }
+  const s = data.setting;
+  const locked = data.closed;
+  const dis = locked ? ' disabled' : '';
+  const surveyOptions = ['<option value="">（選んでください）</option>', ...data.surveys.map((v) =>
+    `<option value="${Number(v.id)}"${Number(v.id) === Number(s.survey_id) ? ' selected' : ''}>${esc(v.title)}${Number(v.is_anonymous) === 1 ? '（匿名）' : ''}</option>`)].join('');
+  const body = `
+    ${locked ? `<div class="alert alert-secondary small py-2">このキャンペーンはクローズ済みです。${s.processed_at ? `結果: ${esc(s.result || '')}（${esc(fmtDate(s.processed_at))}）` : '自動配信は行っていません。'}</div>` : ''}
+    ${data.is_test && !locked ? '<div class="alert alert-warning small py-2">テスト用のキャンペーンでは、有効にしても配りません。</div>' : ''}
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="csfEnabled"${s.enabled ? ' checked' : ''}${dis}>
+      <label class="form-check-label" for="csfEnabled">訓練をクローズした時に、アンケートを配る</label>
+    </div>
+    <div class="mb-2"><label class="form-label" for="csfSurvey">配るアンケート</label>
+      <select class="form-select" id="csfSurvey"${dis}>${surveyOptions}</select>
+      <div class="form-text">設問のある、終了していないアンケートから選びます。雛形からも作れます（アンケートの画面）。</div></div>
+    <div class="mb-2"><label class="form-label" for="csfAudience">配り先</label>
+      <select class="form-select" id="csfAudience"${dis}>
+        <option value="failed"${s.audience === 'failed' ? ' selected' : ''}>防衛に失敗した人（リンクを開いた、または認証を入力した人）</option>
+        <option value="all"${s.audience === 'all' ? ' selected' : ''}>訓練のメールを送った全員</option>
+      </select></div>
+    <div class="mb-2"><label class="form-label" for="csfDeadline">回答の締切（クローズした日から何日後か。空なら期限なし）</label>
+      <input type="number" class="form-control" id="csfDeadline" min="1" max="${Number(data.max_deadline_days)}" value="${s.deadline_days ?? ''}"${dis}></div>
+    <div class="small text-muted">クローズする前は配りません（訓練だと気付かれないように）。配るのはクローズした時の1回だけです。
+      ${data.mail_enabled ? '案内メールも送ります（実在の従業員に届きます）。' : 'アンケートのメール送信は無効なので、配信だけ作ります。回答用 URL の CSV を出力して配ってください。'}</div>`;
+  const title = '訓練後のアンケート';
+  if (locked) { showInfoModal(title, body); return; }
+  showModal(title, body, async () => {
+    const days = $('#csfDeadline').value.trim();
+    const surveyId = $('#csfSurvey').value;
+    await api('api/campaign_survey_followup.php', { method: 'POST', query: { action: 'save' }, body: {
+      campaign_id: Number(campaignId), enabled: $('#csfEnabled').checked, survey_id: surveyId ? Number(surveyId) : null,
+      audience: $('#csfAudience').value, deadline_days: days ? Number(days) : null,
+    } });
+    toast('訓練後のアンケートの設定を保存しました', 'ok');
+  });
 }
 
 /* ========== 登録 ========== */

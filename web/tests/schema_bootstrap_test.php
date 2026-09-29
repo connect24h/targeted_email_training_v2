@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 61, 'fresh DBに61個の業務tableがある');
+check(count($businessTables) === 65, 'fresh DBに65個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -73,6 +73,10 @@ $expectedTables = [
     'notification_templates',
     'edu_tags',
     'edu_question_tags',
+    'suspicious_mail_replies',
+    'edu_summary_settings',
+    'edu_delivery_summaries',
+    'campaign_survey_followups',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -94,6 +98,8 @@ $expectedColumns = [
     'edu_categories' => ['is_shared'],
     'edu_questions' => ['is_shared'],
     'edu_assignments' => ['last_reminded_at'],
+    'survey_questions' => ['allow_other'],
+    'survey_answers' => ['other_text'],
     'edu_deliveries' => ['material_id', 'send_invites', 'series_id', 'target_positions', 'risk_results', 'new_target_days'],
 ];
 foreach ($expectedColumns as $table => $columns) {

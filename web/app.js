@@ -775,6 +775,8 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator') && !c.closed_at
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="openCampaignSurveyFollowup(${c.id})" title="訓練後のアンケート（クローズした時に配る設定）" aria-label="訓練後のアンケート"><i class="bi bi-ui-checks" aria-hidden="true"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
@@ -3010,8 +3012,12 @@ async function closeReport() {
   if (!id || State.user?.role !== 'superadmin') return;
   if (!confirm('キャンペーンをクローズしますか？\n確定済み統計を保持し、保存済みの入力本文・パスワードを消去します。この操作は取り消せません。')) return;
   try {
-    await api('api/report.php', { method: 'POST', query: { action: 'close' }, body: { campaign_id: id } });
+    const res = await api('api/report.php', { method: 'POST', query: { action: 'close' }, body: { campaign_id: id } });
     toast('クローズしました。入力本文は消去されました', 'ok');
+    // 訓練後のアンケートの自動配信(D6)を有効にしていた時だけ、結果を知らせる
+    const f = res.survey_followup;
+    if (f && f.status === 'delivered') toast(`訓練後のアンケートを${Number(f.assigned)}人に配りました（案内メール ${Number(f.mail_sent)}通）`, 'ok', 6000);
+    else if (f && ['skipped', 'error'].includes(f.status)) toast(`訓練後のアンケートは配っていません: ${f.message || '内部のエラー'}`, 'err', 6000);
     await renderReports();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -3873,7 +3879,7 @@ async function renderEduDeliveries() {
   }
 }
 function refreshEduDeliveries() {
-  return Promise.all([renderEduDeliveries(), renderEduSeries(), renderEduContact()]);
+  return Promise.all([renderEduDeliveries(), renderEduSeries(), renderEduContact(), renderEduSummarySetting()]);
 }
 /** テナントの社内の問い合わせ先(受講者のマイページに出す)。変えられるのは組織管理者とシステム管理者。 */
 let eduContact = null;
@@ -3897,6 +3903,43 @@ function editEduContact() {
     await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'contact' }, body: { edu_contact: $('#eduContactText').value } });
     toast('問い合わせ先を保存しました', 'ok');
     renderEduContact();
+  });
+}
+/**
+ * 受講期間の終了時の集計通知(段D の D5)。期限を過ぎた配信の受講率と合格率を、登録した担当者へ1回だけ送る。
+ * 既定は切。送るのは自動の処理(edu_delivery_summary の timer)で、この画面はメールを送らない。変えられるのは組織管理者以上。
+ */
+let eduSummary = null;
+async function renderEduSummarySetting() {
+  const el = $('#eduSummarySetting');
+  const btn = $('#editEduSummaryBtn');
+  if (!el) return;
+  if (!roleAtLeast(State.user?.role, 'operator')) { $('#eduSummaryBox')?.classList.add('d-none'); return; }
+  try { eduSummary = await api('api/edu_summary.php', { query: { action: 'setting' } }); }
+  catch (e) { el.textContent = `読み込めませんでした（${e.message}）`; return; }
+  const s = eduSummary.setting;
+  const last = eduSummary.history[0];
+  el.textContent = (s.enabled ? `有効: ${s.recipients.join('、')} へ送ります` : '切（送りません）')
+    + (last ? `。最後の通知: ${last.title}（${fmtDate(last.finished_at || last.created_at)}、${last.sent}/${last.recipients}通）` : '');
+  btn.classList.toggle('d-none', !eduSummary.can_edit);
+  btn.onclick = editEduSummarySetting;
+}
+function editEduSummarySetting() {
+  const s = eduSummary?.setting || { enabled: false, recipients: [] };
+  const body = `<form id="eduSummaryForm">
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="eduSummaryEnabled" ${s.enabled ? 'checked' : ''}>
+      <label class="form-check-label" for="eduSummaryEnabled">配信の期限が過ぎたら、集計を担当者へ送る</label>
+    </div>
+    <label class="form-label" for="eduSummaryRecipients">送り先（社内の担当者のメールアドレス。1行に1つ、${Number(eduSummary?.max_recipients || 10)}件まで）</label>
+    <textarea class="form-control" id="eduSummaryRecipients" name="recipients" rows="4">${esc(s.recipients.join('\n'))}</textarea>
+    <div class="form-text">送るのは、対象の人数、受講を終えた人数と受講率、合格率、期限内合格率だけです（個人の名前やアドレスは入りません）。配信1件につき1回だけ送ります。有効にする前に期限を過ぎた配信の分は送りません。文面はユーザ管理の「通知の文面」で変えられます。自動の処理（edu_delivery_summary）を動かしている時だけ届きます。</div>
+  </form>`;
+  showModal('受講期間の終了時の集計通知', body, async () => {
+    const recipients = $('#eduSummaryRecipients').value.split('\n').map((v) => v.trim()).filter(Boolean);
+    await api('api/edu_summary.php', { method: 'POST', query: { action: 'save' }, body: { enabled: $('#eduSummaryEnabled').checked, recipients } });
+    toast('集計通知の設定を保存しました', 'ok');
+    renderEduSummarySetting();
   });
 }
 /**

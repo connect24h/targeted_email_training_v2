@@ -26,6 +26,9 @@ final class SurveyException extends RuntimeException
 final class SurveyService
 {
     public const QUESTION_TYPES = ['single', 'multiple', 'text'];
+    /** allow_other の設問で、選択肢の最後に足す選択肢の名前(index は options の数)。 */
+    public const OTHER_LABEL = 'その他（自由記述）';
+    private const MAX_OTHER_TEXT = 500;
     private const MAX_QUESTIONS = 50;
     private const MAX_OPTIONS = 20;
     private const MAX_TITLE = 500;
@@ -99,6 +102,7 @@ final class SurveyService
             'options' => $q['options'],
             'is_required' => $q['is_required'],
             'show_if' => $q['show_if'],
+            'allow_other' => $q['allow_other'],
         ], $survey['questions']);
         return self::createSurvey($tenantId, $userId, [
             'title' => mb_substr((string) $survey['title'] . '（複製）', 0, self::MAX_TITLE),
@@ -127,13 +131,7 @@ final class SurveyService
      */
     public static function createDelivery(int $tenantId, int $surveyId, ?int $userId, string $title, ?string $deadline, array $groupIds): array
     {
-        $survey = self::assertSurvey($tenantId, $surveyId);
-        if ((string) $survey['status'] === 'closed') {
-            throw new SurveyException('終了したアンケートは配信できません', 409);
-        }
-        if (self::questions($surveyId) === []) {
-            throw new SurveyException('設問がないアンケートは配信できません', 400);
-        }
+        self::assertDeliverable($tenantId, $surveyId);
         $title = trim($title);
         if ($title === '' || mb_strlen($title) > self::MAX_TITLE) {
             throw new SurveyException('配信名を1〜500文字で入力してください', 400);
@@ -147,7 +145,45 @@ final class SurveyService
         if ($targetIds === []) {
             throw new SurveyException('選んだグループに有効な対象者がいません', 400);
         }
+        return self::insertDelivery($tenantId, $surveyId, $userId, $title, $deadline, $groupIds, $targetIds);
+    }
 
+    /**
+     * 指定した対象者だけに配信を作る(訓練後のアンケートの自動配信、D6)。メールは送らない。
+     * 対象者はテナントの有効な人だけを残す(ほかのテナントの人や削除済みの人は入れない)。
+     * @param list<int> $targetIds
+     * @return array{delivery_id:int, assigned:int}
+     */
+    public static function createDeliveryForTargets(int $tenantId, int $surveyId, ?int $userId, string $title, ?string $deadline, array $targetIds): array
+    {
+        self::assertDeliverable($tenantId, $surveyId);
+        $title = trim($title);
+        if ($title === '' || mb_strlen($title) > self::MAX_TITLE) {
+            throw new SurveyException('配信名を1〜500文字で入力してください', 400);
+        }
+        $deadline = self::normalizeDeadline($deadline);
+        $ids = array_values(array_unique(array_map('intval', $targetIds)));
+        if ($ids !== []) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $ids = array_map(static fn(array $r): int => (int) $r['id'], Db::all(
+                "SELECT id FROM targets WHERE tenant_id = ? AND status = 'active' AND id IN ({$placeholders}) ORDER BY id",
+                array_merge([$tenantId], $ids)
+            ));
+        }
+        if ($ids === []) {
+            throw new SurveyException('配信先の有効な対象者がいません', 400);
+        }
+        return self::insertDelivery($tenantId, $surveyId, $userId, $title, $deadline, [], $ids);
+    }
+
+    /**
+     * 配信の行と割当を作り、設問を固定する。
+     * @param list<int> $groupIds
+     * @param list<int> $targetIds
+     * @return array{delivery_id:int, assigned:int}
+     */
+    private static function insertDelivery(int $tenantId, int $surveyId, ?int $userId, string $title, ?string $deadline, array $groupIds, array $targetIds): array
+    {
         return Db::txImmediate(function () use ($tenantId, $surveyId, $userId, $title, $deadline, $groupIds, $targetIds): array {
             $deliveryId = Db::insert(
                 'INSERT INTO survey_deliveries (tenant_id, survey_id, title, deadline, group_ids, created_by) VALUES (?, ?, ?, ?, ?, ?)',
@@ -223,6 +259,7 @@ final class SurveyService
             'options' => $q['options'],
             'is_required' => $q['is_required'],
             'show_if' => $q['show_if'],
+            'allow_other' => $q['allow_other'],
         ], self::questions((int) $a['survey_id']));
         return [
             'survey' => [
@@ -238,16 +275,18 @@ final class SurveyService
     /**
      * 回答を保存する。
      * @param array<int|string,mixed> $answers question_id => 値(single は int、multiple は int[]、text は string)
+     * @param array<int|string,mixed> $others question_id => 「その他（自由記述）」の記述(その他を選んだ設問だけ使う)
      */
-    public static function submitByToken(string $token, array $answers): void
+    public static function submitByToken(string $token, array $answers, array $others = []): void
     {
         $a = self::resolveToken($token);
         $questions = self::questions((int) $a['survey_id']);
         $normalized = self::validateAnswers($questions, $answers);
+        $otherTexts = self::validateOthers($questions, $normalized, $others);
         $anonymous = (int) $a['is_anonymous'] === 1;
         $isTest = (int) (Db::one('SELECT is_test FROM targets WHERE id = ?', [(int) $a['target_id']])['is_test'] ?? 0);
 
-        Db::txImmediate(function () use ($a, $normalized, $anonymous, $isTest): void {
+        Db::txImmediate(function () use ($a, $normalized, $otherTexts, $anonymous, $isTest): void {
             $answeredAt = $anonymous ? date('Y-m-d') : date('Y-m-d H:i:s');
             $n = Db::run(
                 "UPDATE survey_assignments SET status = 'answered', answered_at = ? WHERE id = ? AND status = 'assigned'",
@@ -262,8 +301,8 @@ final class SurveyService
             );
             foreach ($normalized as $questionId => $value) {
                 Db::run(
-                    'INSERT INTO survey_answers (response_id, question_id, value) VALUES (?, ?, ?)',
-                    [$responseId, $questionId, json_encode($value, JSON_UNESCAPED_UNICODE)]
+                    'INSERT INTO survey_answers (response_id, question_id, value, other_text) VALUES (?, ?, ?, ?)',
+                    [$responseId, $questionId, json_encode($value, JSON_UNESCAPED_UNICODE), $otherTexts[$questionId] ?? null]
                 );
             }
         });
@@ -306,17 +345,19 @@ final class SurveyService
 
         $questions = self::questions((int) $delivery['survey_id']);
         $answerRows = Db::all(
-            'SELECT ans.question_id, ans.value FROM survey_answers ans
+            'SELECT ans.question_id, ans.value, ans.other_text FROM survey_answers ans
              INNER JOIN survey_responses r ON r.id = ans.response_id
              WHERE r.delivery_id = ? AND r.tenant_id = ? AND r.is_test = 0',
             [$deliveryId, $tenantId]
         );
         $byQuestion = [];
         foreach ($questions as $q) {
+            // その他のある設問は、選択肢の最後に「その他（自由記述）」を足して数え、記述は other_texts に並べる
+            $options = self::displayOptions($q);
             $byQuestion[$q['id']] = [
                 'id' => $q['id'], 'title' => $q['title'], 'question_type' => $q['question_type'],
-                'options' => $q['options'], 'counts' => array_fill(0, count($q['options']), 0),
-                'answered' => 0, 'texts' => [],
+                'options' => $options, 'counts' => array_fill(0, count($options), 0),
+                'answered' => 0, 'texts' => [], 'allow_other' => $q['allow_other'], 'other_texts' => [],
             ];
         }
         foreach ($answerRows as $row) {
@@ -334,6 +375,9 @@ final class SurveyService
                 if (is_int($index) && isset($byQuestion[$qid]['counts'][$index])) {
                     $byQuestion[$qid]['counts'][$index]++;
                 }
+            }
+            if ($row['other_text'] !== null && $row['other_text'] !== '') {
+                $byQuestion[$qid]['other_texts'][] = (string) $row['other_text'];
             }
         }
 
@@ -378,12 +422,14 @@ final class SurveyService
         $rows = [];
         foreach ($responses as $r) {
             $values = [];
-            foreach (Db::all('SELECT question_id, value FROM survey_answers WHERE response_id = ?', [(int) $r['id']]) as $ans) {
+            $others = [];
+            foreach (Db::all('SELECT question_id, value, other_text FROM survey_answers WHERE response_id = ?', [(int) $r['id']]) as $ans) {
                 $values[(int) $ans['question_id']] = json_decode((string) $ans['value'], true);
+                $others[(int) $ans['question_id']] = $ans['other_text'];
             }
             $row = $anonymous ? [(string) $r['submitted_at']] : [(string) $r['submitted_at'], (string) $r['name'], (string) $r['email'], (string) $r['department']];
             foreach ($questions as $q) {
-                $row[] = self::formatAnswer($q, $values[$q['id']] ?? null);
+                $row[] = self::formatAnswer($q, $values[$q['id']] ?? null, $others[$q['id']] ?? null);
             }
             $rows[] = $row;
         }
@@ -400,6 +446,18 @@ final class SurveyService
             throw new SurveyException('アンケートが見つかりません', 404);
         }
         return $survey;
+    }
+
+    /** 配信を作れるアンケートか(テナントのもの、終了していない、設問がある)。 */
+    public static function assertDeliverable(int $tenantId, int $surveyId): void
+    {
+        $survey = self::assertSurvey($tenantId, $surveyId);
+        if ((string) $survey['status'] === 'closed') {
+            throw new SurveyException('終了したアンケートは配信できません', 409);
+        }
+        if (self::questions($surveyId) === []) {
+            throw new SurveyException('設問がないアンケートは配信できません', 400);
+        }
     }
 
     /** @return array<string,mixed> */
@@ -518,6 +576,7 @@ final class SurveyService
             'options' => json_decode((string) $q['options'], true) ?: [],
             'is_required' => (int) $q['is_required'] === 1,
             'show_if' => $q['show_if'] !== null ? json_decode((string) $q['show_if'], true) : null,
+            'allow_other' => (int) ($q['allow_other'] ?? 0) === 1,
         ], Db::all('SELECT * FROM survey_questions WHERE survey_id = ? ORDER BY sort_order, id', [$surveyId]));
     }
 
@@ -602,6 +661,8 @@ final class SurveyService
             'options' => $options,
             'is_required' => !empty($q['is_required']),
             'show_if' => $showIf,
+            // その他(自由記述)は選択式の設問だけ
+            'allow_other' => $type !== 'text' && !empty($q['allow_other']),
         ];
     }
 
@@ -610,12 +671,12 @@ final class SurveyService
     {
         foreach ($questions as $i => $q) {
             Db::run(
-                'INSERT INTO survey_questions (survey_id, section, sort_order, question_type, title, options, is_required, show_if)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO survey_questions (survey_id, section, sort_order, question_type, title, options, is_required, show_if, allow_other)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $surveyId, $q['section'], $i, $q['question_type'], $q['title'],
                     json_encode($q['options'], JSON_UNESCAPED_UNICODE), $q['is_required'] ? 1 : 0,
-                    $q['show_if'] !== null ? json_encode($q['show_if']) : null,
+                    $q['show_if'] !== null ? json_encode($q['show_if']) : null, $q['allow_other'] ? 1 : 0,
                 ]
             );
         }
@@ -667,8 +728,10 @@ final class SurveyService
             }
             $values = is_array($raw) ? $raw : [$raw];
             $indexes = [];
+            // その他のある設問は、選択肢の数(=その他の index)まで選べる
+            $limit = count($q['options']) + ($q['allow_other'] ? 1 : 0);
             foreach ($values as $v) {
-                if (!is_int($v) || $v < 0 || $v >= count($q['options'])) {
+                if (!is_int($v) || $v < 0 || $v >= $limit) {
                     throw new SurveyException("設問{$no}の選択肢が正しくありません", 400);
                 }
                 $indexes[] = $v;
@@ -684,8 +747,46 @@ final class SurveyService
         return $out;
     }
 
+    /**
+     * 「その他（自由記述）」を選んだ設問の記述を確かめる。選んだのに記述が空なら拒む。選んでいない設問の記述は捨てる。
+     * @param list<array<string,mixed>> $questions
+     * @param array<int,mixed> $normalized validateAnswers の結果
+     * @param array<int|string,mixed> $others
+     * @return array<int,string> question_id => 記述
+     */
+    public static function validateOthers(array $questions, array $normalized, array $others): array
+    {
+        $out = [];
+        foreach ($questions as $i => $q) {
+            if (!$q['allow_other'] || !in_array(count($q['options']), (array) ($normalized[$q['id']] ?? []), true)) {
+                continue;
+            }
+            $no = $i + 1;
+            $raw = $others[$q['id']] ?? $others[(string) $q['id']] ?? '';
+            $text = is_string($raw) ? trim($raw) : '';
+            if ($text === '') {
+                throw new SurveyException("設問{$no}の「その他」の内容を入力してください", 400);
+            }
+            if (mb_strlen($text) > self::MAX_OTHER_TEXT) {
+                throw new SurveyException("設問{$no}の「その他」は" . self::MAX_OTHER_TEXT . '文字以内で入力してください', 400);
+            }
+            $out[$q['id']] = $text;
+        }
+        return $out;
+    }
+
+    /**
+     * 集計と出力に使う選択肢(その他のある設問は最後に「その他（自由記述）」を足す)。
+     * @param array<string,mixed> $q
+     * @return list<string>
+     */
+    private static function displayOptions(array $q): array
+    {
+        return $q['allow_other'] ? [...$q['options'], self::OTHER_LABEL] : $q['options'];
+    }
+
     /** @param array<string,mixed> $q */
-    private static function formatAnswer(array $q, mixed $value): string
+    private static function formatAnswer(array $q, mixed $value, ?string $otherText = null): string
     {
         if ($value === null) {
             return '';
@@ -694,9 +795,11 @@ final class SurveyService
             return (string) $value;
         }
         $labels = [];
+        $options = self::displayOptions($q);
         foreach ((array) $value as $index) {
-            if (is_int($index) && isset($q['options'][$index])) {
-                $labels[] = $q['options'][$index];
+            if (is_int($index) && isset($options[$index])) {
+                $isOther = $q['allow_other'] && $index === count($q['options']);
+                $labels[] = $isOther && $otherText !== null && $otherText !== '' ? $options[$index] . ': ' . $otherText : $options[$index];
             }
         }
         return implode(' / ', $labels);

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS survey_questions (
   options       TEXT NOT NULL DEFAULT '[]',   -- JSON 配列(選択肢の文字列)。text では空
   is_required   INTEGER NOT NULL DEFAULT 0,
   show_if       TEXT,                          -- JSON {"question_index":int,"option":int} 前の設問の回答で表示
+  allow_other   INTEGER NOT NULL DEFAULT 0,    -- 1 なら選択肢の最後に「その他（自由記述）」を足す(index は options の数)
   FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_survey_questions_survey ON survey_questions(survey_id, sort_order);
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS survey_answers (
   response_id INTEGER NOT NULL,
   question_id INTEGER NOT NULL,
   value       TEXT NOT NULL,                   -- JSON。single/multiple は選択 index の配列、text は文字列
+  other_text  TEXT,                            -- 「その他（自由記述）」を選んだ時の記述
   UNIQUE (response_id, question_id),
   FOREIGN KEY (response_id) REFERENCES survey_responses(id) ON DELETE CASCADE,
   FOREIGN KEY (question_id) REFERENCES survey_questions(id) ON DELETE CASCADE

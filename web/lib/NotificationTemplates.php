@@ -56,10 +56,19 @@ final class NotificationTemplates
         '差出人'             => '報告されたメールの差出人のアドレス（ない時はその行を消す）',
         '受信日時'           => '報告を受け取った日時',
         '管理画面URL'        => '管理画面の不審メールの一覧の URL',
+        '報告日時'           => '報告を受け付けた日時',
+        '対象数'             => '配信の対象の人数（テスト用と削除済みを除く）',
+        '完了数'             => '受講を終えた人数',
+        '受講率'             => '受講率（%）',
+        '合格数'             => '合格した人数（合格点のない配信はその行を消す）',
+        '合格率'             => '合格率（%。合格点のない配信はその行を消す）',
+        '期限内合格数'       => '期限までに合格した人数（合格点のない配信はその行を消す）',
+        '期限内合格率'       => '期限内合格率（%。合格点のない配信はその行を消す）',
     ];
 
     /** 値が空の時に、本文のその行を消す差し込み(ほかの差し込みは空のまま置き換える)。 */
-    private const OPTIONAL_VARS = ['期限', '有効期限', 'アカウントの注記', '組織名', '問い合わせ先', '送信日', '件名', '差出人'];
+    private const OPTIONAL_VARS = ['期限', '有効期限', 'アカウントの注記', '組織名', '問い合わせ先', '送信日', '件名', '差出人',
+        '合格数', '合格率', '期限内合格数', '期限内合格率'];
 
     private const EDU_VARS = ['氏名', '配信名', '期限', '受講URL', '組織名', '問い合わせ先'];
     private const SURVEY_VARS = ['氏名', 'アンケート名', '期限', '回答URL', '組織名', '問い合わせ先'];
@@ -70,6 +79,11 @@ final class NotificationTemplates
     private const REVEAL_VARS = ['氏名', '送信日', '種明かしURL', '組織名', '問い合わせ先'];
     /** 担当者への報告の通知(段D の D3)。報告されたメールの本文は入れない(件名と差出人だけ)。 */
     private const REPORT_NOTIFY_VARS = ['報告者', '件名', '差出人', '受信日時', '管理画面URL', '組織名'];
+    /** 報告者への返信(D4)。宛先は報告者なので、氏名は対象者の名簿で引けた時だけ入る。 */
+    private const REPORT_REPLY_VARS = ['氏名', '件名', '報告日時', '組織名', '問い合わせ先'];
+    /** 受講期間の終了時の集計通知(D5)。人数と率だけで、個人は差し込めない。 */
+    private const EDU_SUMMARY_VARS = ['配信名', '期限', '対象数', '完了数', '受講率', '合格数', '合格率',
+        '期限内合格数', '期限内合格率', '組織名'];
 
     /** 種類の一覧(画面の並び順)。 */
     public const KINDS = [
@@ -78,7 +92,12 @@ final class NotificationTemplates
         'learner_invite', 'learner_reset',
         'admin_invite', 'admin_reset',
         'reveal_failed', 'reveal_closed', 'reveal_reported', 'report_notify',
+        'report_reply_checking', 'report_reply_training', 'report_reply_safe', 'report_reply_dangerous',
+        'edu_delivery_summary',
     ];
+
+    /** 報告者への返信の種類(D4、不審メールの詳細の画面で選ぶ)。 */
+    public const REPORT_REPLY_KINDS = ['report_reply_checking', 'report_reply_training', 'report_reply_safe', 'report_reply_dangerous'];
 
     /**
      * 種類ごとの定義。subject と body が既定の文面(以前の直書きと同じ文字列)。
@@ -100,6 +119,8 @@ final class NotificationTemplates
             . "パスワードの決まり: {パスワードの決まり}\n\n"
             . "お心当たりがない場合は、このメールを破棄してください。\n"
             . self::FOOTER;
+        $replyHead = "{氏名} 様\n\n不審なメールのご報告ありがとうございます。\n";
+        $replyTail = "\n報告いただいたメールの件名: {件名}\n報告の受付日時: {報告日時}\n\n";
         $surveyBody = "{氏名} 様\n\n"
             . "アンケート「{アンケート名}」へのご協力をお願いします。\n"
             . "下記の URL から回答できます（ログイン不要）。\n\n"
@@ -277,6 +298,72 @@ final class NotificationTemplates
                     . "差出人: {差出人}\n\n"
                     . "{管理画面URL}\n\n"
                     . "このメールには、報告されたメールの本文と添付は入れていません。\n"
+                    . self::FOOTER,
+            ],
+            'report_reply_checking' => [
+                'label' => '報告者への返信（確認中です）',
+                'used_by' => '不審メールの詳細の「報告者へ返信」で選んだ時だけ（自動では送らない）',
+                'variables' => self::REPORT_REPLY_VARS,
+                'required' => [],
+                'subject' => '【ご報告ありがとうございます】報告いただいたメールを確認しています',
+                'body' => $replyHead
+                    . "報告いただいたメールは、担当者が確認しています。確認が終わるまで、メールのリンクや添付ファイルは開かず、そのまま残しておいてください。\n"
+                    . $replyTail
+                    . "問い合わせ先: {問い合わせ先}\n\n"
+                    . self::FOOTER,
+            ],
+            'report_reply_training' => [
+                'label' => '報告者への返信（訓練メールでした）',
+                'used_by' => '不審メールの詳細の「報告者へ返信」で選んだ時だけ。訓練を閉じた後だけ送れる（測定を崩さないため）',
+                'variables' => self::REPORT_REPLY_VARS,
+                'required' => [],
+                'subject' => '【ご報告ありがとうございます】報告いただいたメールは訓練のメールでした',
+                'body' => $replyHead
+                    . "報告いただいたメールは、社内で実施した標的型メール訓練のメールでした。\n"
+                    . "不審なメールに気づいて報告していただいたことは、実際の攻撃を防ぐうえで大切な行動です。これからも同じように報告をお願いします。\n"
+                    . $replyTail
+                    . self::FOOTER,
+            ],
+            'report_reply_safe' => [
+                'label' => '報告者への返信（安全なメールでした）',
+                'used_by' => '不審メールの詳細の「報告者へ返信」で選んだ時だけ（自動では送らない）',
+                'variables' => self::REPORT_REPLY_VARS,
+                'required' => [],
+                'subject' => '【確認の結果】報告いただいたメールは安全なメールでした',
+                'body' => $replyHead
+                    . "確認の結果、報告いただいたメールに危険はありませんでした。通常どおり対応していただいてかまいません。\n"
+                    . "これからも、少しでも不審に感じたメールは報告をお願いします。\n"
+                    . $replyTail
+                    . self::FOOTER,
+            ],
+            'report_reply_dangerous' => [
+                'label' => '報告者への返信（危険なメールでした）',
+                'used_by' => '不審メールの詳細の「報告者へ返信」で選んだ時だけ（自動では送らない）',
+                'variables' => self::REPORT_REPLY_VARS,
+                'required' => [],
+                'subject' => '【確認の結果】報告いただいたメールは危険なメールでした',
+                'body' => $replyHead
+                    . "確認の結果、報告いただいたメールは危険なメール（偽のログイン画面への誘導やウイルスの添付など）でした。\n"
+                    . "メールのリンクや添付ファイルは開かず、メールを削除してください。\n"
+                    . "すでにリンクや添付ファイルを開いた、または ID やパスワードを入力した場合は、すぐに社内の担当者へ連絡してください。\n"
+                    . $replyTail
+                    . "問い合わせ先: {問い合わせ先}\n\n"
+                    . self::FOOTER,
+            ],
+            'edu_delivery_summary' => [
+                'label' => '受講期間の終了時の集計通知（担当者向け）',
+                'used_by' => '教育の配信の期限が過ぎた時に、登録した社内の担当者へ（教育配信の画面で有効にした組織だけ）',
+                'variables' => self::EDU_SUMMARY_VARS,
+                'required' => [],
+                'subject' => '【受講の集計】{配信名}',
+                'body' => "セキュリティ教育「{配信名}」の受講の期限が過ぎました。集計をお知らせします。\n\n"
+                    . "期限: {期限}\n"
+                    . "対象: {対象数}人\n"
+                    . "受講を終えた人: {完了数}人（受講率 {受講率}%）\n"
+                    . "合格: {合格数}人（合格率 {合格率}%）\n"
+                    . "期限内の合格: {期限内合格数}人（期限内合格率 {期限内合格率}%）\n\n"
+                    . "人数と率は、テスト用と削除済みの対象者を除いて数えています。一人ひとりの結果は、管理画面の教育レポートで確かめてください。\n"
+                    . "組織: {組織名}\n\n"
                     . self::FOOTER,
             ],
         ];
@@ -468,6 +555,14 @@ final class NotificationTemplates
             '差出人' => 'sender@example.test',
             '受信日時' => date('Y-m-d H:i'),
             '管理画面URL' => UserPasswordTokens::adminBaseUrl() . '/#suspiciousMails',
+            '報告日時' => date('Y-m-d H:i'),
+            '対象数' => '120',
+            '完了数' => '96',
+            '受講率' => '80.0',
+            '合格数' => '90',
+            '合格率' => '75.0',
+            '期限内合格数' => '84',
+            '期限内合格率' => '70.0',
         ];
         return self::withTenantVars($tenantId, $vars);
     }

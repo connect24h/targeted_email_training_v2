@@ -57,8 +57,8 @@ $pdo->exec("INSERT INTO groups (tenant_id, name, kind) VALUES (1, '全職員', '
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 32, '未適用migrationが32件ある');
-check($runner->migrate() === 32, '初回はmigrationを32件適用する');
+check(count($runner->pending()) === 33, '未適用migrationが33件ある');
+check($runner->migrate() === 33, '初回はmigrationを33件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
@@ -419,10 +419,30 @@ check(in_array('remind_count', $pdo->query('PRAGMA table_info(edu_assignments)')
 $pdo->exec("DELETE FROM schema_migrations WHERE version = '20261105-sending-da'");
 check($runner->migrate() === 1 && $runner->migrate() === 0, '段D の送信(D-a)のmigrationも冪等');
 
+// 段D の D4〜D6 と「その他（自由記述）」: 列と表を足すだけ。設定の行を作らないので、どの送信も切のまま。
+foreach (['campaign_survey_followups', 'edu_delivery_summaries', 'edu_summary_settings', 'suspicious_mail_replies'] as $table) {
+    $pdo->exec("DROP TABLE {$table}");
+}
+$pdo->exec('ALTER TABLE survey_questions DROP COLUMN allow_other');
+$pdo->exec('ALTER TABLE survey_answers DROP COLUMN other_text');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261106-sending-db'");
+check($runner->pending() === ['20261106-sending-db'], '段D の D4〜D6 のmigrationだけがpending');
+check($runner->migrate() === 1, '既存DBへ返信の記録、集計通知、訓練後のアンケートの表と、その他の列を追加できる');
+check((int) $pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN
+    ('campaign_survey_followups','edu_delivery_summaries','edu_summary_settings','suspicious_mail_replies')")->fetchColumn() === 4,
+    '段D の D4〜D6 の表を4つ作る');
+check(in_array('allow_other', array_column($pdo->query('PRAGMA table_info(survey_questions)')->fetchAll(), 'name'), true)
+    && in_array('other_text', array_column($pdo->query('PRAGMA table_info(survey_answers)')->fetchAll(), 'name'), true),
+    '既存のアンケートの表へ、その他の列を足す');
+check((int) $pdo->query('SELECT (SELECT COUNT(*) FROM edu_summary_settings) + (SELECT COUNT(*) FROM campaign_survey_followups)')->fetchColumn() === 0,
+    '集計通知と訓練後のアンケートの設定の行は作らない(既定で送らない)');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261106-sending-db'");
+check($runner->migrate() === 1 && $runner->migrate() === 0, '段D の D4〜D6 のmigrationも冪等');
+
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 32,
-    'schema_migrationsへ32件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 33,
+    'schema_migrationsへ33件だけ記録される');
 check(in_array('credential_capture_approval_ref', array_column(
     $pdo->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name'
 ), true), 'campaignsへ顧客承認参照を追加する');
@@ -505,8 +525,9 @@ check($currentRunner->pending() === [
     '20261101-edu-tags',
     '20261102-notification-templates',
     '20261105-sending-da',
-], '現行DBは31件の後続migrationがpending');
-check($currentRunner->migrate() === 31, '現行DBへ残りのmigrationを適用する');
+    '20261106-sending-db',
+], '現行DBは32件の後続migrationがpending');
+check($currentRunner->migrate() === 32, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
@@ -534,7 +555,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 30, '既存automation DBへ30件の後続migrationを適用する');
+check($rotationRunner->migrate() === 31, '既存automation DBへ31件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -558,9 +579,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 32, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 32,
-    'version tableを作成して32件記録する');
+check($unversionedRunner->migrate() === 33, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 33,
+    'version tableを作成して33件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -573,7 +594,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 32, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 33, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets

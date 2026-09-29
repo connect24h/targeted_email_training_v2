@@ -22,7 +22,7 @@ Db::run("INSERT INTO groups (id, tenant_id, name, kind) VALUES (10, 1, '全職�
 
 // --- 雛形から作成 ---
 $tpl = call_handler('sv_handle_templates', [], 'viewer');
-check($tpl['code'] === 200 && count($tpl['payload']['templates']) === 2, 'AS-1: 雛形2種を返す');
+check($tpl['code'] === 200 && count($tpl['payload']['templates']) === 6, 'AS-1: 雛形6種を返す(従業員向けの4つを含む)');
 check($tpl['payload']['mail_enabled'] === false, 'AS-1: 既定ではメール送信は無効と返す');
 
 $created = call_handler('sv_handle_create', ['template' => 'after_training']);

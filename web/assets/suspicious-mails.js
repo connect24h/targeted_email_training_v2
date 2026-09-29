@@ -326,6 +326,7 @@ async function openSuspiciousMail(id) {
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#smTabBody">本文</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#smTabRaw">生データ</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#smTabHistory">履歴 <span class="badge bg-light text-dark border">${mail.history.length}</span></a></li>
+      ${editable ? '<li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#smTabReply" id="smReplyTabLink">報告者へ返信</a></li>' : ''}
     </ul>
     <div class="tab-content">
       <div class="tab-pane fade show active" id="smTabSummary">${smRenderSummary(mail, target, dis)}</div>
@@ -335,6 +336,7 @@ async function openSuspiciousMail(id) {
       <div class="tab-pane fade" id="smTabBody">${smRenderBody(target)}</div>
       <div class="tab-pane fade" id="smTabRaw">${smRenderRaw(mail.analysis.messages)}</div>
       <div class="tab-pane fade" id="smTabHistory">${smRenderHistory(mail.history)}</div>
+      ${editable ? '<div class="tab-pane fade" id="smTabReply"><div class="text-muted small">読み込み中…</div></div>' : ''}
     </div>`;
   const title = `不審メール #${mail.id}: ${mail.subject || '(件名なし)'}`;
   if (editable) {
@@ -344,6 +346,8 @@ async function openSuspiciousMail(id) {
   }
   $('#smReanalyzeBtn')?.addEventListener('click', () => smReanalyze(mail.id));
   $('#smReputationBtn')?.addEventListener('click', () => smReputation(mail.id));
+  // 返信の定型文は、タブを開いた時に読む(詳細の表示を遅くしない)
+  $('#smReplyTabLink')?.addEventListener('shown.bs.tab', () => smLoadReply(mail.id));
 }
 
 function smTargetIndex(messages) {
@@ -508,10 +512,71 @@ function smRenderHistory(history) {
     if (field === 'priority') return SM_PRIORITY_LABEL[v] || v;
     return v;
   };
-  const fieldLabel = { category: '分類', status: '確認状況', priority: '優先度', assigned_to: '担当', note: 'メモ' };
+  const fieldLabel = { category: '分類', status: '確認状況', priority: '優先度', assigned_to: '担当', note: 'メモ', reply: '報告者への返信' };
   return `<div class="table-responsive"><table class="table table-sm"><thead><tr><th>日時</th><th>操作者</th><th>項目</th><th>変更前</th><th>変更後</th></tr></thead><tbody>
     ${history.map((h) => `<tr><td class="text-nowrap small">${esc(fmtDate(h.created_at))}</td><td class="small">${esc(h.actor_email)}</td><td>${esc(fieldLabel[h.field] || h.field)}</td><td class="small text-break">${esc(label(h.field, h.old_value))}</td><td class="small text-break">${esc(label(h.field, h.new_value))}</td></tr>`).join('')}
   </tbody></table></div>`;
+}
+
+/* ========== 報告者への返信(段D の D4) ========== */
+
+const SM_REPLY_STATUS_LABEL = { sending: '送信中', sent: '送信済み', failed: '送れませんでした' };
+
+/**
+ * 報告者への定型文の返信。押した時だけ、その報告の報告者へ1通送る(宛先は選べない)。
+ * 「訓練メールでした」は訓練を閉じた後だけ選べる(API も同じ判定で断る)。
+ */
+async function smLoadReply(id) {
+  const pane = $('#smTabReply');
+  if (!pane) return;
+  let data;
+  try { data = await api('api/suspicious_mail_replies.php', { query: { action: 'options', id } }); }
+  catch (e) { pane.innerHTML = `<div class="alert alert-danger small py-2" role="alert">${esc(e.message)}</div>`; return; }
+  const sent = data.replies.length === 0 ? '<div class="text-muted small">まだ返信していません。</div>'
+    : `<div class="table-responsive"><table class="table table-sm small mb-0"><thead><tr><th>日時</th><th>定型文</th><th>状態</th><th>送った人</th></tr></thead><tbody>
+      ${data.replies.map((r) => `<tr><td class="text-nowrap">${esc(fmtDate(r.sent_at || r.created_at))}</td><td>${esc((data.items.find((i) => i.kind === r.kind) || {}).label || r.kind)}</td>
+        <td>${esc(SM_REPLY_STATUS_LABEL[r.status] || r.status)}</td><td>${esc(r.sent_by)}</td></tr>`).join('')}</tbody></table></div>`;
+  const options = data.items.map((i) => `<option value="${esc(i.kind)}"${i.allowed ? '' : ' disabled'}>${esc(i.label)}${i.allowed ? '' : '（選べません）'}</option>`).join('');
+  pane.innerHTML = `
+    <p class="small text-muted mb-2">定型文を選んで「返信を送る」を押した時だけ、報告者（${esc(data.reporter_email || 'アドレスなし')}）へ1通送ります。文面はユーザ管理の「通知の文面」で変えられます。</p>
+    <div class="row g-2 align-items-end mb-2">
+      <div class="col-md-8"><label class="form-label small mb-0" for="smReplyKind">定型文</label>
+        <select class="form-select form-select-sm" id="smReplyKind">${options}</select></div>
+      <div class="col-md-4 d-grid"><button type="button" class="btn btn-sm btn-outline-primary" id="smReplySendBtn"><i class="bi bi-reply" aria-hidden="true"></i> 返信を送る</button></div>
+    </div>
+    <div class="small text-warning mb-2" id="smReplyReason" role="status"></div>
+    <div class="border rounded p-2 bg-light small mb-3"><div class="fw-semibold" id="smReplySubject"></div>
+      <pre class="mb-0 mt-1" style="white-space:pre-wrap" id="smReplyBody"></pre></div>
+    <h6 class="small fw-semibold">返信の記録</h6>${sent}`;
+  const fill = () => {
+    const item = data.items.find((i) => i.kind === $('#smReplyKind').value) || data.items[0];
+    $('#smReplySubject').textContent = `件名: ${item.subject}`;
+    $('#smReplyBody').textContent = item.body;
+    $('#smReplyReason').textContent = data.items.filter((i) => !i.allowed).map((i) => `${i.label}: ${i.reason}`).join(' / ');
+    $('#smReplySendBtn').disabled = !item.allowed;
+  };
+  const first = data.items.find((i) => i.allowed);
+  if (first) $('#smReplyKind').value = first.kind;
+  $('#smReplyKind').addEventListener('change', fill);
+  fill();
+  $('#smReplySendBtn').addEventListener('click', () => smSendReply(id, data));
+}
+
+async function smSendReply(id, data) {
+  const kind = $('#smReplyKind').value;
+  const item = data.items.find((i) => i.kind === kind);
+  if (!item || !item.allowed) return;
+  if (!confirm(`「${item.label}」を ${data.reporter_email} へ送ります。よろしいですか。`)) return;
+  const btn = $('#smReplySendBtn');
+  // 二度押しで二重に送らないよう、応答が返るまで押せなくする(API も同じ定型文の二重送信を断る)
+  btn.disabled = true;
+  try {
+    await api('api/suspicious_mail_replies.php', { method: 'POST', query: { action: 'send' }, body: { id, kind } });
+    toast('報告者へ返信しました', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+  await smLoadReply(id);
 }
 
 async function smSaveDetail(id) {
