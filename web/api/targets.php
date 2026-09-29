@@ -17,6 +17,10 @@ const TARGET_CSV_HEADERS = [
     'department' => 'department',
     'title' => 'title',
     'position_category' => 'position_category',
+    '従業員番号' => 'employee_no',
+    'メモ' => 'memo',
+    'employee_no' => 'employee_no',
+    'memo' => 'memo',
 ];
 
 // name/company/department/title 等の自由入力テキストの共通サニタイズ検証。
@@ -24,25 +28,54 @@ const TARGET_CSV_HEADERS = [
 // これらの値はメール本文・HTML(reveal/link ページ、CSV等)に差し込まれ得るため、
 // 入力段階で危険文字を弾く(create/update/CSV取込の全INSERT経路で共用)。
 const TARGET_TEXT_MAX_LEN = 255;
+// 従業員番号とメモ(段B2 の G46)。メモも1行にする(CSV の取込は1行ずつ読むので、改行を入れると往復できない)。
+const TARGET_EMPLOYEE_NO_MAX_LEN = 64;
+const TARGET_MEMO_MAX_LEN = 1000;
 
-function targets_assert_safe_text(?string $value, string $label): ?string
+/** 自由入力テキストの違反の理由。問題なければ null。 */
+function targets_text_violation(string $value, string $label, int $max = TARGET_TEXT_MAX_LEN): ?string
+{
+    // 文字数(マルチバイト対応)で上限判定。
+    if (mb_strlen($value) > $max) {
+        return $label . ' が長すぎます（最大' . $max . '文字）';
+    }
+    // < > を含む値は拒否(HTMLタグ注入の遮断)。
+    if (strpbrk($value, '<>') !== false) {
+        return $label . ' に使用できない文字（< >）が含まれています';
+    }
+    // 制御文字(改行・タブ含む)を拒否。ログ/CSV/ヘッダ混入を防ぐ。
+    if (preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+        return $label . ' に制御文字は使用できません';
+    }
+    return null;
+}
+
+function targets_assert_safe_text(?string $value, string $label, int $max = TARGET_TEXT_MAX_LEN): ?string
 {
     if ($value === null) {
         return null;
     }
-    // 文字数(マルチバイト対応)で上限判定。
-    if (mb_strlen($value) > TARGET_TEXT_MAX_LEN) {
-        json_error($label . ' が長すぎます（最大' . TARGET_TEXT_MAX_LEN . '文字）', 400);
-    }
-    // < > を含む値は拒否(HTMLタグ注入の遮断)。
-    if (strpbrk($value, '<>') !== false) {
-        json_error($label . ' に使用できない文字（< >）が含まれています', 400);
-    }
-    // 制御文字(改行・タブ含む)を拒否。ログ/CSV/ヘッダ混入を防ぐ。
-    if (preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
-        json_error($label . ' に制御文字は使用できません', 400);
+    $violation = targets_text_violation($value, $label, $max);
+    if ($violation !== null) {
+        json_error($violation, 400);
     }
     return $value;
+}
+
+/**
+ * 従業員番号とメモ。キーがなければ [false, null](今のまま)、空文字は [true, null](消す)、値は [true, 値]。
+ * @return array{0: bool, 1: ?string}
+ */
+function targets_optional_attr(array $body, string $key, string $label, int $max): array
+{
+    if (!array_key_exists($key, $body) || $body[$key] === null) {
+        return [false, null];
+    }
+    if (!is_string($body[$key])) {
+        json_error($key . ' が不正です', 400);
+    }
+    $value = trim($body[$key]);
+    return [true, $value === '' ? null : targets_assert_safe_text($value, $label, $max)];
 }
 
 // email の簡易検証。FILTER_VALIDATE_EMAIL は quoted-local-part("..."@ex.com)等を
@@ -103,6 +136,15 @@ function targets_optional_nullable_string(array $body, string $key): ?string
     $value = trim($body[$key]) === '' ? null : trim($body[$key]);
     // name/company/department/title 等の自由入力テキストを安全検証(< > /制御文字/長さ)。
     return targets_assert_safe_text($value, $key);
+}
+
+/** 従業員番号がテナントの中で空いているか(自分以外に使う人がいれば 409)。 */
+function targets_assert_employee_no_free(int $tenantId, ?string $employeeNo, int $exceptId = 0): void
+{
+    if ($employeeNo !== null
+        && Db::one('SELECT 1 FROM targets WHERE tenant_id = ? AND employee_no = ? AND id != ?', [$tenantId, $employeeNo, $exceptId]) !== null) {
+        json_error('従業員番号は既に使用されています', 409);
+    }
 }
 
 function targets_int(array $body, string $key): int
@@ -211,6 +253,7 @@ function targets_handle_list(array $actor): never
 {
     $tenantId = effective_tenant_id($actor, targets_query_int('tenant_id'));
     $groupId = targets_query_int('group_id');
+    // 検索はメール、氏名、従業員番号、メモの部分一致
     $q = isset($_GET['q']) && is_string($_GET['q']) && trim($_GET['q']) !== '' ? '%' . trim($_GET['q']) . '%' : null;
     // 既定はアーカイブ(退職/過去在籍)を除外。?include_archived=1 で全件(アーカイブ管理用)。
     $includeArchived = isset($_GET['include_archived']) && $_GET['include_archived'] === '1';
@@ -218,13 +261,14 @@ function targets_handle_list(array $actor): never
     if ($groupId !== null) {
         targets_assert_group_owned($groupId, $tenantId);
         $targets = Db::all(
-            'SELECT t.id, t.tenant_no, t.tenant_id, t.email, t.name, t.company, t.department, t.title, t.position_category, t.status, t.created_at, t.archived_at, t.is_test
+            'SELECT t.id, t.tenant_no, t.tenant_id, t.email, t.name, t.company, t.department, t.title, t.position_category, t.status, t.created_at, t.archived_at, t.is_test, t.employee_no, t.memo
              FROM targets t
              INNER JOIN target_group tg ON tg.target_id = t.id
              INNER JOIN groups g ON g.id = tg.group_id
-             WHERE t.tenant_id = ? AND g.tenant_id = ? AND tg.group_id = ? AND (? IS NULL OR t.email LIKE ? OR t.name LIKE ?)' . $archiveClause . '
+             WHERE t.tenant_id = ? AND g.tenant_id = ? AND tg.group_id = ?
+               AND (? IS NULL OR t.email LIKE ? OR t.name LIKE ? OR t.employee_no LIKE ? OR t.memo LIKE ?)' . $archiveClause . '
              ORDER BY t.tenant_no',
-            [$tenantId, $tenantId, $groupId, $q, $q, $q]
+            [$tenantId, $tenantId, $groupId, $q, $q, $q, $q, $q]
         );
         json_out(['success' => true, 'targets' => targets_attach_groups($targets, $tenantId)]);
     }
@@ -232,11 +276,11 @@ function targets_handle_list(array $actor): never
     // 非グループ経路は別名 t を使わないので status 条件を素の列名で組む。
     $archiveClause2 = $includeArchived ? '' : " AND status != 'archived'";
     $targets = Db::all(
-        'SELECT id, tenant_no, tenant_id, email, name, company, department, title, position_category, status, created_at, archived_at, is_test
+        'SELECT id, tenant_no, tenant_id, email, name, company, department, title, position_category, status, created_at, archived_at, is_test, employee_no, memo
          FROM targets
-         WHERE tenant_id = ? AND (? IS NULL OR email LIKE ? OR name LIKE ?)' . $archiveClause2 . '
+         WHERE tenant_id = ? AND (? IS NULL OR email LIKE ? OR name LIKE ? OR employee_no LIKE ? OR memo LIKE ?)' . $archiveClause2 . '
          ORDER BY tenant_no',
-        [$tenantId, $q, $q, $q]
+        [$tenantId, $q, $q, $q, $q, $q]
     );
     json_out(['success' => true, 'targets' => targets_attach_groups($targets, $tenantId)]);
 }
@@ -291,11 +335,14 @@ function targets_handle_create(array $actor): never
     }
     // 検証用ユーザ(レポート集計から除外)。未指定は 0=本番ユーザ。
     $isTest = targets_optional_bool_int($body, 'is_test') ?? 0;
-    $id = Db::tx(function () use ($tenantId, $email, $body, $groupIds, $positionCategory, $isTest): int {
+    [, $employeeNo] = targets_optional_attr($body, 'employee_no', '従業員番号', TARGET_EMPLOYEE_NO_MAX_LEN);
+    [, $memo] = targets_optional_attr($body, 'memo', 'メモ', TARGET_MEMO_MAX_LEN);
+    targets_assert_employee_no_free($tenantId, $employeeNo);
+    $id = Db::tx(function () use ($tenantId, $email, $body, $groupIds, $positionCategory, $isTest, $employeeNo, $memo): int {
         $targetId = Db::insert(
             // tenant_no はテナント単位の連番(表示用)。グローバルな id とは別に採番する。
-            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, is_test, tenant_no)'
-            . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
+            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, is_test, employee_no, memo, tenant_no)'
+            . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
             [
                 $tenantId,
                 $email,
@@ -305,6 +352,8 @@ function targets_handle_create(array $actor): never
                 targets_optional_nullable_string($body, 'title'),
                 $positionCategory,
                 $isTest,
+                $employeeNo,
+                $memo,
                 $tenantId,
             ]
         );
@@ -339,8 +388,12 @@ function targets_handle_update(array $actor): never
     // 検証用ユーザ切替。未指定(null)は現状維持。
     $isTest = targets_optional_bool_int($body, 'is_test');
     $groupIds = targets_int_array($body, 'group_ids');
+    // 従業員番号とメモは、送られたら空文字でも反映する(空で消せる)。送られなければ今のまま。
+    [$hasEmployeeNo, $employeeNo] = targets_optional_attr($body, 'employee_no', '従業員番号', TARGET_EMPLOYEE_NO_MAX_LEN);
+    [$hasMemo, $memo] = targets_optional_attr($body, 'memo', 'メモ', TARGET_MEMO_MAX_LEN);
 
-    if ($name === null && $company === null && $department === null && $title === null && $positionCategory === null && $status === null && $isTest === null && $groupIds === null) {
+    if ($name === null && $company === null && $department === null && $title === null && $positionCategory === null && $status === null && $isTest === null && $groupIds === null
+        && !$hasEmployeeNo && !$hasMemo) {
         json_error('更新項目がありません', 400);
     }
     if ($status !== null && !in_array($status, TARGET_STATUSES, true)) {
@@ -358,8 +411,10 @@ function targets_handle_update(array $actor): never
     if ($groupIds !== null) {
         targets_assert_groups_owned($groupIds, $tenantId);
     }
+    targets_assert_employee_no_free($tenantId, $employeeNo, $id);
 
-    Db::tx(function () use ($id, $tenantId, $name, $company, $department, $title, $positionCategory, $status, $isTest, $groupIds): void {
+    Db::tx(function () use ($id, $tenantId, $name, $company, $department, $title, $positionCategory, $status, $isTest, $groupIds,
+        $hasEmployeeNo, $employeeNo, $hasMemo, $memo): void {
         Db::run(
             'UPDATE targets
              SET name = COALESCE(?, name),
@@ -369,6 +424,8 @@ function targets_handle_update(array $actor): never
                  position_category = COALESCE(?, position_category),
                  status = COALESCE(?, status),
                  is_test = COALESCE(?, is_test),
+                 employee_no = CASE WHEN ? = \'set\' THEN ? ELSE employee_no END,
+                 memo = CASE WHEN ? = \'set\' THEN ? ELSE memo END,
                  -- status を archived にしたら削除日時を記録し、archived から戻したら消す。
                  -- status 未指定(NULL)のときは現状維持。
                  archived_at = CASE
@@ -377,7 +434,8 @@ function targets_handle_update(array $actor): never
                      ELSE NULL
                  END
              WHERE id = ? AND tenant_id = ?',
-            [$name, $company, $department, $title, $positionCategory, $status, $isTest, $status, $status, $id, $tenantId]
+            [$name, $company, $department, $title, $positionCategory, $status, $isTest,
+             $hasEmployeeNo ? 'set' : 'keep', $employeeNo, $hasMemo ? 'set' : 'keep', $memo, $status, $status, $id, $tenantId]
         );
         if ($groupIds !== null) {
             Db::run(
@@ -537,9 +595,54 @@ function targets_position_master_map(int $tenantId): array
 }
 
 /**
- * @param array<string, string> $positionMap 役職名→カテゴリ。CSV にカテゴリ列が無いときの補完に使う
+ * 従業員番号とメモの CSV の値。空は null(取込では今の値を残す)。
+ * 出力で式の無害化(tet2_csv_sanitize)が付けた先頭の ' は外し、出力した CSV をそのまま取り込めるようにする。
  */
-function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId, array $positionMap = []): string
+function targets_csv_attr(array $row, array $map, string $key, string $label, int $max): ?string
+{
+    $value = targets_csv_value($row, $map, $key);
+    if ($value === null) {
+        return null;
+    }
+    if (preg_match("/^'[=+\-@]/", $value) === 1) {
+        $value = substr($value, 1);
+    }
+    $violation = targets_text_violation($value, $label, $max);
+    if ($violation !== null) {
+        throw new InvalidArgumentException($violation);
+    }
+    return $value;
+}
+
+/**
+ * 取込の行に当たる既存の対象者。従業員番号が入っていればまず番号で探し、なければメールアドレスで探す。
+ * 番号で当たった人はメールアドレスを CSV の値に変える(アドレスが変わった人を別人として足さない)。
+ * @return ?array 既存の対象者の行(id、email、employee_no)か null
+ */
+function targets_import_match(int $tenantId, string $email, ?string $employeeNo): ?array
+{
+    if ($employeeNo !== null) {
+        $byNo = Db::one('SELECT id, email, employee_no FROM targets WHERE tenant_id = ? AND employee_no = ?', [$tenantId, $employeeNo]);
+        if ($byNo !== null) {
+            if ((string) $byNo['email'] !== $email
+                && Db::one('SELECT 1 FROM targets WHERE tenant_id = ? AND email = ? AND id != ?', [$tenantId, $email, (int) $byNo['id']]) !== null) {
+                throw new InvalidArgumentException('メールアドレスは別の対象者が使っています（従業員番号 ' . $employeeNo . ' の人のアドレスに変えられません）');
+            }
+            return $byNo;
+        }
+    }
+    $byEmail = Db::one('SELECT id, email, employee_no FROM targets WHERE tenant_id = ? AND email = ?', [$tenantId, $email]);
+    if ($byEmail !== null && $employeeNo !== null && $byEmail['employee_no'] !== null && (string) $byEmail['employee_no'] !== $employeeNo) {
+        throw new InvalidArgumentException('このメールアドレスの対象者には別の従業員番号（' . $byEmail['employee_no'] . '）が登録されています');
+    }
+    return $byEmail;
+}
+
+/**
+ * @param array<string, string> $positionMap 役職名→カテゴリ。CSV にカテゴリ列が無いときの補完に使う
+ * @param array<string, true> $seenEmployeeNos この取込で既に読んだ従業員番号(同じ番号の2行目は取り込まない)
+ */
+function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId, array $positionMap = [], array &$seenEmployeeNos = []): string
 {
     $email = targets_csv_value($row, $map, 'email');
     if ($email === null || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
@@ -549,7 +652,15 @@ function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId
     if (!preg_match('/^[^@\s"\'<>]+@[^@\s"\'<>]+$/', $email)) {
         throw new InvalidArgumentException('email が不正です');
     }
-    $existing = Db::one('SELECT id FROM targets WHERE tenant_id = ? AND email = ?', [$tenantId, $email]);
+    $employeeNo = targets_csv_attr($row, $map, 'employee_no', '従業員番号', TARGET_EMPLOYEE_NO_MAX_LEN);
+    $memo = targets_csv_attr($row, $map, 'memo', 'メモ', TARGET_MEMO_MAX_LEN);
+    if ($employeeNo !== null && isset($seenEmployeeNos[$employeeNo])) {
+        throw new InvalidArgumentException('従業員番号 ' . $employeeNo . ' が CSV の中で重複しています');
+    }
+    $existing = targets_import_match($tenantId, $email, $employeeNo);
+    if ($employeeNo !== null) {
+        $seenEmployeeNos[$employeeNo] = true;
+    }
     // 役職カテゴリは正規値のみ採用。旧称「社員」はエイリアスで救い、
     // それ以外・空は NULL(取込を止めない)。
     $posCat = tet2_normalize_position_category(targets_csv_value($row, $map, 'position_category'));
@@ -590,18 +701,21 @@ function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId
     if ($existing === null) {
         $targetId = Db::insert(
             // tenant_no はテナント単位の連番(表示用)。グローバルな id とは別に採番する。
-            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, tenant_no)'
-            . ' VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
-            [$tenantId, $email, $values[0], $values[1], $values[2], $values[3], $values[4], $tenantId]
+            'INSERT INTO targets (tenant_id, email, name, company, department, title, position_category, employee_no, memo, tenant_no)'
+            . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tenant_no), 0) + 1 FROM targets WHERE tenant_id = ?))',
+            [$tenantId, $email, $values[0], $values[1], $values[2], $values[3], $values[4], $employeeNo, $memo, $tenantId]
         );
         $result = 'imported';
     } else {
         $targetId = (int) $existing['id'];
+        // 従業員番号とメモは、CSV の列がないか空なら今の値を残す(列を足す前の CSV でも消えない)
         Db::run(
-            'UPDATE targets SET name = ?, company = ?, department = ?, title = ?, position_category = COALESCE(?, position_category) WHERE id = ? AND tenant_id = ?',
-            [$values[0], $values[1], $values[2], $values[3], $values[4], $targetId, $tenantId]
+            'UPDATE targets SET email = ?, name = ?, company = ?, department = ?, title = ?, position_category = COALESCE(?, position_category),
+                    employee_no = COALESCE(?, employee_no), memo = COALESCE(?, memo)
+             WHERE id = ? AND tenant_id = ?',
+            [$email, $values[0], $values[1], $values[2], $values[3], $values[4], $employeeNo, $memo, $targetId, $tenantId]
         );
-        $result = 'updated';
+        $result = (string) $existing['email'] === $email ? 'updated' : 'email_changed';
     }
     if ($groupId !== null) {
         Db::run(
@@ -632,19 +746,21 @@ function targets_handle_import_csv(array $actor): never
     }
     $headers = str_getcsv((string) array_shift($lines));
     $map = targets_csv_header_map($headers);
-    $result = ['imported' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+    // 既存の対象者との照合は、従業員番号(列があり値が入った行)が先、なければメールアドレス(targets_import_match)
+    $result = ['imported' => 0, 'updated' => 0, 'email_changed' => 0, 'skipped' => 0, 'errors' => []];
     // 役職マスタを1回だけ読み込む(行ごとに引くとクエリが行数分発行される)。
     // CSV に役職カテゴリ列が無い/空のとき、役職名から補完するために使う。
     $positionMap = targets_position_master_map($tenantId);
 
     Db::tx(function () use ($lines, $tenantId, $map, $groupId, $positionMap, &$result): void {
+        $seenEmployeeNos = [];
         foreach ($lines as $index => $line) {
             if (trim((string) $line) === '') {
                 continue;
             }
             $lineNumber = $index + 2;
             try {
-                $status = targets_import_row($tenantId, str_getcsv((string) $line), $map, $groupId, $positionMap);
+                $status = targets_import_row($tenantId, str_getcsv((string) $line), $map, $groupId, $positionMap, $seenEmployeeNos);
                 $result[$status]++;
             } catch (InvalidArgumentException $e) {
                 $result['skipped']++;
@@ -652,11 +768,14 @@ function targets_handle_import_csv(array $actor): never
             }
         }
     });
-    audit('target.import_csv', 'imported=' . $result['imported'] . ',updated=' . $result['updated']);
+    // 従業員番号で当たりメールアドレスを変えた人も「更新」に数え、内訳を別に返す
+    $updated = $result['updated'] + $result['email_changed'];
+    audit('target.import_csv', 'imported=' . $result['imported'] . ',updated=' . $updated . ',email_changed=' . $result['email_changed']);
     json_out([
         'success' => true,
         'imported' => $result['imported'],
-        'updated' => $result['updated'],
+        'updated' => $updated,
+        'email_changed' => $result['email_changed'],
         'skipped' => $result['skipped'],
         'errors' => $result['errors'],
         'limit_warning' => TenantStatus::targetLimitWarning($tenantId),
@@ -678,14 +797,15 @@ function targets_build_csv(int $tenantId, bool $includeArchived = false): string
 {
     $archiveClause = $includeArchived ? '' : " AND status != 'archived'";
     $rows = Db::all(
-        'SELECT email, name, company, department, title, position_category, status, archived_at, is_test
+        'SELECT email, name, company, department, title, position_category, employee_no, memo, status, archived_at, is_test
          FROM targets WHERE tenant_id = ?' . $archiveClause . ' ORDER BY id',
         [$tenantId]
     );
     $out = fopen('php://temp', 'r+');
     // import が受け付ける日本語ヘッダーと同じ並びで出力(往復可能にする)。
     // アーカイブ込みのときだけ状態/削除日/テスト区分を足す(import 側は未知の列を無視する)。
-    $header = ['メールアドレス', '氏名', '会社名', '部署', '役職', '役職カテゴリ'];
+    // 従業員番号とメモは自由な文なので、先頭が = + - @ の値は式として開かれないよう ' を付ける(取込で外す)
+    $header = ['メールアドレス', '氏名', '会社名', '部署', '役職', '役職カテゴリ', '従業員番号', 'メモ'];
     if ($includeArchived) {
         $header[] = '状態';
         $header[] = '削除日';
@@ -700,6 +820,8 @@ function targets_build_csv(int $tenantId, bool $includeArchived = false): string
             (string) ($r['department'] ?? ''),
             (string) ($r['title'] ?? ''),
             (string) ($r['position_category'] ?? ''),
+            tet2_csv_sanitize($r['employee_no'] ?? ''),
+            tet2_csv_sanitize($r['memo'] ?? ''),
         ];
         if ($includeArchived) {
             $line[] = (string) ($r['status'] ?? '');
@@ -770,7 +892,7 @@ try {
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {
     if (targets_is_unique_error($e)) {
-        json_error('email は既に使用されています', 409);
+        json_error(str_contains($e->getMessage(), 'employee_no') ? '従業員番号は既に使用されています' : 'email は既に使用されています', 409);
     }
     error_log($e->getMessage());
     json_error('サーバエラー', 500);
