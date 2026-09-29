@@ -119,13 +119,43 @@ function edu_m_find(int $id, int $tenantId): ?array
 function edu_m_handle_list(array $actor): never
 {
     $tenantId = effective_tenant_id($actor, edu_m_query_int('tenant_id'));
+    // delivery_count: この組織の配信のうち、この教材を使っている数(共有教材もこの組織の分だけ数える)
     $rows = Db::all(
-        'SELECT * FROM edu_materials
-         WHERE (tenant_id = ? OR tenant_id IS NULL) AND is_active = 1
-         ORDER BY is_shared DESC, id',
-        [$tenantId]
+        'SELECT m.*,
+                (SELECT COUNT(*) FROM edu_deliveries d WHERE d.material_id = m.id AND d.tenant_id = ?) AS delivery_count,
+                (SELECT p.width FROM edu_material_pages p WHERE p.material_id = m.id ORDER BY p.page_no LIMIT 1) AS first_width,
+                (SELECT p.height FROM edu_material_pages p WHERE p.material_id = m.id ORDER BY p.page_no LIMIT 1) AS first_height
+         FROM edu_materials m
+         WHERE (m.tenant_id = ? OR m.tenant_id IS NULL) AND m.is_active = 1
+         ORDER BY m.is_shared DESC, m.id',
+        [$tenantId, $tenantId]
     );
-    json_out(['success' => true, 'materials' => array_map('edu_m_present', $rows)]);
+    $materials = array_map(static function (array $row): array {
+        $kind = edu_m_kind($row);
+        $count = (int) $row['delivery_count'];
+        unset($row['delivery_count'], $row['first_width'], $row['first_height']);
+        return edu_m_present($row) + ['kind' => $kind, 'delivery_count' => $count];
+    }, $rows);
+    json_out(['success' => true, 'materials' => $materials]);
+}
+
+/**
+ * 教材の形式(教材バンクの絞り込み用)。本の版とスライド版の区別は保存していないので、次の順で推定する。
+ * - text_slides → text(文字のスライド)
+ * - page_images で、題名に「スライド版」を含むか、1ページ目が横長(幅 > 高さ。16:9 のスライド) → slide
+ * - それ以外の page_images(A5 など縦長の本) → book
+ */
+function edu_m_kind(array $row): string
+{
+    if (($row['format'] ?? 'text_slides') !== 'page_images') {
+        return 'text';
+    }
+    if (mb_strpos((string) $row['title'], 'スライド版') !== false) {
+        return 'slide';
+    }
+    $width = (int) ($row['first_width'] ?? 0);
+    $height = (int) ($row['first_height'] ?? 0);
+    return $width > 0 && $height > 0 && $width > $height ? 'slide' : 'book';
 }
 
 function edu_m_handle_create(array $actor): never

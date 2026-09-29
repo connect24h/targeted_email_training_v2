@@ -63,4 +63,25 @@ $r = call_handler('edu_m_handle_import_pptx', [
 ], 'operator');
 check($r['code'] === 400, 'EM-6: 旧PowerPoint形式を拒否する');
 
+// EM-7: 一覧の形式(本の版、スライド版、文字)と、使っている配信の数(この組織の配信だけ)
+$page = static function (string $title, int $width, int $height): int {
+    Db::run("INSERT INTO edu_materials (tenant_id, title, slides, format, page_count, is_active) VALUES (1, ?, '[]', 'page_images', 1, 1)", [$title]);
+    $id = (int) Db::one('SELECT MAX(id) AS id FROM edu_materials')['id'];
+    Db::run("INSERT INTO edu_material_pages (material_id, page_no, image_name, width, height) VALUES (?, 1, 'page-001.jpg', ?, ?)", [$id, $width, $height]);
+    return $id;
+};
+$bookId = $page('本の版', 1240, 1748);
+$wideId = $page('横長の教材', 1920, 1080);
+$namedId = $page('ランサムウェア（スライド版）', 1240, 1748);
+Db::run("INSERT INTO edu_deliveries (tenant_id, title, material_id) VALUES (1, '配信A', ?), (1, '配信B', ?), (2, '他組織の配信', ?)", [$bookId, $bookId, $bookId]);
+$r = call_handler('edu_m_handle_list', [], 'viewer');
+$byId = array_column($r['payload']['materials'], null, 'id');
+check($r['code'] === 200, 'EM-7: viewer も教材の一覧を読める');
+check($byId[$bookId]['kind'] === 'book' && $byId[$wideId]['kind'] === 'slide' && $byId[$namedId]['kind'] === 'slide',
+    'EM-7: 縦長の PDF は本の版、横長か題名に「スライド版」があればスライド版');
+check($byId[$materialId]['kind'] === 'text', 'EM-7: 文字のスライドは text');
+check($byId[$bookId]['delivery_count'] === 2 && $byId[$wideId]['delivery_count'] === 0,
+    'EM-7: 使っている配信の数は、この組織の配信だけを数える');
+check(!array_key_exists('first_width', $byId[$bookId]), 'EM-7: 推定に使った列は返さない');
+
 echo "ALL TESTS PASSED\n";
