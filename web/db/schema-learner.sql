@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS edu_attempts (
   max_score     INTEGER,
   percentage    INTEGER,
   passed        INTEGER,                              -- 1/0。合格点のない配信(アウェアネス)は NULL
-  answers       TEXT,                                 -- JSON [{"question_id":int,"answer":int[],"is_correct":bool,"score_earned":int}]
+  answers       TEXT,                                 -- JSON [{"question_id":int,"answer":int[],"is_correct":bool,"score_earned":int}](answer は元の選択肢の番号)
+  test_started_at TEXT,                               -- この回で確認テストを始めた日時(テスト中は教材を閉じる配信で使う)
   created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   UNIQUE (assignment_id, attempt_no),
   FOREIGN KEY (tenant_id)     REFERENCES tenants(id),

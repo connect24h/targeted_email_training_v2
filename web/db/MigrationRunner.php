@@ -28,6 +28,7 @@ final class MigrationRunner
         '20261008-user-password-tokens',
         '20261012-learner-portal',
         '20261015-admin-mfa',
+        '20261020-edu-delivery-options',
     ];
 
     /**
@@ -249,6 +250,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-admin-mfa.sql'));
             return;
         }
+        if ($version === '20261020-edu-delivery-options') {
+            // 配信ごとの受講の設定(選択肢の並べ替え、テスト中の教材、期限後の受講、テストからの受け直し)、
+            // 受講の回のテストを始めた日時、テナントの社内の問い合わせ先。列を足すだけ。
+            // 既存の配信はどれも 0(今と同じ動き)。選択肢の並べ替えを既定で有効にするのは、新しく作る配信だけ(作成の API)。
+            $this->ensureAdditiveColumns($pdo);
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -452,6 +460,7 @@ final class MigrationRunner
                 'contract_end_date' => 'TEXT DEFAULT NULL',
                 'target_limit' => 'INTEGER DEFAULT NULL',
                 'memo' => 'TEXT DEFAULT NULL',
+                'edu_contact' => 'TEXT DEFAULT NULL',
             ],
             'campaigns' => [
                 'beacon_base' => 'TEXT',
@@ -494,8 +503,13 @@ final class MigrationRunner
                 'risk_results' => 'TEXT',
                 'new_target_days' => 'INTEGER',
                 'allow_retake_after_pass' => 'INTEGER NOT NULL DEFAULT 1',
+                'shuffle_options' => 'INTEGER NOT NULL DEFAULT 0',
+                'lock_material_during_test' => 'INTEGER NOT NULL DEFAULT 0',
+                'allow_after_deadline' => 'INTEGER NOT NULL DEFAULT 0',
+                'retake_from_test' => 'INTEGER NOT NULL DEFAULT 0',
             ],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],
+            'edu_attempts' => ['test_started_at' => 'TEXT'],
         ];
         foreach ($columns as $table => $definitions) {
             if (!$this->tableExists($pdo, $table)) {

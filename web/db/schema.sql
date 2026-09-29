@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS tenants (
   contact_email     TEXT DEFAULT NULL,           -- 担当者の連絡先のメール
   contract_end_date TEXT DEFAULT NULL,           -- 契約の終了日 'YYYY-MM-DD'
   target_limit      INTEGER DEFAULT NULL,        -- 対象者数の上限(超えても拒否せず警告だけ)
-  memo              TEXT DEFAULT NULL
+  memo              TEXT DEFAULT NULL,
+  edu_contact       TEXT DEFAULT NULL            -- 受講者のマイページに出す社内の問い合わせ先(自由な文)
 );
 
 -- 管理者ユーザ（訓練を運用する側）。tenant_id NULL = superadmin（全テナント）

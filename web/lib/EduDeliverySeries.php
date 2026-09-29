@@ -18,6 +18,7 @@ final class EduDeliverySeries
         'delivery_type', 'question_count', 'category_ids', 'difficulty_range', 'randomize', 'pass_score',
         'material_id', 'target_type', 'target_group_id', 'triggered_by', 'phish_campaign_id', 'feedback_mode',
         'send_invites', 'target_positions', 'risk_results', 'new_target_days', 'allow_retake_after_pass',
+        'shuffle_options', 'lock_material_during_test', 'allow_after_deadline', 'retake_from_test',
     ];
 
     /**

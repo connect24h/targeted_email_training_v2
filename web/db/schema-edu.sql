@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS edu_deliveries (
   phish_campaign_id INTEGER,
   send_invites     INTEGER NOT NULL DEFAULT 0,          -- 1 の配信だけ、開始時と自動の投入時に受講の案内メールを送る
   allow_retake_after_pass INTEGER NOT NULL DEFAULT 1,  -- 1 = 完了(合格)した後もマイページから受け直せる(新しい回として edu_attempts に残す)
+  shuffle_options  INTEGER NOT NULL DEFAULT 0,         -- 1 = 確認テストの選択肢を割当と設問ごとに決まった順に並べ替える(既存の配信は 0、新しい配信は作成の API が既定で 1)
+  lock_material_during_test INTEGER NOT NULL DEFAULT 0, -- 1 = テストを始めた後は、提出するまで教材を返さない
+  allow_after_deadline INTEGER NOT NULL DEFAULT 0,     -- 1 = 期限の後も受講できる(期限の後の完了はレポートで期限後になる)
+  retake_from_test INTEGER NOT NULL DEFAULT 0,         -- 1 = 不合格の後の受け直しを、教材を飛ばして確認テストから始める
   series_id        INTEGER REFERENCES edu_delivery_series(id), -- 毎月の配信(schema-edu-delivery.sql)から作った回
   target_positions TEXT,                                -- target_type=position の役職区分(JSON配列)
   risk_results     TEXT,                                -- target_type=risk の訓練の結果の区分(JSON配列)
