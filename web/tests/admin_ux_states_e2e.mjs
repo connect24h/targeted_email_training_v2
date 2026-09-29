@@ -136,7 +136,9 @@ try {
   await page.locator('#appModal [name=name]').first().fill('E2E 対象者なし');
   await page.locator('#appModal [name=start_at]').fill('2030-05-01T09:00');
   await page.locator('#appModal [name=end_at]').fill('2030-05-02T18:00');
-  await page.locator('#appModal [name=from_address]').fill('info@example.test');
+  // 送信元は複数選択＋直接入力ウィジェットに変わった。候補が無いので直接入力で1件足す。
+  await page.locator('#appModal [data-ep-name="from"] .ep-add-input').fill('info@example.test');
+  await page.locator('#appModal [data-ep-name="from"] .ep-add-btn').click();
   await page.locator('#appModalSave').click();
   await page.locator('#appModal [name=group_ids].is-invalid').waitFor();
   assert.equal(await page.locator('[data-campaign-step="targets"]').isVisible(), true);

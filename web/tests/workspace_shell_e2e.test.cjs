@@ -119,7 +119,8 @@ test('運用ホーム、画面URL、文脈HELPをブラウザで操作できる'
     const visibleEditorStep = await page.locator('#campaignForm [data-campaign-step]:visible').getAttribute('data-campaign-step');
     assert.equal(visibleEditorStep, 'delivery');
     assert.equal(await page.locator('#appModal').isVisible(), true);
-    assert.equal(await page.locator('#campaignForm [name="from_address"]').evaluate((input) => input === document.activeElement), true);
+    // 送信元は複数選択ウィジェットに変わった。未選択で保存すると送信環境の手順が開き、送信元ウィジェットが見える。
+    assert.equal(await page.locator('#campaignForm [data-ep-name="from"]').isVisible(), true);
     await page.setViewportSize({ width: 360, height: 780 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 1, `360px表示で横スクロールしないこと (overflow=${overflow})`);
