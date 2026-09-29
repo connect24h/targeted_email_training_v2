@@ -16,6 +16,7 @@ require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
 require_once __DIR__ . '/TenantStatus.php';
+require_once __DIR__ . '/EduDeliveryLauncher.php';
 
 final class EduAutoEnroll
 {
@@ -159,7 +160,7 @@ final class EduAutoEnroll
     }
 
     /**
-     * 訓練失敗者(auth|click)の target_id 一覧(テナント内)。
+     * 訓練失敗者(auth|click)の target_id 一覧(テナント内)。risk_results のある配信は、その区分に当たる人。
      *
      * 除外規則は api/edu_deliveries.php の risk 配信(edu_d_resolve_targets)と揃える。
      * 検証用ユーザ(is_test)と退職者(archived)へ受講案内が飛ぶ事故を防ぐ。
@@ -170,6 +171,18 @@ final class EduAutoEnroll
      */
     private static function failerTargetIds(int $tenantId, ?int $phishCampaignId, int $deliveryId): array
     {
+        // 訓練の結果の区分(risk_results)を持つ配信は、手動の開始と同じ判定で対象を選ぶ(画面の指定と実際の対象をずらさない)。
+        // 区分のない配信は、従来どおりクリックか入力をした人。
+        $delivery = Db::one('SELECT * FROM edu_deliveries WHERE id = ? AND tenant_id = ?', [$deliveryId, $tenantId]);
+        if ($delivery !== null && EduDeliveryLauncher::hasRiskResults($delivery)) {
+            try {
+                return EduDeliveryLauncher::resolveTargets($delivery, $tenantId);
+            } catch (EduDeliveryError $e) {
+                // キャンペーンの削除などで対象を決められない配信は、投入しない(ほかの配信の処理は続ける)
+                error_log('edu_auto_enroll: delivery_id=' . $deliveryId . ' ' . $e->getMessage());
+                return [];
+            }
+        }
         $sql = "SELECT DISTINCT ct.target_id AS id
                 FROM events e
                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL

@@ -183,6 +183,24 @@ check($quiet !== null, 'send_invites=0 の配信にも失敗者を割り当て�
 check($mailCalls === 0 && $quiet['last_reminded_at'] === null, 'send_invites=0 の配信では EduMailer を呼ばない');
 EduMailer::useTransport(null);
 
+// --- 訓練の結果の区分(risk_results)を持つ自動の配信は、手動の開始と同じ区分で対象を選ぶ(段0 の G48) ---
+Db::run("UPDATE edu_deliveries SET status = 'done' WHERE id = ?", [$quietDeliveryId]);
+$riskCampaignId = enrollCampaign();
+$riskDeliveryId = enrollDelivery(['send_invites' => 0, 'phish_campaign_id' => $riskCampaignId]);
+Db::run("UPDATE edu_deliveries SET risk_results = '[\"reported\"]' WHERE id = ?", [$riskDeliveryId]);
+$clickerId = enrollTarget('clicker@example.test');
+$reporterId = enrollTarget('reporter@example.test');
+enrollFailure($riskCampaignId, $clickerId, '1000000021', '2026-07-03 10:00:00');
+Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, koban, send_status) VALUES (?, ?, '1000000022', ?, 'sent')",
+    [$riskCampaignId, $reporterId, $reporterId]);
+Db::run("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source)
+         VALUES (1, ?, '1000000022', 'report', '2026-07-03 11:00:00', 'report_mail')", [$riskCampaignId]);
+EduAutoEnroll::run();
+$riskAssigned = array_map(static fn(array $r): int => (int) $r['target_id'],
+    Db::all('SELECT target_id FROM edu_assignments WHERE delivery_id = ? ORDER BY target_id', [$riskDeliveryId]));
+check($riskAssigned === [$reporterId], 'risk_results=報告した の自動の配信は、報告した人だけを割り当てる(クリックした人は入れない)');
+Db::run("UPDATE edu_deliveries SET status = 'done' WHERE id = ?", [$riskDeliveryId]);
+
 // --- EduQuestionPicker: テナント固有設問を共有より優先する ---
 $tenantQuestionId = enrollTenantQuestion(1, $categoryId, 1);
 $pickerDelivery = [

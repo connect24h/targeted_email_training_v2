@@ -263,11 +263,18 @@ final class EduDeliveryLauncher
      * risk の対象。結果の区分(risk_results)があればその区分、なければ従来どおり訓練で失敗
      * (auth or click)した実対象者(キャンペーンの指定がなければテナント全体)。
      */
+    /** 配信が訓練の結果の区分(risk_results)で対象を選ぶか。自動の投入(EduAutoEnroll)も同じ判定を使う。 */
+    public static function hasRiskResults(array $delivery): bool
+    {
+        $results = json_decode((string) ($delivery['risk_results'] ?? ''), true);
+        return is_array($results) && $results !== [];
+    }
+
     private static function riskTargets(array $delivery, int $tenantId): array
     {
         $campaignId = $delivery['phish_campaign_id'] !== null ? (int) $delivery['phish_campaign_id'] : 0;
         $results = json_decode((string) ($delivery['risk_results'] ?? ''), true);
-        if (is_array($results) && $results !== []) {
+        if (self::hasRiskResults($delivery)) {
             if ($campaignId < 1) {
                 throw new EduDeliveryError('訓練の結果で対象を選ぶときは、キャンペーンの指定が必要です', 400);
             }
