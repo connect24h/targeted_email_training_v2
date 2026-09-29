@@ -122,17 +122,28 @@ test('started delivery is retained without offering deletion', async () => {
 
 // ---- 教育の配信の機能(予約、毎月、役職、訓練の結果、新入社員、案内メール) ----
 const payloadSource = app.slice(app.indexOf('function eduCheckedValues('), app.indexOf('async function newEduDelivery('));
+// 受講の設定(選択肢の並べ替えなど)は作成と編集の画面で共通の関数から読む。
+const optionSource = app.slice(app.indexOf('const EDU_DELIVERY_OPTIONS = ['), app.indexOf('/** 毎月の配信(系列)'));
 function fakeForm(values = {}) {
   const defaults = {
     title: '配信', delivery_type: 'awareness_quiz', feedback_mode: 'immediate', target_type: 'all',
     question_count: '3', pass_score: '80', material_id: '', auto_enroll: false, send_invites: false,
     scheduled_at: '', deadline: '', phish_campaign_id: '', new_target_days: '30', repeat_monthly: false,
     day_of_month: '1', time_of_day: '09:00', deadline_days: '14', end_date: '',
+    allow_retake_after_pass: false,
     category_ids: [], target_ids: [], target_positions: [], risk_results: [],
+    // 受講の設定(data-edu-option のチェックボックス)。値は新しい配信の画面の既定。
+    options: { shuffle_options: true, lock_material_during_test: false, allow_after_deadline: false, retake_from_test: false },
   };
-  const v = { ...defaults, ...values };
+  const { options: optionValues = {}, ...rest } = values;
+  const v = { ...defaults, ...rest };
+  const options = { ...defaults.options, ...optionValues };
+  delete v.options;
   const form = {
     querySelectorAll: (selector) => {
+      if (selector === '[data-edu-option]') {
+        return Object.entries(options).map(([key, checked]) => ({ dataset: { eduOption: key }, checked }));
+      }
       const name = /name="([^"]+)"/.exec(selector)[1];
       return (v[name] || []).map((value) => ({ value }));
     },
@@ -146,6 +157,7 @@ function fakeForm(values = {}) {
 }
 function payloadContext() {
   const context = vm.createContext({ POSITION_CATEGORIES: ['役員', '管理職', '一般従業員'] });
+  vm.runInContext(optionSource, context);
   vm.runInContext(payloadSource, context);
   return context;
 }
@@ -154,6 +166,17 @@ test('案内メールは既定で送らず、選んだときだけ send_invites 
   const c = payloadContext();
   assert.equal(c.eduDeliveryPayload(fakeForm()).send_invites, false);
   assert.equal(c.eduDeliveryPayload(fakeForm({ send_invites: true })).send_invites, true);
+  // 合格後の再受講と受講の設定も、画面の値のまま送る
+  const body = c.eduDeliveryPayload(fakeForm());
+  assert.equal(body.allow_retake_after_pass, false);
+  assert.equal(body.shuffle_options, true);
+  assert.equal(body.lock_material_during_test, false);
+  assert.equal(body.allow_after_deadline, false);
+  assert.equal(body.retake_from_test, false);
+  const custom = c.eduDeliveryPayload(fakeForm({ allow_retake_after_pass: true, options: { shuffle_options: false, allow_after_deadline: true } }));
+  assert.equal(custom.allow_retake_after_pass, true);
+  assert.equal(custom.shuffle_options, false);
+  assert.equal(custom.allow_after_deadline, true);
 });
 
 test('予約の日時と締切を送り、毎月くり返すときは系列の作成を使う', () => {
