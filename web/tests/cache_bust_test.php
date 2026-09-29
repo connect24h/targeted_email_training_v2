@@ -24,7 +24,7 @@ $index = (string) file_get_contents($webDir . '/index.html');
 echo "=== cache-bust integrity ===\n";
 
 // tet2-cache-bust.sh の ASSETS と一致させること。
-$assets = ['app.js', 'assets/app.css', 'assets/campaign-automations.js', 'assets/positions.js', 'assets/risk-dashboard.js', 'assets/suspicious-mails.js', 'assets/context-help.js', 'assets/campaign-workspace.js', 'assets/campaign-editor-steps.js', 'assets/notification-templates.js'];
+$assets = ['app.js', 'assets/app.css', 'assets/campaign-automations.js', 'assets/positions.js', 'assets/risk-dashboard.js', 'assets/suspicious-mails.js', 'assets/context-help.js', 'assets/campaign-workspace.js', 'assets/campaign-editor-steps.js', 'assets/notification-templates.js', 'assets/sending-da.js'];
 
 foreach ($assets as $rel) {
     $path = $webDir . '/' . $rel;
