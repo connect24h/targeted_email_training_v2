@@ -18,6 +18,12 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('dialog', (d) => d.accept());
 const go = (view) => page.locator(`.app-sidebar [data-view="${view}"]`).click();
 const closeModal = async () => {
+  // 開く途中(フェードイン中)に閉じる操作をすると Bootstrap が無視するので、開き切るのを待ってから閉じる
+  await page.waitForFunction(() => {
+    const el = document.getElementById('appModal');
+    const m = el && window.bootstrap?.Modal.getInstance(el);
+    return !!m && el.classList.contains('show') && !m._isTransitioning;
+  });
   await page.locator('#appModal .modal-footer [data-bs-dismiss="modal"]').click();
   await page.locator('#appModal').waitFor({ state: 'hidden', timeout: 5000 });
 };
