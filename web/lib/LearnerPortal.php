@@ -129,6 +129,8 @@ final class LearnerPortal
                 // 期限は過ぎたが、期限の後の受講を認める配信なので受講できる(完了は期限後として記録される)
                 'past_deadline' => !$expired && (EduAttempts::isExpired($r['token_expiry']) || EduAttempts::isExpired($r['deadline'])),
                 'attempt_count' => count($submitted),
+                // 受けた回の教材の版(G20)。最新の提出の回の版。未受講は NULL。
+                'material_version' => $latest !== null && $latest['material_version'] !== null ? (int) $latest['material_version'] : null,
                 'attempts' => array_map(static fn(array $t): array => [
                     'attempt_no' => (int) $t['attempt_no'],
                     'is_retake' => (int) $t['is_retake'] === 1,

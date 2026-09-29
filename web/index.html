@@ -477,6 +477,12 @@
           報告用アドレスに転送された訓練メール以外のメールと、ここでアップロードした .eml を解析します。
           訓練メールの照合結果（確定・却下）は「ログ管理 → 報告メール」で扱います。リンクは表示のみでクリックできません。
         </div>
+        <details class="card mb-3" id="smDashboardCard">
+          <summary class="card-header">報告のダッシュボード（月ごとの件数、訓練と実メールの別、確認までの時間）</summary>
+          <div class="card-body" id="smDashboardBody">
+            <div class="small text-muted">開くと集計を読み込みます。</div>
+          </div>
+        </details>
         <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
           <span id="smStatusCounts"></span>
           <select class="form-select form-select-sm" id="smStatusFilter" style="width:auto" aria-label="確認状況">
@@ -1011,13 +1017,13 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=4f9aaf07"></script>
+<script src="app.js?v=b4a9ed97"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
-<script src="assets/suspicious-mails.js?v=a1a6f063"></script>
+<script src="assets/suspicious-mails.js?v=69293ad2"></script>
 <script src="assets/surveys.js?v=80becb08"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
 </body>

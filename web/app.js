@@ -1097,16 +1097,112 @@ async function renderMasters() {
     <div class="card mb-3"><div class="card-header py-2 small fw-bold">認証画面マスタ（全テナント共通${canEditAuth ? '' : '・閲覧のみ'}）</div>
       <div class="card-body"><div class="row">${authCards}</div>
         <p class="small text-muted mb-0">Box/Microsoft365/デジタルアーツ等の偽ログイン画面。全テナント共通で、変更はシステム管理者のみ。</p></div></div>
-    <div class="card"><div class="card-header py-2 small fw-bold">種明かし画面（テナント別）</div>
+    <div class="card mb-3"><div class="card-header py-2 small fw-bold">種明かし画面（既定・テナント別）</div>
       <div class="card-body">
-        <p class="small text-muted">訓練の種明かし・啓発ページ。認証後やQRコードの遷移先。テナントごとに差し替えできます（自社の問い合わせ先・ロゴ入り等）。</p>
+        <p class="small text-muted">訓練の種明かし・啓発ページの<strong>既定</strong>。認証後やQRコードの遷移先で、キャンペーンでページを選ばない時に使います。テナントごとに差し替えできます（自社の問い合わせ先・ロゴ入り等）。</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" onclick="viewMaster('reveal','reveal.html')"><i class="bi bi-eye me-1"></i>現在の内容を表示</button>
           <button class="btn btn-sm btn-outline-info" onclick="viewMaster('auth','master.html')"><i class="bi bi-file-earmark-text me-1"></i>共通の種明かしをプレビュー</button>
           <button class="btn btn-sm btn-outline-secondary" onclick="downloadMaster('reveal','reveal.html')"><i class="bi bi-download me-1"></i>ダウンロード</button>
           <button class="btn btn-sm btn-primary" data-perm="operator" onclick="editMaster('reveal','reveal.html')"><i class="bi bi-pencil me-1"></i>修正</button>
         </div>
+      </div></div>
+    <div class="card"><div class="card-header py-2 small fw-bold d-flex justify-content-between align-items-center">
+        <span>種明かしページ（複数・キャンペーンごとに選択）</span>
+        <button class="btn btn-sm btn-outline-primary" data-perm="operator" onclick="addRevealPage()"><i class="bi bi-plus-lg me-1"></i>ページを追加</button>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">名前を付けた種明かしページを複数持て、キャンペーンの「送信環境」で選べます。選ばないキャンペーンは上の既定を使います。検証は既定の種明かしと同じ（script・onclick・iframe 等は不可）。</p>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th>名前</th><th>更新日時</th><th class="text-end">操作</th></tr></thead>
+          <tbody id="revealPagesBody"><tr><td colspan="3" class="small text-muted">読み込み中…</td></tr></tbody>
+        </table></div>
       </div></div>`;
+  loadRevealPagesList().catch(() => {});
+}
+
+/* ---- 種明かしページ(複数・G29) ---- */
+const RevealPagesState = { rows: {} };
+
+async function loadRevealPagesList() {
+  const body = $('#revealPagesBody');
+  if (!body) return;
+  let data;
+  try {
+    data = await api('api/master_upload.php', { query: { action: 'reveal_list' } });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="3" class="small text-danger">${esc(e.message)}</td></tr>`;
+    return;
+  }
+  RevealPagesState.rows = {};
+  for (const p of data.pages) RevealPagesState.rows[p.id] = p;
+  const canEdit = ['operator', 'tenant_admin', 'superadmin'].includes(State.user?.role);
+  body.innerHTML = data.pages.length ? data.pages.map((p) => `
+    <tr data-reveal-id="${Number(p.id)}"><td class="text-break">${esc(p.name)}</td>
+      <td class="small text-nowrap">${esc(fmtDate(p.updated_at))}</td>
+      <td class="text-end text-nowrap">
+        <button class="btn btn-sm btn-outline-secondary" onclick="viewRevealPage(${Number(p.id)})"><i class="bi bi-eye"></i> 表示</button>
+        ${canEdit ? `<button class="btn btn-sm btn-outline-primary" onclick="editRevealPage(${Number(p.id)})"><i class="bi bi-pencil"></i> 修正</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteRevealPage(${Number(p.id)})" aria-label="ページを削除"><i class="bi bi-trash"></i></button>` : ''}
+      </td></tr>`).join('') : '<tr><td colspan="3" class="small text-muted">まだページがありません。</td></tr>';
+}
+
+function revealPageForm(name = '', html = '') {
+  return `<form id="revealPageForm">
+    <div class="mb-2"><label class="form-label">ページ名</label>
+      <input class="form-control" name="name" maxlength="100" required value="${esc(name)}" placeholder="例: 営業部向けの種明かし"></div>
+    <div class="mb-2"><label class="form-label">HTML</label>
+      <textarea class="form-control font-monospace" name="html" rows="14" required placeholder="<!DOCTYPE html> ...">${esc(html)}</textarea>
+      <div class="form-text">script・onclick 等のイベントハンドラ・iframe・object・embed・meta refresh は使えません。</div></div>
+  </form>`;
+}
+
+async function saveRevealPage(id, form) {
+  const name = form.name.value.trim();
+  const html = form.html.value;
+  const body = { name, html };
+  if (id) body.id = Number(id);
+  if (State.user && State.user.role === 'superadmin' && State.activeTenantId) body.tenant_id = Number(State.activeTenantId);
+  await api('api/master_upload.php', { method: 'POST', query: { action: 'reveal_page_save' }, body });
+  toast(id ? 'ページを更新しました' : 'ページを追加しました', 'ok');
+  await loadRevealPagesList();
+}
+
+function addRevealPage() {
+  showModal('種明かしページを追加', revealPageForm(), async () => {
+    await saveRevealPage(null, document.getElementById('revealPageForm'));
+  });
+}
+
+async function editRevealPage(id) {
+  let r;
+  try {
+    r = await api('api/master_upload.php', { query: { action: 'reveal_page_get', id } });
+  } catch (e) { toast(e.message, 'err'); return; }
+  showModal('種明かしページを修正', revealPageForm(r.name, r.content), async () => {
+    await saveRevealPage(id, document.getElementById('revealPageForm'));
+  });
+}
+
+async function viewRevealPage(id) {
+  let r;
+  try {
+    r = await api('api/master_upload.php', { query: { action: 'reveal_page_get', id } });
+  } catch (e) { toast(e.message, 'err'); return; }
+  const body = `<div class="mb-2 small text-muted">${esc(r.name)}</div>
+    <pre class="border rounded p-2 bg-light small" style="white-space:pre-wrap;max-height:60vh;overflow:auto">${esc(r.content || '(空)')}</pre>`;
+  showModal('種明かしページ', body, async () => {}, { saveLabel: '閉じる' });
+}
+
+async function deleteRevealPage(id) {
+  const p = RevealPagesState.rows[id];
+  if (!p) return;
+  if (!confirm(`種明かしページ「${p.name}」を削除しますか？\nこのページを選んでいるキャンペーンは既定に戻ります。`)) return;
+  try {
+    await api('api/master_upload.php', { method: 'POST', query: { action: 'reveal_page_delete' }, body: { id: Number(id) } });
+    toast('ページを削除しました', 'ok');
+    await loadRevealPagesList();
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 /* ========== ログ管理 (P8) ========== */
@@ -1952,12 +2048,13 @@ async function loadCampaignFile(file, btn) {
 
 async function openCampaignModal(campaignId = null, initialStep = 0) {
   const isEdit = campaignId !== null;
-  const [tpls, tgts, grps, beacons, campaigns] = await Promise.all([
+  const [tpls, tgts, grps, beacons, campaigns, revealPages] = await Promise.all([
     api('api/templates.php', { query: { action: 'list' } }),
     api('api/targets.php', { query: { action: 'list' } }),
     api('api/groups.php', { query: { action: 'list' } }),
     api('api/campaigns.php', { query: { action: 'beacon_bases' } }),
     api('api/campaigns.php', { query: { action: 'list' } }),
+    api('api/master_upload.php', { query: { action: 'reveal_list' } }).catch(() => ({ pages: [] })),
   ]);
   // 編集時は既存キャンペーンの値を取得してプリフィルする。
   let editData = null;
@@ -1994,6 +2091,9 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
   const campaignImportOptions = importableCampaigns.map((campaign) =>
     `<option value="${Number(campaign.id)}">${esc(campaign.name)}（${Number(campaign.content_count)}件）</option>`
   ).join('');
+  // 種明かしページの選択(G29)。既定は従来どおりテナントの reveal.html。
+  const revealPageOptions = ['<option value="">既定（テナントの種明かしページ）</option>']
+    .concat((revealPages.pages || []).map((p) => `<option value="${Number(p.id)}">${esc(p.name)}</option>`)).join('');
   const body = `
     <form id="campaignForm">
       <section class="campaign-editor-section" data-campaign-step="basic"><h3 tabindex="-1">基本情報</h3>
@@ -2029,6 +2129,12 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
           </div>
           <datalist id="beaconBaseList">${beaconList.map((b) => `<option value="${esc(b)}"></option>`).join('')}</datalist>
           <div class="form-text" id="beaconCheckResult"></div>
+        </div>
+      </div>
+      <div class="row g-2">
+        <div class="col-md-12 mb-2"><label class="form-label">種明かしページ</label>
+          <select class="form-select" name="reveal_page_id">${revealPageOptions}</select>
+          <div class="form-text">認証なし（種明かし直行）のリンク／QR と、認証後の遷移先に表示するページです。選ばない場合はテナントの既定（reveal.html）を使います。ページは「不審メール」画面などの種明かし管理から追加できます。</div>
         </div>
       </div>
       </section>
@@ -2178,6 +2284,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       weekdays_only: f.weekdays_only.checked,
       is_test: f.is_test.checked,
       content_delivery: f.content_delivery ? f.content_delivery.value : 'distribute',
+      reveal_page_id: (f.reveal_page_id && f.reveal_page_id.value) ? Number(f.reveal_page_id.value) : null,
       test_redirect_emails: (f.test_redirect_emails && f.test_redirect_emails.value.trim()) || null,
       start_at: f.start_at.value.replace('T', ' '),
       end_at: f.end_at.value.replace('T', ' '),
@@ -2443,6 +2550,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     f.weekdays_only.checked = Number(c.weekdays_only) === 1;
     f.is_test.checked = Number(c.is_test) === 1;
     if (f.content_delivery) f.content_delivery.value = c.content_delivery || 'distribute';
+    if (f.reveal_page_id) f.reveal_page_id.value = c.reveal_page_id != null ? String(c.reveal_page_id) : '';
     if (f.test_redirect_emails && c.test_redirect_emails) f.test_redirect_emails.value = c.test_redirect_emails;
     toggleTestRedirect();  // is_test の状態に応じてテスト宛先欄の表示を更新
     // 対象者を選択状態にする。
@@ -4861,7 +4969,7 @@ function renderEduRepPeople() {
         <td>${esc(p.name || p.email)}${Number(p.is_test) === 1 ? ' <span class="badge bg-light text-dark border">テスト</span>' : ''}<div class="small text-muted">${esc(p.email)}</div></td>
         <td>${esc(p.department)}</td><td>${p.score === null ? '—' : `${Number(p.score)}%`}</td>
         <td>${eduPassedCell(p)}</td><td>${Number(p.attempt_count)}</td>
-        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}${p.late ? ' <span class="small text-muted">（期限後）</span>' : ''}</td></tr>`).join('');
+        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}${p.late ? ' <span class="small text-muted">（期限後）</span>' : ''}${p.material_version ? ` <span class="small text-muted">教材v${Number(p.material_version)}</span>` : ''}</td></tr>`).join('');
   });
 }
 function renderEduRepDepts() {
@@ -4976,7 +5084,7 @@ function renderEduRepPerson() {
       <tr><td>${esc(p.delivery_title)}<div class="small text-muted">${esc(EDU_DTYPE[p.delivery_type] || p.delivery_type)}</div></td>
         <td>${eduAssignStatusBadge(p.status)}</td><td>${p.score === null ? '—' : `${Number(p.score)}%`}</td>
         <td>${eduPassedCell(p)}</td><td>${Number(p.attempt_count)}</td>
-        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}${p.late ? ' <span class="small text-muted">（期限後）</span>' : ''}</td></tr>`).join('')
+        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}${p.late ? ' <span class="small text-muted">（期限後）</span>' : ''}${p.material_version ? ` <span class="small text-muted">教材v${Number(p.material_version)}</span>` : ''}</td></tr>`).join('')
       : emptyRow(7);
   });
 }

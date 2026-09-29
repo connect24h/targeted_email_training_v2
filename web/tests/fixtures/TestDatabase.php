@@ -36,6 +36,8 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-suspicious-mail-rules.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-measurement.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-ops-b2a.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-reveal-pages.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-material-versions.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

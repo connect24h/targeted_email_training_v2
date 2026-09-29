@@ -540,7 +540,10 @@ function edu_rep_assignment_rows(int $tenantId, array $filter): array
         "SELECT a.id AS assignment_id, a.delivery_id, a.target_id, a.status, a.completed_at, a.token_expiry,
                 d.title AS delivery_title, d.delivery_type, d.pass_score, d.deadline,
                 t.name, t.email, t.department, t.is_test,
-                r.percentage, COALESCE(att.n, 0) AS attempt_count
+                r.percentage, COALESCE(att.n, 0) AS attempt_count,
+                (SELECT tt.material_version FROM edu_attempts tt
+                  WHERE tt.assignment_id = a.id AND tt.completed_at IS NOT NULL
+                  ORDER BY tt.attempt_no DESC LIMIT 1) AS material_version
          FROM edu_assignments a
          INNER JOIN edu_deliveries d ON d.id = a.delivery_id AND d.tenant_id = a.tenant_id
          INNER JOIN targets t ON t.id = a.target_id AND t.tenant_id = a.tenant_id
@@ -580,6 +583,7 @@ function edu_rep_present_person(array $row): array
         'on_time' => $judge['on_time'],
         'late' => $judge['late'],
         'attempt_count' => (int) $row['attempt_count'],
+        'material_version' => isset($row['material_version']) && $row['material_version'] !== null ? (int) $row['material_version'] : null,
         'deadline' => $judge['deadline'],
         'completed_at' => $row['completed_at'],
     ];

@@ -163,6 +163,17 @@ final class SuspiciousMailStore
             return ['id' => $id, 'changed' => []];
         }
         $now = date('Y-m-d H:i:s');
+        // 確認までの時間の計測(G11/G39)。状態が open から初めて変わった時刻と、初めて resolved になった時刻を残す。
+        if (isset($changed['status'])) {
+            if ($row['first_action_at'] === null && (string) $changed['status']['new'] !== 'open') {
+                $sets[] = 'first_action_at=?';
+                $params[] = $now;
+            }
+            if ($row['resolved_at'] === null && (string) $changed['status']['new'] === 'resolved') {
+                $sets[] = 'resolved_at=?';
+                $params[] = $now;
+            }
+        }
         $sets[] = 'updated_at=?';
         $params[] = $now;
         $params[] = $id;
@@ -281,6 +292,113 @@ final class SuspiciousMailStore
             $result[$target['kind']][$target['key']] = $row;
         }
         return $result;
+    }
+
+    /** 確認までの時間の分布のバケツ(時間)。上端は含まない([0,1),[1,4),[4,24),[24,72),[72,∞))。 */
+    private const HOUR_BUCKETS = [
+        ['label' => '1時間未満', 'max' => 1],
+        ['label' => '1〜4時間', 'max' => 4],
+        ['label' => '4〜24時間', 'max' => 24],
+        ['label' => '1〜3日', 'max' => 72],
+        ['label' => '3日以上', 'max' => null],
+    ];
+
+    /**
+     * 報告のダッシュボード(G11/G39)。テナントの範囲は一覧と同じ($tenantId が null なら全テナント横断)。
+     * - months: 直近12ヶ月の受付件数(訓練メール/実メール別)。
+     * - status_counts: 状況の内訳。
+     * - first_action / resolved: 受付(created_at)から初動/対応済までの時間の、中央値・平均・件数・分布。
+     * @return array<string,mixed>
+     */
+    public static function dashboard(?int $tenantId): array
+    {
+        $scope = $tenantId === null ? '1=1' : 'tenant_id=?';
+        $sp = $tenantId === null ? [] : [$tenantId];
+
+        // 直近12ヶ月(当月を含む)。ゼロの月も並べる。
+        $months = [];
+        $index = [];
+        $cursor = new DateTimeImmutable(date('Y-m-01'));
+        $start = $cursor->modify('-11 months');
+        for ($i = 0; $i < 12; $i++) {
+            $ym = $start->modify('+' . $i . ' months')->format('Y-m');
+            $index[$ym] = $i;
+            $months[$i] = ['month' => $ym, 'training' => 0, 'real' => 0];
+        }
+        $rows = Db::all(
+            "SELECT strftime('%Y-%m', received_at) AS ym,
+                    SUM(CASE WHEN is_training=1 THEN 1 ELSE 0 END) AS training,
+                    SUM(CASE WHEN is_training=0 THEN 1 ELSE 0 END) AS real_mail
+             FROM suspicious_mails WHERE $scope AND received_at >= ? GROUP BY ym",
+            [...$sp, $start->format('Y-m-d 00:00:00')]
+        );
+        foreach ($rows as $r) {
+            if (isset($index[$r['ym']])) {
+                $months[$index[$r['ym']]]['training'] = (int) $r['training'];
+                $months[$index[$r['ym']]]['real'] = (int) $r['real_mail'];
+            }
+        }
+
+        $statusRows = Db::all("SELECT status, COUNT(*) n FROM suspicious_mails WHERE $scope GROUP BY status", $sp);
+        $statusCounts = array_column($statusRows, 'n', 'status');
+
+        $firstHours = self::elapsedHours($scope, $sp, 'first_action_at');
+        $resolvedHours = self::elapsedHours($scope, $sp, 'resolved_at');
+        $totals = Db::one("SELECT COUNT(*) total, SUM(CASE WHEN is_training=1 THEN 1 ELSE 0 END) training,
+                           SUM(CASE WHEN is_training=0 THEN 1 ELSE 0 END) real_mail FROM suspicious_mails WHERE $scope", $sp);
+
+        return [
+            'months' => array_values($months),
+            'status_counts' => ['open' => (int) ($statusCounts['open'] ?? 0), 'in_progress' => (int) ($statusCounts['in_progress'] ?? 0),
+                'resolved' => (int) ($statusCounts['resolved'] ?? 0)],
+            'total' => (int) ($totals['total'] ?? 0),
+            'training_total' => (int) ($totals['training'] ?? 0),
+            'real_total' => (int) ($totals['real_mail'] ?? 0),
+            'first_action' => self::timeMetrics($firstHours),
+            'resolved' => self::timeMetrics($resolvedHours),
+        ];
+    }
+
+    /** created_at から $column までの経過時間(時間)。両方あり、$column>=created_at の行だけ。 */
+    private static function elapsedHours(string $scope, array $sp, string $column): array
+    {
+        $rows = Db::all(
+            "SELECT (julianday($column) - julianday(created_at)) * 24.0 AS hours
+             FROM suspicious_mails WHERE $scope AND $column IS NOT NULL AND created_at IS NOT NULL
+               AND julianday($column) >= julianday(created_at)",
+            $sp
+        );
+        return array_map(static fn(array $r): float => (float) $r['hours'], $rows);
+    }
+
+    /** @param list<float> $hours */
+    private static function timeMetrics(array $hours): array
+    {
+        $buckets = array_map(static fn(array $b): array => ['label' => $b['label'], 'count' => 0], self::HOUR_BUCKETS);
+        foreach ($hours as $h) {
+            foreach (self::HOUR_BUCKETS as $i => $b) {
+                if ($b['max'] === null || $h < $b['max']) {
+                    $buckets[$i]['count']++;
+                    break;
+                }
+            }
+        }
+        $count = count($hours);
+        return [
+            'count' => $count,
+            'median_hours' => $count === 0 ? null : round(self::median($hours), 1),
+            'avg_hours' => $count === 0 ? null : round(array_sum($hours) / $count, 1),
+            'buckets' => $buckets,
+        ];
+    }
+
+    /** @param list<float> $values */
+    private static function median(array $values): float
+    {
+        sort($values);
+        $n = count($values);
+        $mid = intdiv($n, 2);
+        return $n % 2 === 1 ? $values[$mid] : ($values[$mid - 1] + $values[$mid]) / 2;
     }
 
     /* ---------- 内部 ---------- */

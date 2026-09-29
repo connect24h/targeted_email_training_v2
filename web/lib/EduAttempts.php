@@ -17,6 +17,11 @@ require_once __DIR__ . '/Db.php';
 
 final class EduAttempts
 {
+    /** 受講の回を開く時点の教材の版(G20)。配信に教材がなければ NULL。$assignmentId を最後のバインドに渡す。 */
+    private const MATERIAL_VERSION_SUBQUERY =
+        '(SELECT em.version FROM edu_assignments a2 JOIN edu_deliveries d ON d.id = a2.delivery_id '
+        . 'JOIN edu_materials em ON em.id = d.material_id WHERE a2.id = ?)';
+
     public const MSG_NOT_ALLOWED = 'この配信は、完了した後の受け直しを受け付けていません';
     public const MSG_EXPIRED = 'この配信は受講の期限が過ぎているため、受け直せません';
     public const MSG_CLOSED = 'この配信は終了しているため、受け直せません';
@@ -51,9 +56,9 @@ final class EduAttempts
             }
             $next = (int) (Db::one('SELECT MAX(attempt_no) AS n FROM edu_attempts WHERE assignment_id = ?', [$assignmentId])['n'] ?? 0) + 1;
             Db::run(
-                "INSERT INTO edu_attempts (tenant_id, assignment_id, attempt_no, is_retake, started_at)
-                 VALUES (?, ?, ?, ?, datetime('now','localtime'))",
-                [(int) $assignment['tenant_id'], $assignmentId, $next, $isRetake ? 1 : 0]
+                "INSERT INTO edu_attempts (tenant_id, assignment_id, attempt_no, is_retake, started_at, material_version)
+                 VALUES (?, ?, ?, ?, datetime('now','localtime'), " . self::MATERIAL_VERSION_SUBQUERY . ')',
+                [(int) $assignment['tenant_id'], $assignmentId, $next, $isRetake ? 1 : 0, $assignmentId]
             );
             return self::open($assignmentId) ?? throw new RuntimeException('受講の回を作れませんでした');
         });
@@ -90,8 +95,9 @@ final class EduAttempts
         if ($open === null) {
             $next = (int) (Db::one('SELECT MAX(attempt_no) AS n FROM edu_attempts WHERE assignment_id = ?', [$assignmentId])['n'] ?? 0) + 1;
             $id = Db::insert(
-                'INSERT INTO edu_attempts (tenant_id, assignment_id, attempt_no, is_retake, started_at) VALUES (?, ?, ?, 0, ?)',
-                [(int) $assignment['tenant_id'], $assignmentId, $next, $assignment['started_at'] ?? null]
+                'INSERT INTO edu_attempts (tenant_id, assignment_id, attempt_no, is_retake, started_at, material_version) VALUES (?, ?, ?, 0, ?, '
+                . self::MATERIAL_VERSION_SUBQUERY . ')',
+                [(int) $assignment['tenant_id'], $assignmentId, $next, $assignment['started_at'] ?? null, $assignmentId]
             );
         } else {
             $id = (int) $open['id'];

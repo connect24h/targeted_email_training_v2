@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS suspicious_mails (
     note TEXT,
     analyzer_version INTEGER NOT NULL DEFAULT 1,
     reputation_checked_at TEXT,
+    first_action_at TEXT,                    -- 状態が open から初めて変わった日時(確認までの時間の計測用。G11/G39)
+    resolved_at TEXT,                        -- 状態が初めて resolved になった日時
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     UNIQUE (tenant_id, sha256)

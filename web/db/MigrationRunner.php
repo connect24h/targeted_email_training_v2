@@ -32,6 +32,7 @@ final class MigrationRunner
         '20261021-training-report-options',
         '20261025-measurement-b1',
         '20261027-ops-b2a',
+        '20261028-ops-b2b',
     ];
 
     /**
@@ -281,6 +282,15 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-ops-b2a.sql'));
             return;
         }
+        if ($version === '20261028-ops-b2b') {
+            // 種明かしページの複数管理(G29)、教材の版(G20)、報告のダッシュボードの確認までの時間(G11/G39)。
+            // 列と表を足すだけ。既存の行は変えない。過去の状態変更の履歴から確認までの時間を埋め戻す。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-reveal-pages.sql'));
+            $pdo->exec($this->readSchema('schema-edu-material-versions.sql'));
+            $this->backfillOpsB2b($pdo);
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -337,6 +347,42 @@ final class MigrationRunner
                 $r['total_score'], $r['max_score'], $r['percentage'], $passed, json_encode($list),
             ]);
         }
+    }
+
+    /**
+     * B2B の埋め戻し。何度流しても同じ。
+     * - 既存の教材に版1の履歴行を作る(まだ無ければ)。
+     * - 既存の受講の回に、その配信の教材の今の版(版付けはここから始まるのでどれも1)を写す。
+     * - 不審メールの確認までの時間を、既存の状態変更の履歴から埋める(履歴がある行だけ入る。older rows も履歴があれば含まれる)。
+     */
+    private function backfillOpsB2b(PDO $pdo): void
+    {
+        $pdo->exec(
+            "INSERT INTO edu_material_versions (material_id, version, replaced_at, replaced_by, source_name, page_count)
+             SELECT m.id, COALESCE(m.version, 1), m.created_at, NULL, m.source_name, m.page_count
+             FROM edu_materials m
+             WHERE NOT EXISTS (SELECT 1 FROM edu_material_versions v WHERE v.material_id = m.id)"
+        );
+        $pdo->exec(
+            "UPDATE edu_attempts SET material_version = (
+                 SELECT em.version FROM edu_assignments a
+                 JOIN edu_deliveries d ON d.id = a.delivery_id
+                 JOIN edu_materials em ON em.id = d.material_id
+                 WHERE a.id = edu_attempts.assignment_id)
+             WHERE material_version IS NULL"
+        );
+        $pdo->exec(
+            "UPDATE suspicious_mails SET first_action_at = (
+                 SELECT MIN(h.created_at) FROM suspicious_mail_history h
+                 WHERE h.suspicious_mail_id = suspicious_mails.id AND h.field = 'status')
+             WHERE first_action_at IS NULL"
+        );
+        $pdo->exec(
+            "UPDATE suspicious_mails SET resolved_at = (
+                 SELECT MIN(h.created_at) FROM suspicious_mail_history h
+                 WHERE h.suspicious_mail_id = suspicious_mails.id AND h.field = 'status' AND h.new_value = 'resolved')
+             WHERE resolved_at IS NULL"
+        );
     }
 
     private function applyElearningMaterials(PDO $pdo): void
@@ -495,6 +541,7 @@ final class MigrationRunner
                 'credential_capture_approval_ref' => 'TEXT DEFAULT NULL',
                 'test_redirect_emails' => 'TEXT DEFAULT NULL',
                 'attachment_filename' => 'TEXT',
+                'reveal_page_id' => 'INTEGER REFERENCES reveal_pages(id)',
             ],
             'targets' => [
                 'position_category' => 'TEXT',
@@ -533,6 +580,11 @@ final class MigrationRunner
                 'format' => "TEXT NOT NULL DEFAULT 'text_slides'",
                 'page_count' => 'INTEGER NOT NULL DEFAULT 0',
                 'source_name' => 'TEXT',
+                'version' => 'INTEGER NOT NULL DEFAULT 1',
+            ],
+            'suspicious_mails' => [
+                'first_action_at' => 'TEXT',
+                'resolved_at' => 'TEXT',
             ],
             'edu_deliveries' => [
                 'feedback_mode' => "TEXT NOT NULL DEFAULT 'after_submit'",
@@ -548,7 +600,7 @@ final class MigrationRunner
                 'retake_from_test' => 'INTEGER NOT NULL DEFAULT 0',
             ],
             'edu_assignments' => ['last_reminded_at' => 'TEXT'],
-            'edu_attempts' => ['test_started_at' => 'TEXT'],
+            'edu_attempts' => ['test_started_at' => 'TEXT', 'material_version' => 'INTEGER'],
         ];
         foreach ($columns as $table => $definitions) {
             if (!$this->tableExists($pdo, $table)) {

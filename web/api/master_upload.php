@@ -14,45 +14,22 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/../lib/bootstrap.php';
+require_once __DIR__ . '/../lib/RevealPages.php';
 
 const AUTH_MASTER_FILES = ['master.html', 'master2.html', 'master3.html', 'master4.html', 'master5.html'];
 const AUTH_MASTER_DIR   = '/opt/training/bin';
 const REVEAL_FILE       = 'reveal.html';
 
-/** アップロードされた HTML の妥当性を検証(v1 upload_master.php 踏襲)。 */
+/**
+ * アップロードされた HTML の妥当性を検証(v1 upload_master.php 踏襲)。
+ * 規則は RevealPages::validate に一本化し、複数の種明かしページ(G29)と同じ検証を使う。
+ */
 function mu_validate_html(string $html): void
 {
-    if ($html === '') {
-        json_error('内容が空です', 400);
-    }
-    if (strlen($html) > 1024 * 1024) { // 1MB 上限
-        json_error('ファイルが大きすぎます（1MB以内）', 400);
-    }
-    // HTML らしさ(マジック)
-    $lower = strtolower($html);
-    if (strpos($lower, '<html') === false && strpos($lower, '<!doctype') === false) {
-        json_error('HTML ではないようです（<html> か <!DOCTYPE> が必要）', 400);
-    }
-    // 危険要素の粗いブロック(訓練HTMLに script は不要)
-    if (preg_match('/<\s*script\b/i', $html)) {
-        json_error('script タグは使用できません', 400);
-    }
-    if (preg_match('/\son\w+\s*=/i', $html)) {
-        json_error('イベントハンドラ属性（onclick 等）は使用できません', 400);
-    }
-    // 外部読み込み・埋め込み・リダイレクトを行う危険要素を拒否。
-    // ※ <meta http-equiv="Content-Type"> は正当マスタで使うため、refresh のみを狙って拒否する。
-    if (preg_match('/<\s*iframe\b/i', $html)) {
-        json_error('iframe タグは使用できません', 400);
-    }
-    if (preg_match('/<\s*object\b/i', $html)) {
-        json_error('object タグは使用できません', 400);
-    }
-    if (preg_match('/<\s*embed\b/i', $html)) {
-        json_error('embed タグは使用できません', 400);
-    }
-    if (preg_match('/<\s*meta\b[^>]*http-equiv\s*=\s*["\']?\s*refresh/i', $html)) {
-        json_error('meta refresh（自動リダイレクト）は使用できません', 400);
+    try {
+        RevealPages::validate($html);
+    } catch (DomainException $e) {
+        json_error($e->getMessage(), 400);
     }
 }
 
@@ -79,6 +56,53 @@ try {
     $actor  = require_role('operator');
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+    // 複数の種明かしページ(G29)。テナント別なので operator が自組織分を扱える(reveal と同じ権限)。
+    if ($action === 'reveal_list' && $method === 'GET') {
+        $tenantId = effective_tenant_id($actor, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+        json_out(['success' => true, 'pages' => RevealPages::all($tenantId), 'limit' => RevealPages::MAX_PAGES]);
+    }
+
+    if ($action === 'reveal_page_get' && $method === 'GET') {
+        $tenantId = effective_tenant_id($actor, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+        $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+        $row = $id > 0 ? RevealPages::find($id, $tenantId) : null;
+        if ($row === null) {
+            json_error('種明かしページが見つかりません', 404);
+        }
+        $content = RevealPages::content($id, $tenantId);
+        json_out(['success' => true, 'id' => $id, 'name' => $row['name'], 'content' => $content ?? '']);
+    }
+
+    if ($action === 'reveal_page_save' && $method === 'POST') {
+        tet2_require_csrf();
+        $body = json_body();
+        $tenantId = effective_tenant_id($actor, isset($body['tenant_id']) && is_int($body['tenant_id']) ? $body['tenant_id'] : null);
+        $id = isset($body['id']) && is_int($body['id']) && $body['id'] > 0 ? $body['id'] : null;
+        $name = is_string($body['name'] ?? null) ? $body['name'] : '';
+        $html = (string) ($body['html'] ?? '');
+        try {
+            $savedId = RevealPages::save($tenantId, $id, $name, $html, (string) $actor['email']);
+        } catch (DomainException $e) {
+            json_error($e->getMessage(), $e->getCode() ?: 400);
+        }
+        audit('master.upload', 'reveal_page,tenant=' . $tenantId . ',id=' . $savedId);
+        json_out(['success' => true, 'id' => $savedId], $id === null ? 201 : 200);
+    }
+
+    if ($action === 'reveal_page_delete' && $method === 'POST') {
+        tet2_require_csrf();
+        $body = json_body();
+        $tenantId = effective_tenant_id($actor, isset($body['tenant_id']) && is_int($body['tenant_id']) ? $body['tenant_id'] : null);
+        $id = isset($body['id']) && is_int($body['id']) ? $body['id'] : 0;
+        try {
+            RevealPages::delete($id, $tenantId);
+        } catch (DomainException $e) {
+            json_error($e->getMessage(), $e->getCode() ?: 400);
+        }
+        audit('master.upload', 'reveal_page_delete,tenant=' . $tenantId . ',id=' . $id);
+        json_out(['success' => true]);
+    }
 
     if ($action === 'get' && $method === 'GET') {
         $kind = $_GET['kind'] ?? '';

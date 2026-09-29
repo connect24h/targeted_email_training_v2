@@ -46,14 +46,22 @@ try {
     $masterPath = getenv('TET2_DB_PATH') !== false
         ? __DIR__ . '/../../bin/master.html' : '/opt/training/bin/master.html';
     $tenant = Db::one(
-        'SELECT t.data_dir FROM campaign_targets ct
+        'SELECT t.data_dir, c.reveal_page_id FROM campaign_targets ct
            JOIN campaigns c ON c.id=ct.campaign_id AND c.deleted_at IS NULL
            JOIN tenants t ON t.id=c.tenant_id WHERE ct.tracking_id=?',
         [$trackingId]
     );
     if ($tenant !== null) {
-        $candidate = rtrim((string) $tenant['data_dir'], '/') . '/reveal.html';
-        if (is_file($candidate) && is_readable($candidate)) { $masterPath = $candidate; }
+        $dataDir = rtrim((string) $tenant['data_dir'], '/');
+        // 優先順: キャンペーンが選んだ種明かしページ > テナント既定の reveal.html > 共通 master.html(G29)。
+        $selected = $tenant['reveal_page_id'] !== null
+            ? $dataDir . '/reveal-pages/reveal-' . (int) $tenant['reveal_page_id'] . '.html' : null;
+        $default = $dataDir . '/reveal.html';
+        if ($selected !== null && is_file($selected) && is_readable($selected)) {
+            $masterPath = $selected;
+        } elseif (is_file($default) && is_readable($default)) {
+            $masterPath = $default;
+        }
     }
     $stage = 'reveal_page';
     $html = @file_get_contents($masterPath);
