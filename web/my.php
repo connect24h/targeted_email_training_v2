@@ -335,6 +335,7 @@ header('Cache-Control: no-store');
           <dt>受講の開始</dt><dd>${esc(dt(g.started_at)) || '—'}</dd>
           <dt>完了</dt><dd>${esc(dt(g.completed_at)) || '—'}</dd>
           <dt>受講回数</dt><dd class="attempt-count">${g.attempt_count}回</dd>
+          ${g.material_version ? `<dt>教材の版</dt><dd class="material-version">v${Number(g.material_version)}</dd>` : ''}
           ${g.question_count ? `<dt>正解</dt><dd class="correct-count">正解 ${Number(g.correct_count)}/${Number(g.question_count)}</dd>` : ''}
           <dt>期限</dt><dd>${g.deadline ? esc(dt(g.deadline)) + (g.expired ? '（期限切れ）' : (g.past_deadline ? '（期限後も受講できます）' : '')) : '期限なし'}</dd>
         </dl>

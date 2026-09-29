@@ -78,6 +78,7 @@ function edu_m_present(array $row): array
     $row['slide_count'] = count($row['slides']);
     $row['format'] = (string) ($row['format'] ?? 'text_slides');
     $row['page_count'] = (int) ($row['page_count'] ?? 0);
+    $row['version'] = (int) ($row['version'] ?? 1);
     $row['rev'] = edu_m_rev($row['id'], $row['format']);
     return $row;
 }
@@ -114,6 +115,24 @@ function edu_m_find(int $id, int $tenantId): ?array
         'SELECT * FROM edu_materials WHERE id = ? AND (tenant_id = ? OR tenant_id IS NULL)',
         [$id, $tenantId]
     );
+}
+
+/** 教材の版の履歴を1行残す(G20)。版・差し替え日時・差し替えた人・元のファイル名・ページ数を残す(古いページ画像は残さない)。 */
+function edu_m_record_version(int $id, int $version, ?string $sourceName, int $pageCount, string $actor): void
+{
+    Db::run(
+        'INSERT INTO edu_material_versions (material_id, version, replaced_by, source_name, page_count) VALUES (?, ?, ?, ?, ?)',
+        [$id, $version, $actor !== '' ? $actor : null, $sourceName, $pageCount]
+    );
+}
+
+/** 教材の版を1つ上げ、履歴を残し、新しい版を返す(差し替え時に呼ぶ)。 */
+function edu_m_bump_version(int $id, ?string $sourceName, int $pageCount, string $actor): int
+{
+    Db::run("UPDATE edu_materials SET version = version + 1, updated_at = datetime('now','localtime') WHERE id = ?", [$id]);
+    $version = (int) (Db::one('SELECT version FROM edu_materials WHERE id = ?', [$id])['version'] ?? 1);
+    edu_m_record_version($id, $version, $sourceName, $pageCount, $actor);
+    return $version;
 }
 
 function edu_m_handle_list(array $actor): never
@@ -174,6 +193,7 @@ function edu_m_handle_create(array $actor): never
          VALUES (?, ?, ?, ?, 1, 0)',
         [$tenantId, $title, $description, json_encode($slides, JSON_UNESCAPED_UNICODE)]
     );
+    edu_m_record_version($id, 1, null, 0, (string) $actor['email']);
     audit('edu_material.create', 'material_id=' . $id);
     json_out(['success' => true, 'material' => edu_m_present(edu_m_find($id, $tenantId))], 201);
 }
@@ -209,6 +229,10 @@ function edu_m_handle_update(array $actor): never
          slides=COALESCE(?,slides), updated_at=datetime('now','localtime') WHERE id=?",
         [$title, $description, $slides !== null ? json_encode($slides, JSON_UNESCAPED_UNICODE) : null, $id]
     );
+    // 内容(スライド)の差し替えは版を1つ上げる(G20)。題名・説明だけの修正では上げない。
+    if ($slides !== null) {
+        edu_m_bump_version($id, $row['source_name'] ?? null, (int) ($row['page_count'] ?? 0), (string) $actor['email']);
+    }
     audit('edu_material.update', 'material_id=' . $id);
     json_out(['success' => true, 'material' => edu_m_present(edu_m_find($id, $tenantId))]);
 }
@@ -338,6 +362,7 @@ function edu_m_handle_import_pdf(array $actor): never
         );
     });
     EduMedia::discardUpload($uploadId, $tenantId, (int) $actor['id']);
+    edu_m_record_version($id, 1, mb_substr(basename($filename), 0, 200), count($pages), (string) $actor['email']);
     audit('edu_material.import_pdf', 'material_id=' . $id . ' pages=' . count($pages));
     $material = edu_m_present(edu_m_find($id, $tenantId));
     $material['pages'] = edu_m_pages($id);
@@ -391,7 +416,7 @@ function edu_m_handle_replace_pdf(array $actor): never
         json_error($error->getMessage(), 400);
     }
     try {
-        edu_m_store_replaced_pages($id, $pages, $filename);
+        edu_m_store_replaced_pages($id, $pages, $filename, (string) $actor['email']);
     } catch (Throwable $error) {
         EduMedia::discardDir($next);
         throw $error;
@@ -404,10 +429,10 @@ function edu_m_handle_replace_pdf(array $actor): never
     json_out(['success' => true, 'material' => $material]);
 }
 
-/** 差し替えたページを DB に入れる(ページの行を作り直し、教材のページ数と文字を新しくする)。 */
-function edu_m_store_replaced_pages(int $id, array $pages, string $filename): void
+/** 差し替えたページを DB に入れる(ページの行を作り直し、教材のページ数と文字を新しくし、版を1つ上げる)。 */
+function edu_m_store_replaced_pages(int $id, array $pages, string $filename, string $actor): void
 {
-    Db::tx(static function () use ($id, $pages, $filename): void {
+    Db::tx(static function () use ($id, $pages, $filename, $actor): void {
         Db::run('DELETE FROM edu_material_pages WHERE material_id = ?', [$id]);
         foreach ($pages as $p) {
             Db::run(
@@ -424,6 +449,8 @@ function edu_m_store_replaced_pages(int $id, array $pages, string $filename): vo
             "UPDATE edu_materials SET page_count = ?, slides = ?, source_name = ?, updated_at = datetime('now','localtime') WHERE id = ?",
             [count($pages), json_encode($slides, JSON_UNESCAPED_UNICODE), mb_substr(basename($filename), 0, 200), $id]
         );
+        // PDF の差し替えは版を1つ上げる(G20)。
+        edu_m_bump_version($id, mb_substr(basename($filename), 0, 200), count($pages), $actor);
     });
 }
 
