@@ -31,6 +31,7 @@ final class MigrationRunner
         '20261020-edu-delivery-options',
         '20261021-training-report-options',
         '20261025-measurement-b1',
+        '20261027-ops-b2a',
     ];
 
     /**
@@ -273,6 +274,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-measurement.sql'));
             return;
         }
+        if ($version === '20261027-ops-b2a') {
+            // 対象者の従業員番号とメモ(G46)、自動の教育配信の実行履歴(G61)。列と索引と表を足すだけ。
+            // 既存の対象者は従業員番号もメモも空のまま(空の人は一意の索引にかからない)。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-ops-b2a.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -493,6 +501,8 @@ final class MigrationRunner
                 'tenant_no' => 'INTEGER',
                 'archived_at' => 'TEXT DEFAULT NULL',
                 'is_test' => 'INTEGER NOT NULL DEFAULT 0',
+                'employee_no' => 'TEXT DEFAULT NULL',
+                'memo' => 'TEXT DEFAULT NULL',
             ],
             'templates' => ['scenario_key' => 'TEXT', 'description' => 'TEXT'],
             'tenant_security_policies' => ['banned_words' => 'TEXT DEFAULT NULL'],

@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/EduDeliveryLauncher.php';
 require_once __DIR__ . '/EduDeliverySeries.php';
 require_once __DIR__ . '/TenantStatus.php';
+require_once __DIR__ . '/EduAutoEnrollRuns.php';
 
 final class EduScheduler
 {
@@ -39,6 +40,7 @@ final class EduScheduler
     /**
      * 新入社員の配信(triggered_by='new_target' かつ running)に、登録から N 日以内で
      * まだ割当のない対象者を入れる。EduAutoEnroll と同じく、割当は tx で作り、メールは tx の外で送る。
+     * 配信ごとに実行履歴(EduAutoEnrollRuns)を1行残す(締切を過ぎて処理しなかった配信は残さない)。
      *
      * @return array{assigned:int, mail_sent:int}
      */
@@ -56,19 +58,29 @@ final class EduScheduler
             if ($expiry !== null && $expiry <= $current) {
                 continue;
             }
+            $startedAt = EduAutoEnrollRuns::now();
             try {
                 $targetIds = EduDeliveryLauncher::resolveTargets($delivery, $tenantId, $now);
             } catch (EduDeliveryError $e) {
                 self::auditOnce($tenantId, 'edu_scheduler.new_target_failed', $id, 'reason=' . $e->getMessage());
+                EduAutoEnrollRuns::record($tenantId, $id, 'new_target', $startedAt, 0, 0, $e->getMessage());
                 continue;
             }
-            $tokens = Db::txImmediate(static fn(): array => EduDeliveryLauncher::assign($id, $tenantId, $targetIds, $expiry));
+            $tokens = [];
+            try {
+                $tokens = Db::txImmediate(static fn(): array => EduDeliveryLauncher::assign($id, $tenantId, $targetIds, $expiry));
+                $mailSent = $tokens !== [] && (int) $delivery['send_invites'] === 1
+                    ? EduDeliveryLauncher::sendInvites($id, $tenantId, (string) $delivery['title'], $tokens)
+                    : 0;
+            } catch (Throwable $e) {
+                EduAutoEnrollRuns::record($tenantId, $id, 'new_target', $startedAt, count($targetIds), count($tokens),
+                    '内部のエラーで投入を終えられませんでした（サーバーのログを見てください）');
+                throw $e;
+            }
+            EduAutoEnrollRuns::record($tenantId, $id, 'new_target', $startedAt, count($targetIds), count($tokens));
             if ($tokens === []) {
                 continue;
             }
-            $mailSent = (int) $delivery['send_invites'] === 1
-                ? EduDeliveryLauncher::sendInvites($id, $tenantId, (string) $delivery['title'], $tokens)
-                : 0;
             self::audit($tenantId, 'edu_scheduler.new_target_enroll', $id, 'assigned=' . count($tokens) . ',mail=' . $mailSent);
             $result['assigned'] += count($tokens);
             $result['mail_sent'] += $mailSent;

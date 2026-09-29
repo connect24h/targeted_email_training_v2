@@ -2986,6 +2986,9 @@ async function renderTargets() {
   const showArchived = $('#showArchivedTargets')?.checked === true;
   const query = { action: 'list' };
   if (showArchived) query.include_archived = '1';
+  // 検索はメール、氏名、従業員番号、メモの部分一致(サーバーで絞る)
+  const q = ($('#targetSearch')?.value || '').trim();
+  if (q) query.q = q;
   const { targets } = await api('api/targets.php', { query });
   cacheRows('targets', targets);
   // 組織管理者以上には、受講者のマイページの状態と招待の操作を出す
@@ -3016,7 +3019,8 @@ async function renderTargets() {
     <tr${archived ? ' class="text-muted table-light"' : ''}>
       ${selectCell}
       <td>${i + 1}</td>
-      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}${undeliverableBadge(t)}</td>
+      <td class="text-nowrap">${esc(t.employee_no || '')}</td>
+      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}${undeliverableBadge(t)}${t.memo ? `<div class="small text-muted target-memo" title="${esc(t.memo)}"><i class="bi bi-sticky me-1" aria-hidden="true"></i>${esc(t.memo)}</div>` : ''}</td>
       <td>${esc(t.name)}</td>
       <td>${esc(t.company)}</td><td>${esc(t.department)}</td><td>${esc(t.title)}</td>
       <td>${t.position_category ? `<span class="badge bg-light text-dark">${esc(t.position_category)}</span>` : ''}</td>
@@ -3025,7 +3029,7 @@ async function renderTargets() {
       ${myPageCell}
       <td class="text-nowrap">${actions}</td>
     </tr>`;
-  }).join('') : emptyRow(canInvite ? 12 : 10);
+  }).join('') : (q ? eduNoteRow(canInvite ? 13 : 11, '条件に合う対象者がいません') : emptyRow(canInvite ? 13 : 11));
 }
 // 訓練メールが届かなかった記録(段B1)。続けて届かない宛先は警告の色にする。対象者は自動では消さない
 function undeliverableBadge(t) {
@@ -3080,7 +3084,10 @@ async function restoreTarget(id) {
 function targetForm(t = {}) {
   return `<form id="targetForm">
     <div class="mb-2"><label class="form-label">メール</label><input class="form-control" name="email" type="email" value="${esc(t.email)}" required></div>
-    <div class="mb-2"><label class="form-label">氏名</label><input class="form-control" name="name" value="${esc(t.name)}"></div>
+    <div class="row g-2">
+      <div class="col-md-8 mb-2"><label class="form-label">氏名</label><input class="form-control" name="name" value="${esc(t.name)}"></div>
+      <div class="col-md-4 mb-2"><label class="form-label" for="targetEmployeeNo">従業員番号</label><input class="form-control" name="employee_no" id="targetEmployeeNo" maxlength="64" value="${esc(t.employee_no || '')}" aria-describedby="targetEmployeeNoHelp"><div class="form-text" id="targetEmployeeNoHelp">組織の中で重ならない番号。空でもかまいません。</div></div>
+    </div>
     <div class="row g-2">
       <div class="col-md-4 mb-2"><label class="form-label">会社</label><input class="form-control" name="company" value="${esc(t.company)}"></div>
       <div class="col-md-4 mb-2"><label class="form-label">部署</label><input class="form-control" name="department" value="${esc(t.department)}"></div>
@@ -3095,13 +3102,16 @@ function targetForm(t = {}) {
       <input class="form-check-input" type="checkbox" name="is_test" id="cbTargetTest"${Number(t.is_test) === 1 ? ' checked' : ''}>
       <label class="form-check-label" for="cbTargetTest">テストユーザ（レポート集計から除外）</label>
       <div class="form-text">検証用の宛先。訓練配信には使えますが、開封率などの集計には数えません。</div>
-    </div></form>`;
+    </div>
+    <div class="mb-2"><label class="form-label" for="targetMemo">メモ</label><input class="form-control" name="memo" id="targetMemo" maxlength="1000" value="${esc(t.memo || '')}" aria-describedby="targetMemoHelp"><div class="form-text" id="targetMemoHelp">担当者向けのメモ（1行、1000文字まで）。受講者には見えません。</div></div>
+    </form>`;
 }
 function collectTarget() {
   const f = $('#targetForm');
   return { email: f.email.value.trim(), name: f.name.value.trim(), company: f.company.value.trim(),
     department: f.department.value.trim(), title: f.title.value.trim(),
-    position_category: f.position_category.value, is_test: f.is_test.checked };
+    position_category: f.position_category.value, is_test: f.is_test.checked,
+    employee_no: f.employee_no.value.trim(), memo: f.memo.value.trim() };
 }
 function newTarget() {
   showModal('新規対象者', targetForm(), async () => {
@@ -3128,13 +3138,15 @@ async function deleteTarget(id) {
   } catch (e) { toast(e.message, 'err'); }
 }
 function importCsv() {
-  const body = `<p class="small text-muted">1行目にヘッダ（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ または email/name/company/department/title/position_category）。メール列は必須。役職カテゴリは「役員/管理職/一般従業員」のみ有効（旧称「社員」は「一般従業員」として取り込みます）。列が無い場合は役職名から役職マスタを引いて自動補完します。</p>
+  const body = `<p class="small text-muted">1行目にヘッダ（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ/従業員番号/メモ または email/name/company/department/title/position_category/employee_no/memo）。メール列は必須。役職カテゴリは「役員/管理職/一般従業員」のみ有効（旧称「社員」は「一般従業員」として取り込みます）。列が無い場合は役職名から役職マスタを引いて自動補完します。</p>
+    <p class="small text-muted">既存の対象者との照合: 従業員番号が入っている行は<strong>従業員番号で先に</strong>探し、見つかった人のメールアドレスを CSV の値に変えます。番号で見つからなければメールアドレスで探します。従業員番号とメモが空の行は、今の値を残します。</p>
     <textarea class="form-control" id="csvText" rows="8" placeholder="メールアドレス,氏名,部署&#10;taro@example.com,山田太郎,営業部"></textarea>`;
   showModal('CSV 取込', body, async () => {
     const csv = $('#csvText').value.trim();
     if (!csv) throw new Error('CSV を入力してください');
     const r = await api('api/targets.php', { method: 'POST', query: { action: 'import_csv' }, body: { csv } });
-    toast(`取込 ${r.imported} / 更新 ${r.updated} / スキップ ${r.skipped}`, 'ok'); renderTargets();
+    toast(`取込 ${r.imported} / 更新 ${r.updated}${r.email_changed ? `（うちメールアドレスの変更 ${r.email_changed}）` : ''} / スキップ ${r.skipped}`, r.skipped ? 'warn' : 'ok'); renderTargets();
+    (r.errors || []).slice(0, 3).forEach((x) => toast(`${x.line}行目: ${x.reason}`, 'err', 10000));
     if (r.limit_warning) toast(r.limit_warning, 'warn', 8000);
   });
 }
@@ -4676,8 +4688,9 @@ async function deleteEduQuestion(id) {
 
 /* ========== セキュリティ教育: レポート ========== */
 // タブ(概要、配信ごと、受講者ごと、訓練と教育)の状態。配信ごとの詳細は、同じタブの中で一覧と切り替える
-const eduRep = { tab: 'overview', deliveryId: null, sub: 'people', incomplete: false, q: '', learnerQ: '', personId: null, campaignId: null };
-function resetEduRep() { Object.assign(eduRep, { deliveryId: null, personId: null, campaignId: null, incomplete: false, q: '', learnerQ: '' }); }
+const eduRep = { tab: 'overview', deliveryId: null, sub: 'people', incomplete: false, q: '', learnerQ: '', personId: null, campaignId: null,
+  aw: { deliveryId: '', from: '', to: '' } };
+function resetEduRep() { Object.assign(eduRep, { deliveryId: null, personId: null, campaignId: null, incomplete: false, q: '', learnerQ: '', aw: { deliveryId: '', from: '', to: '' } }); }
 const EDU_ASSIGN_STATUS = {
   assigned: ['未受講', 'bg-light text-dark border'], started: ['受講中', 'bg-info text-dark'],
   completed: ['完了', 'bg-success'], expired: ['期限切れ', 'bg-secondary'],
@@ -4713,6 +4726,44 @@ function eduRepCsvUrl(action, extra = {}) {
   if (State.user?.role === 'superadmin' && State.activeTenantId) params.set('tenant_id', State.activeTenantId);
   return `api/edu_report.php?${params}`;
 }
+/** 解答の CSV を落とす。上限で打ち切った時は X-Tet2-Truncated が来るので知らせる。 */
+async function eduRepDownloadAnswers(params, fallbackName) {
+  const qs = new URLSearchParams({ action: 'answers', ...params });
+  if (State.user?.role === 'superadmin' && State.activeTenantId) qs.set('tenant_id', State.activeTenantId);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const res = await fetch(`api/edu_report.php?${qs}`, { credentials: 'same-origin', signal: ctrl.signal });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${res.status}`);
+    }
+    const truncated = res.headers.get('X-Tet2-Truncated');
+    const name = (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || fallbackName;
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    if (truncated) toast(`行が多いため、先頭の ${Number(truncated).toLocaleString()} 行で打ち切りました。期間を短くして分けて出してください`, 'warn', 10000);
+    else toast('CSV を出力しました', 'ok');
+  } catch (e) {
+    toast(`出力に失敗しました（${e.name === 'AbortError' ? '時間切れ' : e.message}）`, 'err');
+  } finally { clearTimeout(timer); }
+}
+async function downloadAllAnswersCsv() {
+  const from = $('#eduRepAnswersFrom').value;
+  const to = $('#eduRepAnswersTo').value;
+  if (!from || !to) return toast('解答の CSV は、提出日の期間（始まりと終わり）を選んでください', 'err');
+  const btn = $('#eduRepAnswersCsvBtn');
+  btn.disabled = true;
+  try { await eduRepDownloadAnswers({ from, to }, 'edu_answers.csv'); } finally { btn.disabled = false; }
+}
+async function downloadDeliveryAnswersCsv() {
+  const btn = $('#eduRepAnswersDeliveryCsv');
+  btn.disabled = true;
+  try { await eduRepDownloadAnswers({ id: String(eduRep.deliveryId) }, `edu_delivery_${eduRep.deliveryId}_answers.csv`); } finally { btn.disabled = false; }
+}
 function eduRepPeopleFilter() {
   return { ...(eduRep.incomplete ? { incomplete: '1' } : {}), ...(eduRep.q ? { q: eduRep.q } : {}) };
 }
@@ -4728,6 +4779,7 @@ async function renderEduReport() {
 function eduRepRenderTab(tab) {
   if (tab === 'deliveries') return eduRep.deliveryId ? renderEduRepDetail() : renderEduRepDeliveries();
   if (tab === 'people') return renderEduRepLearners();
+  if (tab === 'awareness') return renderEduRepAwareness();
   if (tab === 'cross') return renderEduRepCross();
   return Promise.resolve();
 }
@@ -4777,6 +4829,7 @@ function renderEduRepDetail() {
   const jobs = [renderEduRepPeople()];
   if (eduRep.sub === 'depts') jobs.push(renderEduRepDepts());
   if (eduRep.sub === 'questions') jobs.push(renderEduRepQuestions());
+  if (eduRep.sub === 'auto') jobs.push(renderEduRepAuto());
   return Promise.all(jobs);
 }
 function renderEduRepDetailHeader(delivery, s) {
@@ -4784,6 +4837,10 @@ function renderEduRepDetailHeader(delivery, s) {
   $('#eduRepDetailMeta').textContent = [EDU_DTYPE[delivery.delivery_type] || delivery.delivery_type,
     delivery.pass_score !== null ? `合格点 ${delivery.pass_score}%` : '合格点なし',
     `期限 ${delivery.deadline ? fmtDate(delivery.deadline) : 'なし'}`].join(' ・ ');
+  // 自動の投入の履歴は、自動の配信(訓練の失敗、新入社員)だけに出す
+  const auto = Object.hasOwn(EDU_AUTO_SOURCE, delivery.triggered_by || '');
+  $('#eduRepSubItem-auto').classList.toggle('d-none', !auto);
+  if (!auto && eduRep.sub === 'auto') bootstrap.Tab.getOrCreateInstance($('#eduRepSub-people')).show();
   $('#eduRepDetailKpi').innerHTML = [
     { label: '完了 / 対象', value: `${s.completed} / ${s.assigned}`, icon: 'bi-clipboard-check' },
     { label: '未完了', value: s.incomplete, icon: 'bi-hourglass-split', cls: s.incomplete > 0 ? 'val-warning' : '' },
@@ -4827,6 +4884,64 @@ function renderEduRepQuestions() {
     return (r.by_question || []).length ? r.by_question.map((q) => `
       <tr><td>${esc(q.title)}</td><td>難${Number(q.difficulty)}</td><td>${Number(q.correct)}/${Number(q.answered)}</td><td>${eduRate(q.correct_rate)}</td></tr>`).join('')
       : emptyRow(4);
+  });
+}
+
+const EDU_AUTO_SOURCE = { phishing_failure: '訓練の失敗', new_target: '新入社員' };
+function renderEduRepAuto() {
+  const id = eduRep.deliveryId;
+  const load = api('api/edu_report.php', { query: { action: 'auto_runs', id } });
+  const runs = eduRepFill('#eduRepAutoRunsBody', async () => {
+    const r = await load;
+    if (!(r.runs || []).length) return eduNoteRow(6, 'まだ実行の記録がありません');
+    return r.runs.map((x) => `
+      <tr><td class="text-nowrap">${esc(fmtDate(x.started_at))}</td><td class="text-nowrap">${esc(fmtDate(x.finished_at))}</td>
+        <td>${esc(EDU_AUTO_SOURCE[x.source] || x.source)}</td><td>${Number(x.matched_count)}人</td><td>${Number(x.enrolled_count)}人</td>
+        <td>${x.error ? `<span class="text-danger">${esc(x.error)}</span>` : '<span class="text-success">正常</span>'}</td></tr>`).join('');
+  });
+  const learners = eduRepFill('#eduRepAutoLearnersBody', async () => {
+    const r = await load;
+    if (!(r.learners || []).length) return eduNoteRow(5, '当てはまった人はまだいません');
+    return r.learners.map((p) => `
+      <tr><td>${esc(p.name || p.email)}${Number(p.is_test) === 1 ? ' <span class="badge bg-light text-dark border">テスト</span>' : ''}${p.archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}<div class="small text-muted">${esc(p.email)}</div></td>
+        <td>${esc(p.employee_no || '')}</td><td>${esc(p.department)}</td><td class="text-nowrap">${esc(fmtDate(p.matched_at))}</td><td>${eduAssignStatusBadge(p.status)}</td></tr>`).join('');
+  });
+  return Promise.all([runs, learners]);
+}
+
+function eduRepAwFilter() {
+  const f = eduRep.aw;
+  return { ...(f.deliveryId ? { delivery_id: f.deliveryId } : {}), ...(f.from ? { from: f.from } : {}), ...(f.to ? { to: f.to } : {}) };
+}
+function eduRepAwCsvUrl() {
+  const params = new URLSearchParams({ action: 'awareness_people', format: 'csv', ...eduRepAwFilter() });
+  if (State.user?.role === 'superadmin' && State.activeTenantId) params.set('tenant_id', State.activeTenantId);
+  return `api/edu_report.php?${params}`;
+}
+async function renderEduRepAwareness() {
+  const select = $('#eduRepAwDelivery');
+  try {
+    const { deliveries } = await api('api/edu_report.php', { query: { action: 'deliveries' } });
+    const aw = (deliveries || []).filter((d) => d.delivery_type === 'awareness_quiz');
+    if (!aw.some((d) => String(d.id) === eduRep.aw.deliveryId)) eduRep.aw.deliveryId = '';
+    select.innerHTML = '<option value="">すべてのアウェアネスの配信</option>' + aw.map((d) =>
+      `<option value="${Number(d.id)}"${String(d.id) === eduRep.aw.deliveryId ? ' selected' : ''}>${esc(d.title)}（${esc(fmtDate(d.scheduled_at || d.created_at))}）</option>`).join('');
+  } catch (e) { /* 配信の選択肢が読めなくても、全部の配信の成績は出せる */ }
+  return renderEduRepAwarenessRows();
+}
+function renderEduRepAwarenessRows() {
+  $('#eduRepAwCsv').href = eduRepAwCsvUrl();
+  const filter = eduRepAwFilter();
+  return eduRepFill('#eduRepAwBody', async (current) => {
+    const r = await api('api/edu_report.php', { query: { action: 'awareness_people', ...filter } });
+    if (!current()) return '';
+    const s = r.summary || {};
+    $('#eduRepAwNote').textContent = `受講者 ${Number(s.learners || 0)}人 ・ 設問 ${Number(s.total || 0)} ・ 正解 ${Number(s.correct || 0)} ・ 不正解 ${Number(s.incorrect || 0)} ・ 未回答 ${Number(s.unanswered || 0)}`;
+    if (!(r.people || []).length) return eduNoteRow(8, Object.keys(filter).length ? '条件に合う受講者がいません' : 'アウェアネスの配信の割当がまだありません');
+    return r.people.map((p) => `
+      <tr><td>${esc(p.name || p.email)}<div class="small text-muted">${esc(p.email)}${p.employee_no ? ` ・ ${esc(p.employee_no)}` : ''}</div></td>
+        <td>${esc(p.department)}</td><td>${Number(p.completed)} / ${Number(p.deliveries)}</td><td>${Number(p.total)}</td>
+        <td>${Number(p.correct)}</td><td>${Number(p.incorrect)}</td><td>${Number(p.unanswered)}</td><td>${eduRate(p.correct_rate)}</td></tr>`).join('');
   });
 }
 
@@ -4907,7 +5022,14 @@ function bindEduReportControls() {
     eduRep.sub = tab.dataset.eduRepSub;
     if (eduRep.sub === 'depts') renderEduRepDepts();
     if (eduRep.sub === 'questions') renderEduRepQuestions();
+    if (eduRep.sub === 'auto') renderEduRepAuto();
   }));
+  $('#eduRepAnswersCsvBtn')?.addEventListener('click', downloadAllAnswersCsv);
+  $('#eduRepAnswersDeliveryCsv')?.addEventListener('click', downloadDeliveryAnswersCsv);
+  $('#eduRepAwDelivery')?.addEventListener('change', (e) => { eduRep.aw.deliveryId = e.target.value; renderEduRepAwarenessRows(); });
+  for (const [sel, key] of [['#eduRepAwFrom', 'from'], ['#eduRepAwTo', 'to']]) {
+    $(sel)?.addEventListener('change', (e) => { eduRep.aw[key] = e.target.value; renderEduRepAwarenessRows(); });
+  }
   $('#eduRepBackBtn')?.addEventListener('click', closeEduRepDelivery);
   $$('[data-edu-rep-incomplete]').forEach((b) => b.addEventListener('click', () => {
     setEduRepIncomplete(b.dataset.eduRepIncomplete === '1');
@@ -5770,6 +5892,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#exportCsvBtn')?.addEventListener('click', () => exportTargetsCsv(false));
   $('#exportCsvAllBtn')?.addEventListener('click', () => exportTargetsCsv(true));
   $('#showArchivedTargets')?.addEventListener('change', renderTargets);
+  let targetSearchTimer = null;
+  $('#targetSearch')?.addEventListener('input', () => {
+    clearTimeout(targetSearchTimer);
+    targetSearchTimer = setTimeout(renderTargets, 300);
+  });
   $('#inviteMyPageBtn')?.addEventListener('click', () => inviteMyPage($$('#targetsBody .tgt-select:checked').map((el) => Number(el.value))));
   $('#targetsSelectAll')?.addEventListener('change', (ev) => { $$('#targetsBody .tgt-select').forEach((el) => { el.checked = ev.target.checked; }); });
   $('#newGroupBtn').addEventListener('click', newGroup);

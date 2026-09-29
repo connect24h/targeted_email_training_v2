@@ -10,6 +10,9 @@ declare(strict_types=1);
 require_once __DIR__ . '/helpers.php';
 tet2_test_boot();
 load_api('targets');
+// CSV の出力が使う式の無害化(bootstrap の本物)。load_api は bootstrap を読まない
+preg_match('/function tet2_csv_sanitize\(.*?\n\}/s', (string) file_get_contents(__DIR__ . '/../lib/bootstrap.php'), $sanitizer);
+eval($sanitizer[0]);
 
 $tenantId = current_user()['tenant_id'];
 
@@ -74,7 +77,7 @@ if ($other !== null) {
 // 出力副作用のない targets_build_csv を検証(exit/header を伴わない)。
 $csvBody = targets_build_csv($tenantId);
 $exportLines = array_values(array_filter(explode("\n", str_replace("\r", '', $csvBody)), fn($l) => $l !== ''));
-check($exportLines[0] === 'メールアドレス,氏名,会社名,部署,役職,役職カテゴリ', 'export ヘッダーが import と対称(日本語)');
+check($exportLines[0] === 'メールアドレス,氏名,会社名,部署,役職,役職カテゴリ,従業員番号,メモ', 'export ヘッダーが import と対称(日本語)');
 // 既定はアーカイブ除外なので、active/suspended の数 + ヘッダー1行
 $targetCount = (int) Db::one("SELECT COUNT(*) c FROM targets WHERE tenant_id = ? AND status != 'archived'", [$tenantId])['c'];
 check(count($exportLines) === $targetCount + 1, "export 行数 = 非アーカイブ対象者数({$targetCount}) + ヘッダー");
@@ -187,7 +190,7 @@ check(!str_contains($csvDefault, '削除日'), 'export(既定)は削除日列を
 $csvAll = targets_build_csv($tenantId, true);
 check(str_contains($csvAll, 'arch_del@test'), 'include_archived=true でアーカイブ対象者も出力される');
 $allLines = array_values(array_filter(explode("\n", str_replace("\r", '', $csvAll)), fn($l) => $l !== ''));
-check($allLines[0] === 'メールアドレス,氏名,会社名,部署,役職,役職カテゴリ,状態,削除日,テストユーザ', 'include_archived=true のヘッダーに状態・削除日・テストユーザが付く');
+check($allLines[0] === 'メールアドレス,氏名,会社名,部署,役職,役職カテゴリ,従業員番号,メモ,状態,削除日,テストユーザ', 'include_archived=true のヘッダーに状態・削除日・テストユーザが付く');
 $allCount = (int) Db::one('SELECT COUNT(*) c FROM targets WHERE tenant_id = ?', [$tenantId])['c'];
 check(count($allLines) === $allCount + 1, "include_archived=true の行数 = 全対象者数({$allCount}) + ヘッダー");
 // アーカイブ行に削除日が実際に入っている

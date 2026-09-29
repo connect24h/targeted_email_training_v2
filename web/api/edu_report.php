@@ -1,4 +1,6 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
+require_once __DIR__ . '/../lib/EduAnswerReport.php';
+require_once __DIR__ . '/../lib/EduAutoEnrollRuns.php';
 
 /**
  * 教育レポート API(集計・閲覧のみ)。report.php と同じ流儀。
@@ -11,6 +13,9 @@
  * - action=delivery_depts : 配信1件の部署ごと(対象、完了、未完了、合格、合格率、期限内合格率)。format=csv で CSV
  * - action=learners  : 配信の割当がある受講者の検索(受講者ごとのタブの一覧)
  * - action=person    : 受講者1人の配信ごとの状態(配信を横断)
+ * - action=awareness_people: アウェアネスの受講者ごとの正解、不正解、未回答(配信か配信日の期間で絞る)。format=csv で CSV
+ * - action=answers   : 解答の1問1行の CSV。id で配信1件、なければ from と to(提出日)でテナント全体。上限 50000 行
+ * - action=auto_runs : 自動の教育配信(訓練の失敗、新入社員)の実行履歴と、当てはまって入った人
  * すべて viewer 以上。テナント分離を機械付与。
  *
  * 合否と期限の決まり(delivery_people、delivery_depts、deliveries、person で共通):
@@ -622,6 +627,7 @@ function edu_rep_delivery_meta(array $delivery): array
         'deadline' => edu_rep_norm_deadline($delivery['deadline'] ?? null),
         'scheduled_at' => $delivery['scheduled_at'],
         'created_at' => $delivery['created_at'],
+        'triggered_by' => $delivery['triggered_by'],
     ];
 }
 
@@ -673,7 +679,8 @@ function edu_rep_csv(array $header, array $rows): string
     return "\xEF\xBB\xBF" . $csv;
 }
 
-function edu_rep_send_csv(string $filename, string $body, string $auditAction, string $detail): never
+/** @param array<string,string> $extraHeaders 打ち切りの知らせなど */
+function edu_rep_send_csv(string $filename, string $body, string $auditAction, string $detail, array $extraHeaders = []): never
 {
     audit($auditAction, $detail);
     http_response_code(200);
@@ -681,6 +688,9 @@ function edu_rep_send_csv(string $filename, string $body, string $auditAction, s
     header('Content-Disposition: attachment; filename="' . $filename . '"');
     header('X-Content-Type-Options: nosniff');
     header('Cache-Control: no-store');
+    foreach ($extraHeaders as $name => $value) {
+        header($name . ': ' . $value);
+    }
     echo $body;
     exit;
 }
@@ -804,6 +814,95 @@ function edu_rep_handle_person(array $user): never
     ]);
 }
 
+/** 日付の絞り込み('YYYY-MM-DD')。空は null。 */
+function edu_rep_query_date(string $key): ?string
+{
+    $v = trim((string) ($_GET[$key] ?? ''));
+    if ($v === '') {
+        return null;
+    }
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $v, $m) !== 1 || !checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+        json_error($key . ' が不正です（YYYY-MM-DD）', 400);
+    }
+    return $v;
+}
+
+/** from と to。from が to より後なら 400。 */
+function edu_rep_query_period(): array
+{
+    $from = edu_rep_query_date('from');
+    $to = edu_rep_query_date('to');
+    if ($from !== null && $to !== null && $from > $to) {
+        json_error('期間の始まりが終わりより後です', 400);
+    }
+    return [$from, $to];
+}
+
+function edu_rep_awareness_csv(array $people): string
+{
+    $rows = array_map(static fn(array $p): array => [
+        $p['name'], $p['email'], $p['employee_no'] ?? '', $p['department'], $p['deliveries'], $p['completed'],
+        $p['total'], $p['correct'], $p['incorrect'], $p['unanswered'], $p['correct_rate'] ?? '',
+    ], $people);
+    return edu_rep_csv(['氏名', 'メール', '従業員番号', '部署', '配信', '受講完了', '設問', '正解', '不正解', '未回答', '正答率(%)'], $rows);
+}
+
+/** アウェアネスの受講者ごとの成績(G58)。delivery_id で配信1件、from と to で配信日の期間に絞る。 */
+function edu_rep_handle_awareness_people(array $user): never
+{
+    $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
+    $format = edu_rep_query_format();
+    $deliveryId = edu_rep_query_int('delivery_id');
+    if ($deliveryId !== null && (string) edu_rep_assert_delivery($deliveryId, $tenantId)['delivery_type'] !== 'awareness_quiz') {
+        json_error('アウェアネスの配信ではありません', 400);
+    }
+    [$from, $to] = edu_rep_query_period();
+    $people = EduAnswerReport::awarenessByLearner($tenantId, EDU_REP_REAL_TARGET_SQL, ['delivery_id' => $deliveryId, 'from' => $from, 'to' => $to]);
+    if ($format === 'csv') {
+        edu_rep_send_csv('edu_awareness_people_' . date('Ymd') . '.csv', edu_rep_awareness_csv($people), 'edu_report.awareness_people_csv',
+            'delivery_id=' . ($deliveryId ?? '') . ',from=' . ($from ?? '') . ',to=' . ($to ?? '') . ',rows=' . count($people));
+    }
+    $sum = static fn(string $k): int => array_sum(array_column($people, $k));
+    json_out(['success' => true, 'people' => $people, 'summary' => [
+        'learners' => count($people), 'total' => $sum('total'), 'correct' => $sum('correct'),
+        'incorrect' => $sum('incorrect'), 'unanswered' => $sum('unanswered'),
+    ]]);
+}
+
+/** 解答の1問1行の CSV(G22)。id で配信1件、なければ from と to(提出日)が要る。上限を超えたら打ち切り、ヘッダーで知らせる。 */
+function edu_rep_handle_answers(array $user): never
+{
+    $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
+    $id = edu_rep_query_int('id');
+    [$from, $to] = edu_rep_query_period();
+    if ($id === null && ($from === null || $to === null)) {
+        json_error('配信(id)か、期間(from と to)を指定してください', 400);
+    }
+    if ($id !== null) {
+        edu_rep_assert_delivery($id, $tenantId);
+    }
+    $result = EduAnswerReport::answerRows($tenantId, EDU_REP_REAL_TARGET_SQL, ['delivery_id' => $id, 'from' => $from, 'to' => $to]);
+    $rows = array_map(static fn(array $r): array => [
+        $r['delivery_date'], $r['delivery_title'], $r['delivery_type'] === 'awareness_quiz' ? 'アウェアネス' : 'eラーニング',
+        $r['name'], $r['email'], $r['employee_no'], $r['department'], $r['category'], $r['question'], $r['answer'],
+        $r['is_correct'] ? '正解' : '不正解', $r['answered_at'],
+    ], $result['rows']);
+    $body = edu_rep_csv(['配信日', '配信', '種類', '氏名', 'メール', '従業員番号', '部署', 'カテゴリ', '設問', '解答', '正誤', '解答日時'], $rows);
+    $name = $id !== null ? 'edu_delivery_' . $id . '_answers_' : 'edu_answers_' . str_replace('-', '', (string) $from) . '_' . str_replace('-', '', (string) $to) . '_';
+    edu_rep_send_csv($name . date('Ymd') . '.csv', $body, 'edu_report.answers_csv',
+        'delivery_id=' . ($id ?? '') . ',from=' . ($from ?? '') . ',to=' . ($to ?? '') . ',rows=' . count($rows) . ($result['truncated'] ? ',truncated=1' : ''),
+        $result['truncated'] ? ['X-Tet2-Truncated' => (string) EduAnswerReport::ANSWER_ROW_LIMIT] : []);
+}
+
+/** 自動の教育配信の実行履歴と、当てはまって入った人(G61)。 */
+function edu_rep_handle_auto_runs(array $user): never
+{
+    $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
+    $delivery = edu_rep_required_delivery($tenantId);
+    json_out(['success' => true, 'delivery' => edu_rep_delivery_meta($delivery)]
+        + EduAutoEnrollRuns::forDelivery($tenantId, (int) $delivery['id']));
+}
+
 try {
     $action = $_GET['action'] ?? '';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -838,6 +937,15 @@ try {
     }
     if ($action === 'person') {
         edu_rep_handle_person($user);
+    }
+    if ($action === 'awareness_people') {
+        edu_rep_handle_awareness_people($user);
+    }
+    if ($action === 'answers') {
+        edu_rep_handle_answers($user);
+    }
+    if ($action === 'auto_runs') {
+        edu_rep_handle_auto_runs($user);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

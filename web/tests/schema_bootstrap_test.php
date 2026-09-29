@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 52, 'fresh DBに52個の業務tableがある');
+check(count($businessTables) === 53, 'fresh DBに53個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -64,6 +64,7 @@ $expectedTables = [
     'tenant_security_policies',
     'suspicious_mail_rules',
     'reply_mails',
+    'edu_auto_enroll_runs',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -75,7 +76,7 @@ $expectedColumns = [
     'campaigns' => ['beacon_base', 'content_delivery', 'deleted_at', 'closed_at', 'closed_by', 'credential_capture_approval_ref', 'test_redirect_emails'],
     'campaign_targets' => ['content_no', 'delivery_state', 'delivery_state_at', 'delivery_detail'],
     'events' => ['verdict', 'verdict_reason', 'verdict_source', 'verdict_by', 'verdict_at'],
-    'targets' => ['position_category', 'tenant_no', 'archived_at', 'is_test'],
+    'targets' => ['position_category', 'tenant_no', 'archived_at', 'is_test', 'employee_no', 'memo'],
     'groups' => ['status', 'archived_at'],
     'templates' => ['scenario_key', 'description'],
     'tenant_security_policies' => ['banned_words'],

@@ -525,4 +525,6 @@ h6, .h6 { font-weight: 600; }
 /* 教材バンクと教育レポートの検索欄。狭い幅では1行を使う */
 .edu-filter-search { width: 16rem; max-width: 100%; }
 @media (max-width: 767px) { .edu-filter-search { width: 100%; } }
+/* 対象者の一覧のメモ(1行で切り、全文は title で見せる) */
+.target-memo { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .report-toolbar .card-body { padding: .75rem 1rem; }

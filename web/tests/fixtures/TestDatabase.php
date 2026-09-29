@@ -35,6 +35,7 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-admin-mfa.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-suspicious-mail-rules.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-measurement.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-ops-b2a.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

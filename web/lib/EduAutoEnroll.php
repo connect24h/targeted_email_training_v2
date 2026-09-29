@@ -17,6 +17,7 @@ require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
 require_once __DIR__ . '/TenantStatus.php';
 require_once __DIR__ . '/EduDeliveryLauncher.php';
+require_once __DIR__ . '/EduAutoEnrollRuns.php';
 
 final class EduAutoEnroll
 {
@@ -58,14 +59,37 @@ final class EduAutoEnroll
      * 割当の作成はトランザクション内、受講案内メールの送信はトランザクション外で行う。
      * SMTP はブロッキングなので、tx 内で送ると WAL のロックを長時間保持し、
      * 送信worker(tet2-worker)と競合する。
+     *
+     * 処理のたびに実行履歴(EduAutoEnrollRuns)を1行残す。当てはまった人の数、新しく入れた人の数、失敗の理由。
      */
     public static function enrollForDelivery(int $deliveryId, int $tenantId, ?int $phishCampaignId): int
     {
-        $failerIds = self::failerTargetIds($tenantId, $phishCampaignId, $deliveryId);
-        if ($failerIds === []) {
-            return 0;
+        $startedAt = EduAutoEnrollRuns::now();
+        $failerIds = [];
+        $newAssignmentIds = [];
+        $error = null;
+        try {
+            $failerIds = self::failerTargetIds($tenantId, $phishCampaignId, $deliveryId, $error);
+            if ($failerIds !== []) {
+                $newAssignmentIds = self::enrollTargets($deliveryId, $tenantId, $failerIds);
+            }
+        } catch (Throwable $e) {
+            // 例外の文は内部の事情を含みうるので、履歴(閲覧者も見る)には定型の文だけを残し、例外はそのまま上へ返す
+            EduAutoEnrollRuns::record($tenantId, $deliveryId, 'phishing_failure', $startedAt, count($failerIds), count($newAssignmentIds),
+                '内部のエラーで投入を終えられませんでした（サーバーのログを見てください）');
+            throw $e;
         }
+        EduAutoEnrollRuns::record($tenantId, $deliveryId, 'phishing_failure', $startedAt, count($failerIds), count($newAssignmentIds), $error);
+        return count($newAssignmentIds);
+    }
 
+    /**
+     * 当てはまった人のうち、まだ割当のない人を入れ、案内メールを送る(配信の設定のとき)。新しい割当の id を返す。
+     * @param list<int> $failerIds
+     * @return list<int>
+     */
+    private static function enrollTargets(int $deliveryId, int $tenantId, array $failerIds): array
+    {
         // 配信の設問が未確定なら確定する(EduQuestionPicker と同じ規則)。
         self::ensureDeliveryQuestions($deliveryId, $tenantId);
 
@@ -96,7 +120,7 @@ final class EduAutoEnroll
         // --- ここから tx 外 ---
         self::sendInvites($newAssignmentIds, $deliveryId, $tenantId);
 
-        return count($newAssignmentIds);
+        return $newAssignmentIds;
     }
 
     /**
@@ -169,7 +193,7 @@ final class EduAutoEnroll
      * トリガー配信を running にした瞬間に過去全期間の失敗者へ一斉送信され、
      * 1年前の失敗に対して今さら教育案内が届くことになる。
      */
-    private static function failerTargetIds(int $tenantId, ?int $phishCampaignId, int $deliveryId): array
+    private static function failerTargetIds(int $tenantId, ?int $phishCampaignId, int $deliveryId, ?string &$error = null): array
     {
         // 訓練の結果の区分(risk_results)を持つ配信は、手動の開始と同じ判定で対象を選ぶ(画面の指定と実際の対象をずらさない)。
         // 区分のない配信は、従来どおりクリックか入力をした人。
@@ -180,6 +204,7 @@ final class EduAutoEnroll
             } catch (EduDeliveryError $e) {
                 // キャンペーンの削除などで対象を決められない配信は、投入しない(ほかの配信の処理は続ける)
                 error_log('edu_auto_enroll: delivery_id=' . $deliveryId . ' ' . $e->getMessage());
+                $error = $e->getMessage();
                 return [];
             }
         }

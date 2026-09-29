@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS targets (
   -- 1=検証用のテストユーザ。訓練配信には使えるが、レポート集計からは既定で除外する
   -- (campaigns.is_test と同じ思想。本番の統計に検証データを混ぜない)。
   is_test    INTEGER NOT NULL DEFAULT 0,
+  -- 従業員番号(任意)。入れた人はテナントの中で一意(schema-ops-b2a.sql の索引)。CSV の取込はこの番号で先に照合する
+  employee_no TEXT DEFAULT NULL,
+  memo       TEXT DEFAULT NULL,                -- 担当者のメモ(1000文字まで、1行)
   UNIQUE (tenant_id, email),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );

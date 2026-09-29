@@ -95,6 +95,9 @@ function seedTenant(int $t, string $tag): void
         [$t, "t-{$tag}@purge.test", $target]);
     Db::run("INSERT INTO edu_score_snapshots (tenant_id, snapshot_type, snapshot_date, target_id, group_id) VALUES (?, 'target', '2026-09-01', ?, ?)",
         [$t, $target, $group]);
+    // 自動の教育配信の実行履歴(段B2)
+    Db::run("INSERT INTO edu_auto_enroll_runs (tenant_id, delivery_id, source, started_at, finished_at, matched_count, enrolled_count)
+        VALUES (?, ?, 'phishing_failure', '2026-09-03 10:00:00', '2026-09-03 10:00:01', 1, 1)", [$t, $delivery]);
     // アンケート
     $survey = $id('INSERT INTO surveys (tenant_id, title) VALUES (?, ?)', [$t, "Sv {$tag}"]);
     $surveyQuestion = $id("INSERT INTO survey_questions (survey_id, question_type, title) VALUES (?, 'text', 'q')", [$survey]);
