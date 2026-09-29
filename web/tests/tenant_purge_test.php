@@ -40,6 +40,8 @@ function seedTenant(int $t, string $tag): void
     $campaign = $id("INSERT INTO campaigns (tenant_id, name, status, created_by, subject_template_id) VALUES (?, ?, 'done', ?, ?)",
         [$t, "C {$tag}", $userId, $subject]);
     Db::run('INSERT INTO campaign_contents (campaign_id, content_no, subject_template_id) VALUES (?, 1, ?)', [$campaign, $subject]);
+    $revealPage = $id("INSERT INTO reveal_pages (tenant_id, name, storage_name) VALUES (?, ?, ?)", [$t, "RP {$tag}", "reveal-{$tag}.html"]);
+    Db::run('UPDATE campaigns SET reveal_page_id = ? WHERE id = ?', [$revealPage, $campaign]);
     $tracking = substr(str_pad((string) crc32($tag), 10, '0', STR_PAD_LEFT), 0, 10);
     Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, content_no, send_status, sent_at)
         VALUES (?, ?, ?, 1, 'sent', '2026-09-02 10:00:00')", [$campaign, $target, $tracking]);
@@ -75,6 +77,7 @@ function seedTenant(int $t, string $tag): void
         [$t, $category]);
     $material = $id("INSERT INTO edu_materials (tenant_id, title, slides) VALUES (?, ?, '[]')", [$t, "M {$tag}"]);
     Db::run("INSERT INTO edu_material_pages (material_id, page_no, image_name) VALUES (?, 1, 'p1.png')", [$material]);
+    Db::run("INSERT INTO edu_material_versions (material_id, version, source_name, page_count) VALUES (?, 1, ?, 1)", [$material, "src-{$tag}.pdf"]);
     $series = $id("INSERT INTO edu_delivery_series (tenant_id, title, settings, day_of_month, time_of_day, next_run_at, is_active, created_by)
         VALUES (?, ?, '{}', 1, '09:00', '2026-11-01 09:00:00', 0, ?)", [$t, "Ser {$tag}", $userId]);
     $delivery = $id("INSERT INTO edu_deliveries (tenant_id, title, status, material_id, series_id, phish_campaign_id, target_group_id, created_by)

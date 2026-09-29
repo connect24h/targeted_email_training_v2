@@ -56,6 +56,7 @@ final class TenantPurge
         ['edu_questions', 'tenant_id = ?'],
         ['edu_categories', 'tenant_id = ?'],
         ['edu_material_pages', 'material_id IN (SELECT id FROM edu_materials WHERE tenant_id = ?)'],
+        ['edu_material_versions', 'material_id IN (SELECT id FROM edu_materials WHERE tenant_id = ?)'],
         ['edu_materials', 'tenant_id = ?'],
         ['survey_answers', 'response_id IN (SELECT id FROM survey_responses WHERE tenant_id = ?)'],
         ['survey_responses', 'tenant_id = ?'],
@@ -67,6 +68,8 @@ final class TenantPurge
         ['campaign_targets', 'campaign_id IN (SELECT id FROM campaigns WHERE tenant_id = ?)'],
         ['campaign_contents', 'campaign_id IN (SELECT id FROM campaigns WHERE tenant_id = ?)'],
         ['campaigns', 'tenant_id = ?'],
+        // 種明かしページ(G29)。campaigns.reveal_page_id は campaigns を先に消してから消す(参照を残さない)。
+        ['reveal_pages', 'tenant_id = ?'],
         ['target_group', 'group_id IN (SELECT id FROM groups WHERE tenant_id = ?)'],
         ['groups', 'tenant_id = ?'],
         ['targets', 'tenant_id = ?'],

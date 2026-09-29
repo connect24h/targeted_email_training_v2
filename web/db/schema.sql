@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   closed_at           TEXT DEFAULT NULL,          -- 確定後のクローズ。本文消去と同一transaction
   closed_by           INTEGER DEFAULT NULL,
   credential_capture_approval_ref TEXT DEFAULT NULL, -- 顧客承認の参照番号。NULLなら本文収集を拒否
+  reveal_page_id      INTEGER REFERENCES reveal_pages(id), -- 種明かしページの選択(G29)。NULL は既定(reveal.html)
   test_redirect_emails TEXT DEFAULT NULL,
   created_by          INTEGER,
   created_at          TEXT NOT NULL DEFAULT (datetime('now','localtime')),

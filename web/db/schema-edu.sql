@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS edu_materials (
   format      TEXT NOT NULL DEFAULT 'text_slides',      -- text_slides(文字のスライド) / page_images(PDF のページ画像)
   page_count  INTEGER NOT NULL DEFAULT 0,               -- page_images のページ数
   source_name TEXT,                                     -- 取り込んだ PDF の元のファイル名
+  version     INTEGER NOT NULL DEFAULT 1,               -- 教材の版(G20)。差し替えのたびに +1
+
   is_active   INTEGER NOT NULL DEFAULT 1,
   is_shared   INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
