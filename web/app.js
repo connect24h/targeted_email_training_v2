@@ -3571,7 +3571,52 @@ async function renderEduDeliveries() {
   }
 }
 function refreshEduDeliveries() {
-  return Promise.all([renderEduDeliveries(), renderEduSeries()]);
+  return Promise.all([renderEduDeliveries(), renderEduSeries(), renderEduContact()]);
+}
+/** テナントの社内の問い合わせ先(受講者のマイページに出す)。変えられるのは組織管理者とシステム管理者。 */
+let eduContact = null;
+async function renderEduContact() {
+  const el = $('#eduContactSummary');
+  const btn = $('#editEduContactBtn');
+  if (!el) return;
+  try { eduContact = await api('api/edu_deliveries.php', { query: { action: 'contact' } }); }
+  catch (e) { el.textContent = `読み込めませんでした（${e.message}）`; return; }
+  el.textContent = eduContact.edu_contact || '未設定（マイページには出しません）';
+  btn.classList.toggle('d-none', !eduContact.can_edit);
+  btn.onclick = editEduContact;
+}
+function editEduContact() {
+  const body = `<form id="eduContactForm">
+    <label class="form-label" for="eduContactText">問い合わせ先</label>
+    <textarea class="form-control" id="eduContactText" name="edu_contact" rows="4" maxlength="500">${esc(eduContact?.edu_contact || '')}</textarea>
+    <div class="form-text">例: 情報システム部 内線 1234。受講者のマイページのホームに出ます。空にすると出しません（500文字まで）。</div>
+  </form>`;
+  showModal('社内の問い合わせ先', body, async () => {
+    await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'contact' }, body: { edu_contact: $('#eduContactText').value } });
+    toast('問い合わせ先を保存しました', 'ok');
+    renderEduContact();
+  });
+}
+/**
+ * 配信ごとの受講の設定(作成と編集の画面で共通)。[項目, 表示, 補足, 新しい配信の既定]。
+ * 選択肢の並べ替えだけ新しい配信の既定で有効にする(既存の配信は migration で無効のまま)。
+ */
+const EDU_DELIVERY_OPTIONS = [
+  ['shuffle_options', '確認テストの選択肢の順を人ごとに並べ替える', '同じ人が開き直しても同じ順です。採点は元の選択肢で行います。', true],
+  ['lock_material_during_test', 'テスト中は教材を見られないようにする', 'テストを始めてから提出するまで、教材を開けません。提出した後は見直せます。', false],
+  ['allow_after_deadline', '期限の後も受講できるようにする', '期限の後に終えた受講は、教育レポートで「期限後」として数え、期限内合格率には入れません。', false],
+  ['retake_from_test', '不合格の時は確認テストから受け直す', '不合格の後の受け直しは、教材を飛ばして確認テストから始めます。', false],
+];
+function eduDeliveryOptionFields(prefix, values = null) {
+  return `<fieldset class="border rounded p-2 mb-2"><legend class="form-label small fw-semibold float-none w-auto px-1 mb-0">受講の設定</legend>
+    ${EDU_DELIVERY_OPTIONS.map(([key, label, help, def]) => {
+      const on = values ? Number(values[key] ?? 0) === 1 : def;
+      return `<div class="form-check"><input class="form-check-input" type="checkbox" id="${prefix}_${key}" data-edu-option="${key}"${on ? ' checked' : ''}>
+        <label class="form-check-label" for="${prefix}_${key}">${label}</label><div class="form-text mt-0 mb-1">${help}</div></div>`;
+    }).join('')}</fieldset>`;
+}
+function eduDeliveryOptionValues(form) {
+  return Object.fromEntries(Array.from(form.querySelectorAll('[data-edu-option]')).map((input) => [input.dataset.eduOption, input.checked]));
 }
 /** 毎月の配信(系列)。回ごとの配信は edu_scheduler が予約の状態で作り、予約の日時に開始する。 */
 async function renderEduSeries() {
@@ -3679,6 +3724,7 @@ function eduDeliveryForm() {
     <div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="allow_retake_after_pass" id="eduAllowRetake" checked>
       <label class="form-check-label" for="eduAllowRetake">完了（合格）した後も受け直せる</label></div>
     <div class="form-text mb-2">受講者はマイページの「もう一度受講する」から受け直せます。前の回の結果は残り、レポートは最新の回で数えます。</div>
+    ${eduDeliveryOptionFields('eduOpt')}
   </form>`;
 }
 
@@ -3735,7 +3781,8 @@ function eduDeliveryPayload(form) {
   const body = { title: form.title.value.trim(), delivery_type: type, feedback_mode: form.feedback_mode.value,
     target_type: target === 'new_target' ? 'all' : target,
     question_count: Number(form.question_count.value) || 3, category_ids: categories.length ? categories : undefined,
-    send_invites: form.send_invites.checked, allow_retake_after_pass: form.allow_retake_after_pass.checked };
+    send_invites: form.send_invites.checked, allow_retake_after_pass: form.allow_retake_after_pass.checked,
+    ...eduDeliveryOptionValues(form) };
   if (type === 'elearning') {
     body.pass_score = Number(form.pass_score.value) || 80;
     body.material_id = Number(form.material_id.value) || undefined;
@@ -3822,12 +3869,13 @@ async function editEduDelivery(id) {
       <label class="form-check-label" for="eduEditSendInvites">受講の案内メールを送る</label></div>
     <div class="form-check"><input class="form-check-input" type="checkbox" id="eduEditAllowRetake"${Number(delivery.allow_retake_after_pass ?? 1) === 1 ? ' checked' : ''}>
       <label class="form-check-label" for="eduEditAllowRetake">完了（合格）した後も受け直せる</label></div>
+    <div class="mt-2">${eduDeliveryOptionFields('eduEditOpt', delivery)}</div>
   </form>`;
   showModal('教育配信を編集', body, async () => {
     const title = $('#eduEditTitle').value.trim();
     if (!title) throw new Error('タイトルを入力してください');
     const payload = { id, title, feedback_mode: $('#eduEditFeedback').value, send_invites: $('#eduEditSendInvites').checked,
-      allow_retake_after_pass: $('#eduEditAllowRetake').checked };
+      allow_retake_after_pass: $('#eduEditAllowRetake').checked, ...eduDeliveryOptionValues($('#eduDeliveryEditForm')) };
     // 空にして保存したら予約を解除する(null を送る。送らないと API は予約をそのまま残す)
     payload.scheduled_at = $('#eduEditScheduledAt').value || null;
     await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' }, body: payload });
@@ -4578,7 +4626,7 @@ function renderEduRepPeople() {
         <td>${esc(p.name || p.email)}${Number(p.is_test) === 1 ? ' <span class="badge bg-light text-dark border">テスト</span>' : ''}<div class="small text-muted">${esc(p.email)}</div></td>
         <td>${esc(p.department)}</td><td>${p.score === null ? '—' : `${Number(p.score)}%`}</td>
         <td>${eduPassedCell(p)}</td><td>${Number(p.attempt_count)}</td>
-        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}</td></tr>`).join('');
+        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}${p.late ? ' <span class="small text-muted">（期限後）</span>' : ''}</td></tr>`).join('');
   });
 }
 function renderEduRepDepts() {
@@ -4635,7 +4683,7 @@ function renderEduRepPerson() {
       <tr><td>${esc(p.delivery_title)}<div class="small text-muted">${esc(EDU_DTYPE[p.delivery_type] || p.delivery_type)}</div></td>
         <td>${eduAssignStatusBadge(p.status)}</td><td>${p.score === null ? '—' : `${Number(p.score)}%`}</td>
         <td>${eduPassedCell(p)}</td><td>${Number(p.attempt_count)}</td>
-        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}</td></tr>`).join('')
+        <td>${p.deadline ? esc(fmtDate(p.deadline)) : 'なし'}</td><td>${esc(fmtDate(p.completed_at))}${p.late ? ' <span class="small text-muted">（期限後）</span>' : ''}</td></tr>`).join('')
       : emptyRow(7);
   });
 }
