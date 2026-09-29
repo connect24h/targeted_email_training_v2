@@ -2373,12 +2373,15 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
         <input class="form-check-input c-suppress-email" type="checkbox" id="supmail-${idx}">
         <label class="form-check-label small text-muted" for="supmail-${idx}">認証画面にメールアドレスを事前入力しない（利用者に自分で入力させる）</label>
       </div>
-      <div class="row g-2 mt-1">
-        <div class="col-md-6"><label class="form-label small text-muted">送信元アドレス（任意・未指定ならキャンペーン既定）</label>
-          ${endpointWidget('cfrom-' + idx, 'from', fromList, {})}</div>
-        <div class="col-md-6"><label class="form-label small text-muted">ビーコンURL（任意・未指定ならキャンペーン既定）</label>
-          ${endpointWidget('cbeacon-' + idx, 'beacon', beaconList, {})}</div>
-      </div>
+      <details class="content-endpoint-override mt-1">
+        <summary class="small text-muted" style="cursor:pointer">このコンテンツだけ送信元／ビーコンを変える（未設定ならキャンペーン既定）</summary>
+        <div class="row g-2 mt-1">
+          <div class="col-md-6"><label class="form-label small text-muted">送信元アドレス（任意・未指定ならキャンペーン既定）</label>
+            ${endpointWidget('cfrom-' + idx, 'from', fromList, {})}</div>
+          <div class="col-md-6"><label class="form-label small text-muted">ビーコンURL（任意・未指定ならキャンペーン既定）</label>
+            ${endpointWidget('cbeacon-' + idx, 'beacon', beaconList, {})}</div>
+        </div>
+      </details>
       </div>
     </div>`;
   let campaignEditorSteps;
@@ -2617,6 +2620,11 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       const cBeaconVals = parseEndpointList(prefill.beacon_bases, prefill.beacon_base);
       fillEndpointWidget(row.querySelector('[data-ep-name^="cfrom-"]'), cFromVals);
       fillEndpointWidget(row.querySelector('[data-ep-name^="cbeacon-"]'), cBeaconVals);
+      // 既に上書きがあるコンテンツは、上書き欄を開いた状態で見せる(隠したまま見落とさないように)
+      if (cFromVals.length || cBeaconVals.length) {
+        const ov = row.querySelector('.content-endpoint-override');
+        if (ov) ov.open = true;
+      }
     } else {
       syncAttachment(row); // 初期状態(link)で添付を無効化
       // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
