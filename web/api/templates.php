@@ -2,6 +2,8 @@
 
 const TEMPLATE_KINDS = ['subject', 'body', 'phish_login', 'debrief', 'elearning'];
 const TEMPLATE_FORMATS = ['html', 'text'];
+/** シナリオの概要(元の事例、手口、見分けるポイント)の上限の文字数。 */
+const TEMPLATE_DESCRIPTION_MAX = 2000;
 
 function templates_string(array $body, string $key): string
 {
@@ -20,6 +22,28 @@ function templates_optional_string(array $body, string $key): ?string
         json_error($key . ' が不正です', 400);
     }
     return trim($body[$key]);
+}
+
+/**
+ * 概要(任意)。キーがない、または null なら null(変えない)。空文字は '' を返し、保存の時に NULL にして消す。
+ * 画面では textContent 相当(esc)で出すので HTML は許すが意味を持たない。制御文字だけ拒む。
+ */
+function templates_description(array $body): ?string
+{
+    if (!array_key_exists('description', $body) || $body['description'] === null) {
+        return null;
+    }
+    if (!is_string($body['description'])) {
+        json_error('description が不正です', 400);
+    }
+    $value = trim(str_replace("\r\n", "\n", $body['description']));
+    if (mb_strlen($value, 'UTF-8') > TEMPLATE_DESCRIPTION_MAX) {
+        json_error('概要は' . TEMPLATE_DESCRIPTION_MAX . '文字以内にしてください', 400);
+    }
+    if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $value) === 1) {
+        json_error('概要に使用できない文字が含まれています', 400);
+    }
+    return $value;
 }
 
 function templates_int(array $body, string $key): int
@@ -115,7 +139,7 @@ function templates_handle_list(array $actor): never
         templates_validate_kind($kind);
     }
     $templates = Db::all(
-        'SELECT id, tenant_id, kind, name, lang, format, content, auth_flag, scenario_key, is_preset, created_at
+        'SELECT id, tenant_id, kind, name, lang, format, content, auth_flag, scenario_key, description, is_preset, created_at
          FROM templates
          WHERE (tenant_id = ? OR tenant_id IS NULL) AND (? IS NULL OR kind = ?)
          ORDER BY is_preset DESC, id',
@@ -144,10 +168,11 @@ function templates_handle_create(array $actor): never
     templates_validate_kind($kind);
     templates_validate_format($format);
     $authFlag = templates_validate_auth_flag($kind, templates_body_optional_int($body, 'auth_flag'));
+    $description = templates_description($body);
 
     $id = Db::insert(
-        'INSERT INTO templates (tenant_id, kind, name, lang, format, content, auth_flag, scenario_key, is_preset)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+        'INSERT INTO templates (tenant_id, kind, name, lang, format, content, auth_flag, scenario_key, description, is_preset)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
         [
             $tenantId,
             $kind,
@@ -157,6 +182,7 @@ function templates_handle_create(array $actor): never
             templates_string($body, 'content'),
             $authFlag,
             templates_optional_string($body, 'scenario_key'),
+            $description === '' ? null : $description,
         ]
     );
     audit('template.create', 'template_id=' . $id);
@@ -194,8 +220,11 @@ function templates_handle_create_scenario(array $actor): never
     $subject = templates_string($body, 'subject_content');
     $bodyContent = templates_string($body, 'body_content');
     $lang = templates_optional_string($body, 'lang') ?? 'ja';
+    // 概要はシナリオの本文の行に持たせる(一覧と訓練の作成画面は本文の行の概要を出す)
+    $description = templates_description($body);
+    $description = $description === '' ? null : $description;
 
-    $ids = Db::tx(function () use ($tenantId, $name, $subject, $bodyContent, $format, $lang): array {
+    $ids = Db::tx(function () use ($tenantId, $name, $subject, $bodyContent, $format, $lang, $description): array {
         $key = templates_next_scenario_key();
         // 件名は本文と違い装飾が不要なので text 固定。本文のみ利用者指定の format に従う。
         $subjectId = Db::insert(
@@ -204,9 +233,9 @@ function templates_handle_create_scenario(array $actor): never
             [$tenantId, 'subject', $name, $lang, 'text', $subject, $key]
         );
         $bodyId = Db::insert(
-            'INSERT INTO templates (tenant_id, kind, name, lang, format, content, scenario_key, is_preset)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
-            [$tenantId, 'body', $name, $lang, $format, $bodyContent, $key]
+            'INSERT INTO templates (tenant_id, kind, name, lang, format, content, scenario_key, description, is_preset)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+            [$tenantId, 'body', $name, $lang, $format, $bodyContent, $key, $description]
         );
         return ['key' => $key, 'subject_id' => $subjectId, 'body_id' => $bodyId];
     });
@@ -244,8 +273,9 @@ function templates_handle_update(array $actor): never
     $content = templates_optional_string($body, 'content');
     $format = templates_optional_string($body, 'format');
     $authFlag = templates_body_optional_int($body, 'auth_flag');
+    $description = templates_description($body);
 
-    if ($name === null && $content === null && $format === null && $authFlag === null) {
+    if ($name === null && $content === null && $format === null && $authFlag === null && $description === null) {
         json_error('更新項目がありません', 400);
     }
     if ($format !== null) {
@@ -255,21 +285,26 @@ function templates_handle_update(array $actor): never
         json_error('auth_flag が不正です', 400);
     }
 
+    // 概要は送られた時だけ変える(空文字は消す)。null は「変えない」。
+    $descriptionSet = $description === null ? 0 : 1;
+    $descriptionValue = $description === '' ? null : $description;
     // 共有は tenant_id 条件を外して更新(NULL にはマッチしないため)。自テナント分は所有条件つき。
     if ($isShared) {
         Db::run(
             'UPDATE templates SET name = COALESCE(?, name), content = COALESCE(?, content),
-                    format = COALESCE(?, format), auth_flag = COALESCE(?, auth_flag) WHERE id = ?',
-            [$name, $content, $format, $authFlag, $id]
+                    format = COALESCE(?, format), auth_flag = COALESCE(?, auth_flag),
+                    description = CASE WHEN CAST(? AS INTEGER) = 1 THEN ? ELSE description END WHERE id = ?',
+            [$name, $content, $format, $authFlag, $descriptionSet, $descriptionValue, $id]
         );
     } else {
         Db::run(
             'UPDATE templates SET name = COALESCE(?, name), content = COALESCE(?, content),
-                    format = COALESCE(?, format), auth_flag = COALESCE(?, auth_flag) WHERE id = ? AND tenant_id = ?',
-            [$name, $content, $format, $authFlag, $id, $tenantId]
+                    format = COALESCE(?, format), auth_flag = COALESCE(?, auth_flag),
+                    description = CASE WHEN CAST(? AS INTEGER) = 1 THEN ? ELSE description END WHERE id = ? AND tenant_id = ?',
+            [$name, $content, $format, $authFlag, $descriptionSet, $descriptionValue, $id, $tenantId]
         );
     }
-    audit('template.update', 'template_id=' . $id . ($isShared ? ',shared' : ''));
+    audit('template.update', 'template_id=' . $id . ($isShared ? ',shared' : '') . ($descriptionSet ? ',description=1' : ''));
     json_out(['success' => true, 'template' => templates_assert_visible($id, $tenantId)]);
 }
 

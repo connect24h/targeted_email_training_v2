@@ -2080,7 +2080,8 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
           <select class="form-select form-select-sm c-scenario">
             <option value="">— 個別に選択 —</option>
             ${scenarioOptions}
-          </select></div>
+          </select>
+          <div class="form-text c-scenario-desc" style="white-space:pre-wrap" aria-live="polite"></div></div>
       </div>
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">件名</label><select class="form-select form-select-sm c-subject">${opt(byKind('subject'))}</select></div>
@@ -2315,6 +2316,14 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     const clearScenario = () => { scenSel.value = ''; };
     row.querySelector('.c-subject').addEventListener('change', clearScenario);
     row.querySelector('.c-body').addEventListener('change', clearScenario);
+    // 選んだ本文の概要(元の事例、手口、見分けるポイント)を選択欄の下に出す。利用者の入力なので textContent で入れる。
+    const showScenarioDescription = () => {
+      const t = tplById[row.querySelector('.c-body').value];
+      const text = String(t?.description || '').trim();
+      row.querySelector('.c-scenario-desc').textContent = text ? `概要: ${text}` : '';
+    };
+    scenSel.addEventListener('change', showScenarioDescription);
+    row.querySelector('.c-body').addEventListener('change', showScenarioDescription);
     listEl.appendChild(row);
     if (prefill) {
       // 編集時: 既存コンテンツの値を復元。
@@ -2336,6 +2345,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
       if (scenarios.length) { scenSel.value = scenarios[0].key; scenSel.dispatchEvent(new Event('change')); }
     }
+    showScenarioDescription();
     row.dataset.pristine = prefill ? 'false' : 'true';
     row.addEventListener('input', () => { row.dataset.pristine = 'false'; });
     row.addEventListener('change', () => { row.dataset.pristine = 'false'; syncContentSummary(row); });
@@ -3161,18 +3171,24 @@ function renderTemplatesScenario(all) {
     pairedIds.add(s.id);
     pairedIds.add(b.id);
     return `<tr style="cursor:pointer" data-scenario-key="${esc(key)}" onclick="scenarioViewer(this.dataset.scenarioKey)">
-      <td>${++rowNumber}</td><td>${esc(s.name)}</td><td class="text-muted small">${esc(b.name)}</td>
+      <td>${++rowNumber}</td><td>${esc(s.name)}${tplDescriptionHtml(b.description || s.description)}</td><td class="text-muted small">${esc(b.name)}</td>
       <td>${Number(s.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
       <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`;
   }).join('');
   // ペアが欠けた場合も、元の件名・本文を一覧から失わない。
   const orphans = all.filter((t) => (t.kind === 'subject' || t.kind === 'body') && !pairedIds.has(t.id));
   const orphanRows = orphans.map((t) => `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
-    <td>${++rowNumber}</td><td>${esc(t.name)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
+    <td>${++rowNumber}</td><td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
     <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
     <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`).join('');
   $('#templatesHead').innerHTML = '<tr><th>連番</th><th>件名</th><th>本文</th><th></th><th></th></tr>';
   $('#templatesBody').innerHTML = (scenRows + orphanRows) || emptyRow(5);
+}
+// 一覧の名称の下に出す概要(元の事例、手口、見分けるポイント)。長い概要は1行で切り、全文は title で見せる。
+function tplDescriptionHtml(description) {
+  const text = String(description || '').trim();
+  if (!text) return '';
+  return `<div class="small text-muted text-truncate tpl-description" style="max-width:32rem" title="${esc(text)}">${esc(text.replace(/\s+/g, ' '))}</div>`;
 }
 // 偽ログイン: 種別(auth_flag)ごとにグループ化し、種別内の通番を振る。
 function renderTemplatesPhish(all) {
@@ -3183,7 +3199,7 @@ function renderTemplatesPhish(all) {
     counters[flag] = (counters[flag] || 0) + 1;
     return `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
       <td>${esc(AUTH_FLAG_NAME[flag] || flag)} #${counters[flag]}</td>
-      <td>${esc(t.name)}</td><td>${esc(t.format)}</td>
+      <td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td>${esc(t.format)}</td>
       <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
       <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`;
   }).join('');
@@ -3193,7 +3209,7 @@ function renderTemplatesPhish(all) {
 // ネタバラシ/eラーニング等: 一覧+ビューア。
 function renderTemplatesSimple(all, kind) {
   const rows = all.filter((t) => t.kind === kind).map((t, i) => `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
-    <td>${i + 1}</td><td>${esc(t.name)}</td><td>${esc(t.format)}</td>
+    <td>${i + 1}</td><td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td>${esc(t.format)}</td>
     <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
     <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`).join('');
   $('#templatesHead').innerHTML = '<tr><th>連番</th><th>名称</th><th>形式</th><th></th><th></th></tr>';
@@ -3224,6 +3240,7 @@ function templateForm(t = {}) {
       <select class="form-select" name="auth_flag" id="tplAuthFlag">${Object.entries(AUTH_FLAG_NAME).map(([k, l]) => `<option value="${k}"${String(t.auth_flag ?? 0) === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
     <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
     <div class="mb-2"><label class="form-label">内容</label><textarea class="form-control" name="content" id="tplContent" rows="8" required>${esc(t.content)}</textarea></div>
+    ${tplDescriptionField('tplDescription', t.description)}
     <div class="mb-2">
       <button type="button" class="btn btn-sm btn-outline-info" id="tplPreviewBtn"><i class="bi bi-eye"></i> プレビュー（差込をサンプル値で表示）</button>
     </div>
@@ -3296,7 +3313,15 @@ function scenarioForm() {
     <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
     <div class="mb-2"><label class="form-label">本文</label>
       <textarea class="form-control" name="body_content" id="tplContent" rows="10" required></textarea></div>
+    ${tplDescriptionField('scenDescription', '')}
   </form>`;
+}
+// 概要の入力欄(テンプレートとシナリオの作成・編集で共通)。受講者には見せない、管理者向けの説明。
+const TPL_DESCRIPTION_MAX = 2000;
+function tplDescriptionField(id, value) {
+  return `<div class="mb-2"><label class="form-label" for="${id}">概要（任意）</label>
+      <textarea class="form-control" name="description" id="${id}" rows="3" maxlength="${TPL_DESCRIPTION_MAX}" placeholder="元の事例、手口、見分けるポイント">${esc(value || '')}</textarea>
+      <div class="form-text">テンプレートの一覧と訓練の作成画面に出ます。訓練メールの本文には入りません。</div></div>`;
 }
 function newScenario() {
   showModal('新規シナリオ（件名＋本文）', scenarioForm(), async () => {
@@ -3307,6 +3332,7 @@ function newScenario() {
         subject_content: f.subject_content.value.trim(),
         body_content: f.body_content.value,
         format: f.format.value,
+        description: f.description.value.trim(),
       } });
     toast('シナリオを作成しました', 'ok');
     tplKindFilter = 'scenario';
@@ -3323,7 +3349,7 @@ function newTemplate() {
   showModal('新規テンプレート', templateForm(), async () => {
     const f = $('#tplForm');
     await api('api/templates.php', { method: 'POST', query: { action: 'create' },
-      body: { name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, ...templateAuthFlag(f) } });
+      body: { name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, description: f.description.value.trim(), ...templateAuthFlag(f) } });
     toast('作成しました', 'ok'); renderTemplates();
   });
   bindTemplateForm();
@@ -3333,7 +3359,7 @@ async function editTemplate(id) {
   showModal('テンプレート編集', templateForm(template), async () => {
     const f = $('#tplForm');
     await api('api/templates.php', { method: 'POST', query: { action: 'update' },
-      body: { id, name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, ...templateAuthFlag(f) } });
+      body: { id, name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, description: f.description.value.trim(), ...templateAuthFlag(f) } });
     toast('更新しました', 'ok'); renderTemplates();
   });
   bindTemplateForm();
@@ -3410,6 +3436,11 @@ function tplPreviewHtml(content, format, height = '40vh') {
   return `<pre class="border rounded p-2 bg-light" style="max-height:${height};overflow:auto;white-space:pre-wrap">${esc(c)}</pre>`;
 }
 
+// 編集できない人に見せる概要(読むだけ)。
+function tplDescriptionView(description) {
+  const text = String(description || '').trim();
+  return text ? `<div class="border rounded p-2 mb-2 small bg-light" style="white-space:pre-wrap"><div class="fw-semibold mb-1">概要</div>${esc(text)}</div>` : '';
+}
 // 単一テンプレート(偽ログイン/ネタバラシ/eラーニング等)のプレビュー/HTML/編集ビューア。
 // テンプレート編集可否: 共有プリセットはシステム管理者だけ(全テナントに効く)、自テナント分は operator 以上。
 function canEditTemplate(isPreset) {
@@ -3428,6 +3459,7 @@ async function tplViewer(id) {
     : '';
   const body = `${sharedBanner}
     <div class="small text-muted mb-2">${esc(labelKind(t.kind))}：${esc(t.name)}（形式：${esc(t.format)}）</div>
+    ${editable ? tplDescriptionField('tvDescription', t.description) : tplDescriptionView(t.description)}
     <ul class="nav nav-pills mb-2" id="tvTabs">
       <li class="nav-item"><a class="nav-link active" href="#" data-tv="preview">プレビュー</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-tv="html">HTMLソース</a></li>
@@ -3443,7 +3475,7 @@ async function tplViewer(id) {
       if (!content.trim()) throw new Error('内容を入力してください');
       if (shared && !confirm('全テナント共通のテンプレートです。すべてのテナントに反映されます。保存しますか？')) return;
       await api('api/templates.php', { method: 'POST', query: { action: 'update' },
-        body: { id, name: t.name, kind: t.kind, format: t.format, content } });
+        body: { id, name: t.name, kind: t.kind, format: t.format, content, description: $('#tvDescription').value.trim() } });
       toast('保存しました', 'ok'); renderTemplates();
     });
   } else {
@@ -3503,14 +3535,16 @@ async function scenarioViewer(scenarioKey) {
         ? '<div class="alert alert-warning py-2 small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>この件名・本文は<strong>全テナント共通</strong>です。変更はすべてのテナントに反映されます。</div>'
         : '<div class="alert alert-secondary py-2 small mb-2">共有テンプレート（編集にはテナント管理者以上の権限が必要です）。</div>')
     : '';
+  const scenarioDescription = bodyT.description || subj.description || '';
   const body = `${sharedBanner}<div class="small text-muted mb-2">シナリオ「${esc(subj.name)}」の件名と本文</div>
+    ${editable ? tplDescriptionField('svDescription', scenarioDescription) : tplDescriptionView(scenarioDescription)}
     ${section(subj, 'svSubject')}${section(bodyT, 'svBody')}
     ${editable ? `<div class="mt-2 text-end"><button type="button" class="btn btn-sm btn-outline-danger" id="svDeleteBtn"><i class="bi bi-trash"></i> このシナリオ（件名＋本文）を削除</button></div>` : ''}`;
   if (editable) {
     showModal('シナリオ内容', body, async () => {
       if (preset && !confirm('全テナント共通の件名・本文です。すべてのテナントに反映されます。保存しますか？')) return;
       await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: subj.id, name: subj.name, kind: 'subject', format: subj.format, content: $('#svSubject').value } });
-      await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: bodyT.id, name: bodyT.name, kind: 'body', format: bodyT.format, content: $('#svBody').value } });
+      await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: bodyT.id, name: bodyT.name, kind: 'body', format: bodyT.format, content: $('#svBody').value, description: $('#svDescription').value.trim() } });
       toast('保存しました', 'ok'); renderTemplates();
     });
   } else {
