@@ -639,10 +639,11 @@ function edu_rep_send_csv(string $filename, string $body, string $auditAction, s
 
 function edu_rep_people_csv(array $people): string
 {
-    $passed = static fn(?bool $v): string => $v === null ? '-' : ($v ? '合格' : '不合格');
+    // 合否は、合格点のない配信と点数のない人(未受講)は空にする('-' は式の無害化で '- になるため使わない)
+    $passed = static fn(array $p): string => $p['passed'] === null || $p['score'] === null ? '' : ($p['passed'] ? '合格' : '不合格');
     $rows = array_map(static fn(array $p): array => [
         EDU_REP_STATUS_LABELS[$p['status']] ?? $p['status'], $p['name'], $p['email'], $p['department'],
-        $p['score'] ?? '', $passed($p['passed']), $p['attempt_count'], $p['deadline'] ?? '', $p['completed_at'] ?? '',
+        $p['score'] ?? '', $passed($p), $p['attempt_count'], $p['deadline'] ?? '', $p['completed_at'] ?? '',
     ], $people);
     return edu_rep_csv(['状態', '氏名', 'メール', '部署', '点数', '合否', '受講回数', '期限', '完了日時'], $rows);
 }

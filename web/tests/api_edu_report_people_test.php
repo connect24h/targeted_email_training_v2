@@ -201,6 +201,8 @@ check(!str_contains(str_replace("\r\n", '', $csv), "\n"), 'CSV の行末はす�
 $rowA = array_values(array_filter(array_map(fn($l) => str_getcsv($l, ',', '"', ''), $lines), fn($row) => $row[1] === '営業 一郎'))[0];
 check($rowA === ['完了', '営業 一郎', 'sales1@example.test', '営業部', '90', '合格', '2', '2026-09-10 23:59:59', '2026-09-10 18:00:00'],
     '受講者ごとの CSV の列');
+$rowD = array_values(array_filter(array_map(fn($l) => str_getcsv($l, ',', '"', ''), $lines), fn($row) => $row[1] === '総務 四郎'))[0];
+check($rowD[4] === '' && $rowD[5] === '', '未受講の人は点数と合否が空');
 
 $csv = $runCsv('--csv-depts');
 check(str_starts_with($csv, "\xEF\xBB\xBF部署,対象,完了,未完了,合格,合格率(%),期限内合格率(%)\r\n"), '部署ごとの CSV は BOM と見出しの行で始まる');
