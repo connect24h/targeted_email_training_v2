@@ -100,6 +100,41 @@ async function loadSuspiciousMails() {
   $('#smNextBtn').disabled = SmState.offset + SmState.limit >= data.total;
 }
 
+/* ========== CSV 出力 ========== */
+
+// いまの絞り込みの条件で一覧を CSV に出す。superadmin がテナントを選んでいる時はそのテナントだけ(api() と同じ扱い)。
+async function smExportCsv() {
+  const qs = new URLSearchParams({ action: 'export_csv' });
+  const filters = { status: '#smStatusFilter', category: '#smCategoryFilter', priority: '#smPriorityFilter', source: '#smSourceFilter' };
+  for (const [key, sel] of Object.entries(filters)) {
+    const v = $(sel)?.value || '';
+    if (v) qs.set(key, v);
+  }
+  const q = $('#smKeyword')?.value.trim() || '';
+  if (q) qs.set('q', q);
+  if (State.user && State.user.role === 'superadmin' && State.activeTenantId) qs.set('tenant_id', State.activeTenantId);
+  const btn = $('#smExportBtn');
+  if (btn) btn.disabled = true;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const res = await fetch(`api/suspicious_mails.php?${qs}`, { credentials: 'same-origin', signal: ctrl.signal });
+    if (!res.ok) { toast(`CSV の出力に失敗しました（HTTP ${res.status}）`, 'err'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `suspicious_mails_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    if (res.headers.get('X-Truncated') === '1') toast(`件数が多いため、新しい順に上限の件数だけを出力しました（全 ${res.headers.get('X-Total-Count')} 件）`, 'info');
+  } catch (e) {
+    toast(e.name === 'AbortError' ? '通信がタイムアウトしました' : 'CSV の出力に失敗しました', 'err');
+  } finally {
+    clearTimeout(timer);
+    if (btn) btn.disabled = false;
+  }
+}
+
 /* ========== アップロード ========== */
 
 function smPickFile() {
@@ -395,6 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#smUploadBtn')?.addEventListener('click', smPickFile);
   $('#smFileInput')?.addEventListener('change', (e) => smUploadFile(e.target.files[0]));
   $('#smApplyBtn')?.addEventListener('click', () => { SmState.offset = 0; loadSuspiciousMails().catch((e) => toast(e.message, 'err')); });
+  $('#smExportBtn')?.addEventListener('click', () => { smExportCsv(); });
   $('#smKeyword')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#smApplyBtn').click(); } });
   ['#smStatusFilter', '#smCategoryFilter', '#smPriorityFilter', '#smSourceFilter'].forEach((sel) =>
     $(sel)?.addEventListener('change', () => $('#smApplyBtn').click()));

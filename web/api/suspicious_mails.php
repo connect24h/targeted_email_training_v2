@@ -13,6 +13,8 @@ require_once __DIR__ . '/../lib/Secrets.php';
 
 const SM_MAX_BASE64_LEN = 2_900_000;
 const SM_REPUTATION_BATCH = 4;
+/** CSV に出す行の上限。超える時は新しい順に切り、応答のヘッダーで知らせる。 */
+const SM_CSV_MAX_ROWS = 10000;
 
 function sm_tenant(array $actor): ?int
 {
@@ -88,11 +90,12 @@ function sm_handle_upload(array $actor): never
         'is_training' => (int) $row['is_training']], 201);
 }
 
-function sm_handle_list(array $actor): never
+/**
+ * 一覧と CSV に共通の絞り込み(テナント、状況、分類、優先度、受付元、キーワード)。
+ * @return array{0:string,1:array} [WHERE 句, バインドする値]
+ */
+function sm_list_filter(?int $tenantId): array
 {
-    $tenantId = sm_tenant($actor);
-    $limit = isset($_GET['limit']) ? max(1, min(200, (int) $_GET['limit'])) : 50;
-    $offset = isset($_GET['offset']) ? max(0, (int) $_GET['offset']) : 0;
     $where = ['1=1'];
     $params = [];
     if ($tenantId !== null) {
@@ -113,7 +116,15 @@ function sm_handle_list(array $actor): never
         $where[] = "(subject LIKE ? ESCAPE '\\' OR from_email LIKE ? ESCAPE '\\' OR reporter_email LIKE ? ESCAPE '\\')";
         array_push($params, $like, $like, $like);
     }
-    $sql = implode(' AND ', $where);
+    return [implode(' AND ', $where), $params];
+}
+
+function sm_handle_list(array $actor): never
+{
+    $tenantId = sm_tenant($actor);
+    $limit = isset($_GET['limit']) ? max(1, min(200, (int) $_GET['limit'])) : 50;
+    $offset = isset($_GET['offset']) ? max(0, (int) $_GET['offset']) : 0;
+    [$sql, $params] = sm_list_filter($tenantId);
     $total = (int) Db::one("SELECT COUNT(*) n FROM suspicious_mails WHERE $sql", $params)['n'];
     $rows = Db::all("SELECT id, tenant_id, source, received_at, from_email, from_name, subject, reporter_email, is_training,
                      score, suggested_category, category, status, priority, assigned_to, reputation_checked_at, created_at, updated_at
@@ -122,6 +133,64 @@ function sm_handle_list(array $actor): never
         $tenantId === null ? [] : [$tenantId]);
     json_out(['success' => true, 'rows' => $rows, 'total' => $total, 'limit' => $limit, 'offset' => $offset,
         'status_counts' => array_column($counts, 'n', 'status'), 'virustotal_configured' => Secrets::get('virustotal.api_key') !== null]);
+}
+
+/**
+ * 一覧の CSV の本文。Excel で文字化けしないよう UTF-8 の BOM を付け、行末は CRLF。
+ * 件名や送信者は外から届いた値なので、先頭が = + - @ などの値は tet2_csv_sanitize で式として扱われないようにする。
+ * メモ(note)は自由記述で社内の対応内容を含むため出さない。
+ */
+function sm_csv(array $rows, bool $withTenant): string
+{
+    $label = static fn(array $map, ?string $value): string => $map[$value ?? ''] ?? (string) $value;
+    $categories = ['training' => '訓練メール', 'safe' => '安全', 'spam' => '迷惑メール', 'threat' => '脅威', 'undetermined' => '未判定'];
+    $statuses = ['open' => '未確認', 'in_progress' => '確認中', 'resolved' => '対応済'];
+    $priorities = ['low' => '低', 'normal' => '中', 'high' => '高'];
+    $sources = ['upload' => 'アップロード', 'maildir' => '報告アドレス'];
+    $header = ['受付日時', '受付元', '送信者名', '送信者', '件名', '報告者', '推奨分類', '分類', '確認状況', '優先度', '担当', 'スコア', '訓練メール', '登録日時'];
+    if ($withTenant) {
+        array_unshift($header, 'テナントID');
+    }
+    $out = fopen('php://temp', 'r+');
+    fputcsv($out, $header, ',', '"', '', "\r\n");
+    foreach ($rows as $r) {
+        $cells = [
+            (string) $r['received_at'], $label($sources, $r['source']), (string) ($r['from_name'] ?? ''), (string) ($r['from_email'] ?? ''),
+            (string) ($r['subject'] ?? ''), (string) ($r['reporter_email'] ?? ''), $label($categories, $r['suggested_category']),
+            $label($categories, $r['category']), $label($statuses, $r['status']), $label($priorities, $r['priority']),
+            (string) ($r['assigned_to'] ?? ''), (string) $r['score'], (int) $r['is_training'] === 1 ? 'はい' : 'いいえ', (string) $r['created_at'],
+        ];
+        if ($withTenant) {
+            array_unshift($cells, $r['tenant_id'] === null ? '未確定' : (string) $r['tenant_id']);
+        }
+        fputcsv($out, array_map('tet2_csv_sanitize', $cells), ',', '"', '', "\r\n");
+    }
+    rewind($out);
+    $csv = (string) stream_get_contents($out);
+    fclose($out);
+    return "\xEF\xBB\xBF" . $csv;
+}
+
+/** 一覧を CSV で出す。読める人(operator 以上)と絞り込みとテナントの範囲は一覧と同じ。 */
+function sm_handle_export_csv(array $actor): never
+{
+    $tenantId = sm_tenant($actor);
+    [$sql, $params] = sm_list_filter($tenantId);
+    $total = (int) Db::one("SELECT COUNT(*) n FROM suspicious_mails WHERE $sql", $params)['n'];
+    $rows = Db::all("SELECT id, tenant_id, source, received_at, from_email, from_name, subject, reporter_email, is_training,
+                     score, suggested_category, category, status, priority, assigned_to, created_at
+                     FROM suspicious_mails WHERE $sql ORDER BY received_at DESC, id DESC LIMIT ?", [...$params, SM_CSV_MAX_ROWS]);
+    $csv = sm_csv($rows, $tenantId === null);
+    audit('suspicious_mail.export_csv', 'tenant_id=' . ($tenantId ?? 'all') . ',rows=' . count($rows) . ',total=' . $total);
+    http_response_code(200);
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="suspicious_mails_' . date('Ymd_His') . '.csv"');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store');
+    header('X-Total-Count: ' . $total);
+    header('X-Truncated: ' . ($total > count($rows) ? '1' : '0'));
+    echo $csv;
+    exit;
 }
 
 function sm_handle_get(array $actor): never
@@ -201,6 +270,9 @@ try {
     }
     if ($action === 'get' && $method === 'GET') {
         sm_handle_get($actor);
+    }
+    if ($action === 'export_csv' && $method === 'GET') {
+        sm_handle_export_csv($actor);
     }
     if ($action === 'upload' && $method === 'POST') {
         sm_handle_upload($actor);
