@@ -1,5 +1,6 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/SuspiciousMailStore.php';
+require_once __DIR__ . '/../lib/SuspiciousMailRules.php';
 require_once __DIR__ . '/../lib/VirusTotalClient.php';
 require_once __DIR__ . '/../lib/Secrets.php';
 
@@ -238,6 +239,59 @@ function sm_handle_reanalyze(array $actor): never
     json_out(['success' => true] + $result);
 }
 
+/**
+ * 登録した条件は、テナントを1つに決めて扱う。システム管理者がテナントを選んでいない時(全テナント横断)は扱わない。
+ */
+function sm_rule_tenant(array $actor): int
+{
+    $tenantId = sm_tenant($actor);
+    if ($tenantId === null) {
+        json_error('テナントを選んでから条件を登録してください', 400);
+    }
+    return $tenantId;
+}
+
+function sm_handle_rules(array $actor): never
+{
+    $tenantId = sm_rule_tenant($actor);
+    json_out(['success' => true, 'rules' => SuspiciousMailRules::all($tenantId), 'kinds' => SuspiciousMailRules::KINDS,
+        'limits' => ['rules' => SuspiciousMailRules::MAX_RULES, 'name' => SuspiciousMailRules::MAX_NAME, 'value' => SuspiciousMailRules::MAX_VALUE]]);
+}
+
+function sm_handle_rule_save(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = sm_rule_tenant($actor);
+    try {
+        if (array_key_exists('id', $body)) {
+            $id = sm_body_int($body, 'id');
+            $rule = SuspiciousMailRules::update($id, $tenantId, $body);
+            audit('suspicious_mail.rule_update', 'tenant_id=' . $tenantId . ',rule_id=' . $id);
+            json_out(['success' => true, 'rule' => $rule]);
+        }
+        $id = SuspiciousMailRules::create($tenantId, $body, (string) $actor['email']);
+    } catch (DomainException $e) {
+        json_error($e->getMessage(), $e->getCode() ?: 400);
+    }
+    audit('suspicious_mail.rule_create', 'tenant_id=' . $tenantId . ',rule_id=' . $id);
+    json_out(['success' => true, 'rule' => SuspiciousMailRules::find($id, $tenantId)], 201);
+}
+
+function sm_handle_rule_delete(array $actor): never
+{
+    tet2_require_csrf();
+    $id = sm_body_int(json_body(), 'id');
+    $tenantId = sm_rule_tenant($actor);
+    try {
+        SuspiciousMailRules::delete($id, $tenantId);
+    } catch (DomainException $e) {
+        json_error($e->getMessage(), $e->getCode() ?: 400);
+    }
+    audit('suspicious_mail.rule_delete', 'tenant_id=' . $tenantId . ',rule_id=' . $id);
+    json_out(['success' => true]);
+}
+
 function sm_handle_reputation(array $actor): never
 {
     tet2_require_csrf();
@@ -273,6 +327,15 @@ try {
     }
     if ($action === 'export_csv' && $method === 'GET') {
         sm_handle_export_csv($actor);
+    }
+    if ($action === 'rules' && $method === 'GET') {
+        sm_handle_rules($actor);
+    }
+    if ($action === 'rule_save' && $method === 'POST') {
+        sm_handle_rule_save($actor);
+    }
+    if ($action === 'rule_delete' && $method === 'POST') {
+        sm_handle_rule_delete($actor);
     }
     if ($action === 'upload' && $method === 'POST') {
         sm_handle_upload($actor);

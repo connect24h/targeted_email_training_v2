@@ -476,6 +476,28 @@
             <button class="btn btn-outline-secondary" id="smNextBtn">次 <i class="bi bi-chevron-right"></i></button>
           </div>
         </div>
+        <details class="card mt-3" id="smRulesCard">
+          <summary class="card-header">登録した条件（送信者、件名の語、URL のドメイン）</summary>
+          <div class="card-body">
+            <p class="small text-muted mb-2">当たったメールの所見に「登録した条件に一致」と条件の名前を出します。分類を自動で変えたり、メールを送ったり消したりはしません。
+              新しく届いたメールと、再解析したメールに効きます。</p>
+            <form id="smRuleForm" class="row g-2 align-items-end mb-2">
+              <div class="col-md-3"><label class="form-label small mb-1" for="smRuleName">条件の名前</label>
+                <input class="form-control form-control-sm" id="smRuleName" maxlength="100" required placeholder="例: 取引先を装う送信者"></div>
+              <div class="col-md-3"><label class="form-label small mb-1" for="smRuleKind">種類</label>
+                <select class="form-select form-select-sm" id="smRuleKind">
+                  <option value="sender">送信者（アドレスかドメイン）</option><option value="subject_keyword">件名の語</option><option value="url_domain">URL のドメイン</option>
+                </select></div>
+              <div class="col-md-4"><label class="form-label small mb-1" for="smRuleValue">照合する値</label>
+                <input class="form-control form-control-sm" id="smRuleValue" maxlength="200" required placeholder="例: example.com / 請求書"></div>
+              <div class="col-md-2 d-grid"><button type="submit" class="btn btn-sm btn-outline-primary" id="smRuleAddBtn"><i class="bi bi-plus-lg" aria-hidden="true"></i> 追加</button></div>
+            </form>
+            <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+              <thead><tr><th>名前</th><th>種類</th><th>値</th><th>状態</th><th class="text-end">操作</th></tr></thead>
+              <tbody id="smRulesBody"></tbody>
+            </table></div>
+          </div>
+        </details>
       </section>
 
       <section data-panel="logs" class="view-panel d-none">

@@ -100,6 +100,73 @@ async function loadSuspiciousMails() {
   $('#smNextBtn').disabled = SmState.offset + SmState.limit >= data.total;
 }
 
+/* ========== 登録した条件 ========== */
+
+const SM_RULE_KIND_LABEL = { sender: '送信者', subject_keyword: '件名の語', url_domain: 'URL のドメイン' };
+const SmRules = { rows: {} };
+
+async function loadSmRules() {
+  const body = $('#smRulesBody');
+  if (!body) return;
+  let data;
+  try {
+    data = await api('api/suspicious_mails.php', { query: { action: 'rules' } });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="5" class="small text-muted">${esc(e.message)}</td></tr>`;
+    return;
+  }
+  SmRules.rows = {};
+  for (const r of data.rules) SmRules.rows[r.id] = r;
+  body.innerHTML = data.rules.length ? data.rules.map((r) => {
+    const active = Number(r.is_active) === 1;
+    return `<tr data-rule-id="${Number(r.id)}"${active ? '' : ' class="text-muted"'}>
+      <td class="text-break">${esc(r.name)}</td>
+      <td class="small">${esc(SM_RULE_KIND_LABEL[r.kind] || r.kind)}</td>
+      <td><code class="small text-break">${esc(r.value)}</code></td>
+      <td>${active ? '<span class="badge bg-success">有効</span>' : '<span class="badge bg-light text-dark border">停止中</span>'}</td>
+      <td class="text-end text-nowrap">
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-rule-action="toggle">${active ? '止める' : '有効にする'}</button>
+        <button type="button" class="btn btn-sm btn-outline-danger" data-rule-action="delete" aria-label="条件を削除" title="条件を削除"><i class="bi bi-trash" aria-hidden="true"></i></button>
+      </td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="small text-muted">登録した条件はありません。</td></tr>';
+}
+
+async function smAddRule(e) {
+  e.preventDefault();
+  const btn = $('#smRuleAddBtn');
+  btn.disabled = true;
+  try {
+    await api('api/suspicious_mails.php', { method: 'POST', query: { action: 'rule_save' }, body: {
+      name: $('#smRuleName').value.trim(), kind: $('#smRuleKind').value, value: $('#smRuleValue').value.trim(),
+    } });
+    $('#smRuleName').value = '';
+    $('#smRuleValue').value = '';
+    toast('条件を登録しました', 'ok');
+    await loadSmRules();
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function smRuleAction(id, action) {
+  const rule = SmRules.rows[id];
+  if (!rule) return;
+  try {
+    if (action === 'delete') {
+      if (!confirm(`条件「${rule.name}」を削除しますか？`)) return;
+      await api('api/suspicious_mails.php', { method: 'POST', query: { action: 'rule_delete' }, body: { id } });
+      toast('条件を削除しました', 'ok');
+    } else {
+      await api('api/suspicious_mails.php', { method: 'POST', query: { action: 'rule_save' }, body: { id, is_active: Number(rule.is_active) !== 1 } });
+    }
+    await loadSmRules();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
 /* ========== CSV 出力 ========== */
 
 // いまの絞り込みの条件で一覧を CSV に出す。superadmin がテナントを選んでいる時はそのテナントだけ(api() と同じ扱い)。
@@ -431,6 +498,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#smFileInput')?.addEventListener('change', (e) => smUploadFile(e.target.files[0]));
   $('#smApplyBtn')?.addEventListener('click', () => { SmState.offset = 0; loadSuspiciousMails().catch((e) => toast(e.message, 'err')); });
   $('#smExportBtn')?.addEventListener('click', () => { smExportCsv(); });
+  // 登録した条件は開いた時に読む(一覧の表示を遅くしない)
+  $('#smRulesCard')?.addEventListener('toggle', (e) => { if (e.target.open) loadSmRules(); });
+  $('#smRuleForm')?.addEventListener('submit', smAddRule);
+  $('#smRulesBody')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-rule-action]');
+    const tr = e.target.closest('tr[data-rule-id]');
+    if (btn && tr) smRuleAction(Number(tr.dataset.ruleId), btn.dataset.ruleAction);
+  });
   $('#smKeyword')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#smApplyBtn').click(); } });
   ['#smStatusFilter', '#smCategoryFilter', '#smPriorityFilter', '#smSourceFilter'].forEach((sel) =>
     $(sel)?.addEventListener('change', () => $('#smApplyBtn').click()));
