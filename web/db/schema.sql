@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS templates (
   auth_flag  INTEGER,                           -- phish_login のみ: 0=通常 1=Box 2=MS365 3=DigitalArts
   is_preset  INTEGER NOT NULL DEFAULT 0,
   scenario_key TEXT,
+  description TEXT,                             -- シナリオの概要(元の事例、手口、見分けるポイント)。一覧と訓練の作成画面に出す
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );

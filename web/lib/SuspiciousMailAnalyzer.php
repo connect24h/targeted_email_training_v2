@@ -33,7 +33,8 @@ final class SuspiciousMailAnalyzer
 
     /**
      * @param array $analysis parser の result['analysis']
-     * @param array $context  ['own_domains' => string[], 'training_tracking_ids' => string[], 'parse_error' => ?string]
+     * @param array $context  ['own_domains' => string[], 'training_tracking_ids' => string[], 'parse_error' => ?string,
+     *                          'tenant_rules' => list<array{id:int,name:string,kind:string,value:string}>(テナントが登録した条件)]
      * @param array $reputation ['file' => [sha256 => row], 'url' => [url => row]]（reputation_cache の行）
      * @return array{target_index:?int, findings:array, score:int, suggested_category:string, summary:array}
      */
@@ -61,6 +62,7 @@ final class SuspiciousMailAnalyzer
         self::urlRules($target, $reputation['url'] ?? [], $findings);
         self::attachmentRules($target, $reputation['file'] ?? [], $findings);
         self::bodyRules($target, $findings);
+        self::tenantRules($target, $context['tenant_rules'] ?? [], $findings);
 
         usort($findings, static fn(array $a, array $b): int =>
             (self::SEVERITY_ORDER[$b['severity']] <=> self::SEVERITY_ORDER[$a['severity']]) ?: ($b['score'] <=> $a['score']));
@@ -291,6 +293,60 @@ final class SuspiciousMailAnalyzer
         } else {
             $findings[] = self::finding($prefix . '_clean', 'info', 0, 'VirusTotal では悪性判定がありません', $evidence + $stats);
         }
+    }
+
+    /* ---------- テナントが登録した条件 ---------- */
+
+    /**
+     * 登録した条件(送信者、件名の語、URL のドメイン)に当たれば、条件ごとに所見を1つ足す。
+     * 点数は足さない(推奨分類を自動で変えない)。目立たせるため重さは「中」。値は SuspiciousMailRules が小文字にして保存している。
+     */
+    private static function tenantRules(array $m, array $rules, array &$findings): void
+    {
+        $from = strtolower((string) ($m['from_email'] ?? ''));
+        $fromDomain = self::domainOf($from !== '' ? $from : null);
+        $subject = mb_strtolower((string) ($m['subject'] ?? ''), 'UTF-8');
+        $hosts = [];
+        foreach ($m['urls'] ?? [] as $entry) {
+            $host = strtolower((string) (parse_url((string) ($entry['unwrapped'] ?? ''), PHP_URL_HOST) ?? ''));
+            if ($host !== '') {
+                $hosts[$host] = true;
+            }
+        }
+        foreach ($rules as $rule) {
+            $value = (string) ($rule['value'] ?? '');
+            if ($value === '') {
+                continue;
+            }
+            $matched = match ($rule['kind'] ?? '') {
+                'sender' => str_contains($value, '@') ? ($from === $value ? $from : null)
+                    : ($fromDomain !== null && self::domainMatches($fromDomain, $value) ? $from : null),
+                'subject_keyword' => str_contains($subject, mb_strtolower($value, 'UTF-8')) ? (string) ($m['subject'] ?? '') : null,
+                'url_domain' => self::firstHostMatching(array_keys($hosts), $value),
+                default => null,
+            };
+            if ($matched !== null) {
+                $findings[] = self::finding('tenant_rule', 'medium', 0, '登録した条件に一致: ' . (string) ($rule['name'] ?? ''),
+                    ['rule_id' => (int) ($rule['id'] ?? 0), 'rule_name' => (string) ($rule['name'] ?? ''), 'kind' => (string) $rule['kind'],
+                     'value' => $value, 'matched' => $matched]);
+            }
+        }
+    }
+
+    /** $host が $domain そのものか、そのサブドメインか。 */
+    private static function domainMatches(string $host, string $domain): bool
+    {
+        return $host === $domain || str_ends_with($host, '.' . $domain);
+    }
+
+    private static function firstHostMatching(array $hosts, string $domain): ?string
+    {
+        foreach ($hosts as $host) {
+            if (self::domainMatches((string) $host, $domain)) {
+                return (string) $host;
+            }
+        }
+        return null;
     }
 
     /* ---------- 本文 ---------- */

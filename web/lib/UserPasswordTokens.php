@@ -183,10 +183,13 @@ final class UserPasswordTokens
      */
     public static function policyViolation(array $user, string $password): ?string
     {
+        $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null;
+        $email = isset($user['email']) ? (string) $user['email'] : null;
         if ((string) ($user['role'] ?? '') === 'learner') {
-            return PasswordPolicy::violation($password);
+            // 受講者はよく使われる語と組織の語だけ(組織が足した禁止語は管理画面のユーザ向け)
+            return PasswordPolicy::violation($password) ?? PasswordDenyList::learnerViolation($password, $tenantId, $email);
         }
-        return AdminSecurityPolicy::violation($password, $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null);
+        return AdminSecurityPolicy::violation($password, $tenantId, $email);
     }
 
     /** 画面に出す決まりの説明(policyViolation と同じ区別)。 @param array<string,mixed> $user */

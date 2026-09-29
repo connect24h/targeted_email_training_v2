@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/ReportMailParser.php';
 require_once __DIR__ . '/SuspiciousMailAnalyzer.php';
+require_once __DIR__ . '/SuspiciousMailRules.php';
 
 /**
  * 不審メール（suspicious_mails）の保存・再解析・更新・外部評判照会。
@@ -38,7 +39,9 @@ final class SuspiciousMailStore
             throw new InvalidArgumentException('メールとして解析できません: ' . ($parsed['error'] ?? 'unknown'));
         }
         $trainingIds = self::trainingIds(array_unique(array_merge($parsed['tracking_ids_from_msgid'], $parsed['tracking_ids_from_body'])), $tenantId);
-        $context = ['own_domains' => self::ownDomains($tenantId), 'training_tracking_ids' => $trainingIds];
+        // テナントが登録した条件は、そのテナントのものだけを使う(テナント未確定のメールには使わない)
+        $context = ['own_domains' => self::ownDomains($tenantId), 'training_tracking_ids' => $trainingIds,
+            'tenant_rules' => $tenantId === null ? [] : SuspiciousMailRules::active($tenantId)];
         $analysis = self::compactAnalysis($parsed['analysis']);
         $result = SuspiciousMailAnalyzer::analyze($analysis, $context, $reputation);
         return ['parsed' => $parsed, 'analysis' => $analysis, 'training_ids' => $trainingIds, 'result' => $result];

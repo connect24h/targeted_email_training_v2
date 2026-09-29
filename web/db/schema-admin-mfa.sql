@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS tenant_security_policies (
   min_length    INTEGER NOT NULL DEFAULT 12 CHECK (min_length BETWEEN 12 AND 64),
   min_classes   INTEGER NOT NULL DEFAULT 3 CHECK (min_classes IN (3, 4)),
   require_mfa   INTEGER NOT NULL DEFAULT 0 CHECK (require_mfa IN (0, 1)),
+  banned_words  TEXT DEFAULT NULL,                 -- パスワードに含めてはいけない語(改行区切り、組織が足す分。20261021 で追加)
   updated_by    INTEGER,                          -- 変えた管理画面ユーザ(削除されても残すので外部キーにしない)
   updated_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE

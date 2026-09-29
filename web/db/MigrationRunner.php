@@ -29,6 +29,7 @@ final class MigrationRunner
         '20261012-learner-portal',
         '20261015-admin-mfa',
         '20261020-edu-delivery-options',
+        '20261021-training-report-options',
     ];
 
     /**
@@ -257,6 +258,13 @@ final class MigrationRunner
             $this->ensureAdditiveColumns($pdo);
             return;
         }
+        if ($version === '20261021-training-report-options') {
+            // シナリオの概要(G13)、パスワードの禁止語(G44 の残り)、不審メールの登録した条件(G42)。
+            // 列と表を足すだけ。既存のテンプレートは概要なし、方針の禁止語は空(従来どおり)、条件は0件のまま。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-suspicious-mail-rules.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -478,7 +486,8 @@ final class MigrationRunner
                 'archived_at' => 'TEXT DEFAULT NULL',
                 'is_test' => 'INTEGER NOT NULL DEFAULT 0',
             ],
-            'templates' => ['scenario_key' => 'TEXT'],
+            'templates' => ['scenario_key' => 'TEXT', 'description' => 'TEXT'],
+            'tenant_security_policies' => ['banned_words' => 'TEXT DEFAULT NULL'],
             'campaign_targets' => ['content_no' => 'INTEGER'],
             'campaign_contents' => [
                 'suppress_prefill_email' => 'INTEGER NOT NULL DEFAULT 0',

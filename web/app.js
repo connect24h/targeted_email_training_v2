@@ -406,8 +406,11 @@ async function renderSecurityPolicy() {
   const el = $('#securityPolicySummary');
   try { securityPolicy = await api('api/users.php', { query: { action: 'security_policy' } }); }
   catch (e) { el.textContent = `方針を読み込めませんでした（${e.message}）`; return; }
+  const g = securityPolicy.global || {};
+  const words = (securityPolicy.tenant?.banned_words?.length || 0) + (g.banned_words_count ?? g.banned_words?.length ?? 0);
   el.textContent = securityPolicyText(securityPolicy.effective)
-    + (securityPolicy.global.configured ? '（全テナント共通の方針と合わせた結果）' : '');
+    + (securityPolicy.global.configured ? '（全テナント共通の方針と合わせた結果）' : '')
+    + ` よく使われる語句と組織名・ドメイン名を含むパスワードは使えません${words ? `（組織で足した禁止語 ${words}語）` : ''}。`;
 }
 function editSecurityPolicy() {
   const p = securityPolicy;
@@ -426,6 +429,10 @@ function editSecurityPolicy() {
       <label class="form-check-label" for="pfRequireMfa">多要素認証を必須にする</label></div>
     <div class="form-text">${p.mfa_available ? '必須にすると、未登録のユーザは次の操作から登録の画面だけになります。'
       : '多要素認証の暗号鍵が未設定のため、今は必須にできません。'}</div>
+    <div class="mb-2 mt-2"><label class="form-label" for="pfBannedWords">パスワードの禁止語（1行に1語）</label>
+      <textarea class="form-control" id="pfBannedWords" name="banned_words" rows="4" placeholder="例: 社名の略称、製品名、所在地"></textarea>
+      <div class="form-text">${p.limits.banned_word_min}〜${p.limits.banned_word_max}文字で${p.limits.banned_words}語まで。大文字と小文字は区別しません。
+        よく使われる語句（password など）、組織名、テナントの識別子、本人のメールのドメインは、ここに書かなくても使えません。受講者のマイページには組織で足した語は当てません。</div></div>
     ${!p.can_edit_global && p.global.configured ? `<div class="small text-muted mt-2">全テナント共通の方針（${esc(securityPolicyText(p.global))}）の方が厳しい項目は、そちらが効きます。</div>` : ''}
   </form>`;
   showModal('パスワードと多要素認証の方針', body, async () => {
@@ -433,6 +440,7 @@ function editSecurityPolicy() {
     const scope = f.scope ? f.scope.value : scopes[0][0];
     await api('api/users.php', { method: 'POST', query: { action: 'security_policy' }, body: {
       scope, min_length: Number(f.min_length.value), min_classes: Number(f.min_classes.value), require_mfa: f.require_mfa.checked,
+      banned_words: f.banned_words.value,
     } });
     toast('方針を保存しました', 'ok');
     // 自分が未登録のまま必須にした時は、すぐに登録の画面へ移す
@@ -446,6 +454,7 @@ function editSecurityPolicy() {
     f.min_length.value = cur.min_length;
     f.min_classes.value = String(cur.min_classes);
     f.require_mfa.checked = !!cur.require_mfa;
+    f.banned_words.value = (cur.banned_words || []).join('\n');
   };
   fill();
   f.scope?.addEventListener('change', fill);
@@ -697,8 +706,15 @@ function setCampaignTestFilter(v) { campaignTestFilter = v; renderCampaigns(); }
 async function renderCampaigns() {
   renderSendControl();  // 送信制御パネル(ステータス+アラート)を描画・ポーリング開始
   const tenantId = State.activeTenantId;
-  const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+  // 報告率と防衛失敗率はレポートの集計(report.php の campaigns)をそのまま使う。1回の問い合わせで全訓練分を返すので、行ごとに問い合わせない。
+  // 集計を読めなくても一覧と操作ボタンは出す(率は「-」)。
+  const [{ campaigns }, rates] = await Promise.all([
+    api('api/campaigns.php', { query: { action: 'list' } }),
+    api('api/report.php', { query: { action: 'campaigns', test_filter: 'all' } }).catch(() => ({ campaigns: [] })),
+  ]);
   if (State.view !== 'campaigns' || State.activeTenantId !== tenantId) return;
+  const rateById = {};
+  for (const r of (rates.campaigns || [])) rateById[r.id] = r;
   // #列は表示上の通し番号(作成順=古い順に固定で1,2,3…)。並び順を変えても番号は変わらない。
   // 古い順(id昇順)でordinalを確定 → id→番号 のマップを作る。
   const campaignsAsc = campaigns.slice().sort((a, b) => a.id - b.id);
@@ -723,7 +739,7 @@ async function renderCampaigns() {
   const sortLabel = campaignSortDesc ? '最新が上(降順)' : '古い順が上(昇順)';
   const head = document.getElementById('campaignsHead');
   if (head) {
-    head.innerHTML = `<tr><th><button class="btn btn-sm btn-link p-0 text-decoration-none" onclick="toggleCampaignSort()" title="${sortLabel}・クリックで切替">#<i class="bi ${sortArrow}"></i></button></th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr>`;
+    head.innerHTML = `<tr><th><button class="btn btn-sm btn-link p-0 text-decoration-none" onclick="toggleCampaignSort()" title="${sortLabel}・クリックで切替">#<i class="bi ${sortArrow}"></i></button></th><th>名称</th><th>状態</th><th>対象</th><th title="${esc(REPORT_RATE_TITLE)}">報告率</th><th title="${esc(FAILURE_RATE_TITLE)}">防衛失敗率</th><th>開始</th><th>操作</th></tr>`;
   }
   $('#campaignsBody').innerHTML = shown.length ? shown.map((c) => `
     <tr>
@@ -731,6 +747,7 @@ async function renderCampaigns() {
       <td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td>
       <td><span class="badge st-${c.status}">${STATUS_LABEL[c.status] || c.status}</span>${c.closed_at ? ' <span class="badge bg-secondary">クローズ</span>' : ''}</td>
       <td>${c.target_count}</td>
+      ${campaignRateCells(rateById[c.id])}
       <td class="small text-muted">${fmtDate(c.start_at)}</td>
       <td><div class="d-flex flex-wrap gap-1">
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
@@ -760,7 +777,7 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
       </div></td>
-    </tr>`).join('') : emptyRow(6);
+    </tr>`).join('') : emptyRow(8);
   // 進行中(実行中/予約)のキャンペーンがあれば、送信完了→done 遷移を画面に反映するため
   // 15秒ごとに一覧を自動更新する。緊急停止ボタンが完了後も残る問題への対処。
   if (campaignsRefreshTimer) { clearTimeout(campaignsRefreshTimer); campaignsRefreshTimer = null; }
@@ -2080,7 +2097,8 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
           <select class="form-select form-select-sm c-scenario">
             <option value="">— 個別に選択 —</option>
             ${scenarioOptions}
-          </select></div>
+          </select>
+          <div class="form-text c-scenario-desc" style="white-space:pre-wrap" aria-live="polite"></div></div>
       </div>
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">件名</label><select class="form-select form-select-sm c-subject">${opt(byKind('subject'))}</select></div>
@@ -2315,6 +2333,14 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     const clearScenario = () => { scenSel.value = ''; };
     row.querySelector('.c-subject').addEventListener('change', clearScenario);
     row.querySelector('.c-body').addEventListener('change', clearScenario);
+    // 選んだ本文の概要(元の事例、手口、見分けるポイント)を選択欄の下に出す。利用者の入力なので textContent で入れる。
+    const showScenarioDescription = () => {
+      const t = tplById[row.querySelector('.c-body').value];
+      const text = String(t?.description || '').trim();
+      row.querySelector('.c-scenario-desc').textContent = text ? `概要: ${text}` : '';
+    };
+    scenSel.addEventListener('change', showScenarioDescription);
+    row.querySelector('.c-body').addEventListener('change', showScenarioDescription);
     listEl.appendChild(row);
     if (prefill) {
       // 編集時: 既存コンテンツの値を復元。
@@ -2336,6 +2362,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
       if (scenarios.length) { scenSel.value = scenarios[0].key; scenSel.dispatchEvent(new Event('change')); }
     }
+    showScenarioDescription();
     row.dataset.pristine = prefill ? 'false' : 'true';
     row.addEventListener('input', () => { row.dataset.pristine = 'false'; });
     row.addEventListener('change', () => { row.dataset.pristine = 'false'; syncContentSummary(row); });
@@ -2551,6 +2578,15 @@ function rateClass(v, warn, danger) { const n = Number(v) || 0; return n >= dang
 // 報告率は「高いほど良い」ので rateClass とは色の向きが逆になる。
 // 失敗率と同じ関数を使い回すと、よく報告している部署が赤く出て判断を誤る。
 function goodRateClass(v, ok, great) { const n = Number(v) || 0; return n >= great ? 'val-success' : n >= ok ? 'val-warning' : 'val-danger'; }
+// 報告率と防衛失敗率の定義(サーバの report_summary_from_counts と同じ)。見出しの title に出す。
+const REPORT_RATE_TITLE = '報告率＝訓練メールを報告した人数÷対象数（テストの対象者を除く）';
+const FAILURE_RATE_TITLE = '防衛失敗率＝リンクを踏んで偽サイトを表示したか、認証情報を入力した人数÷対象数（両方した人も1人。テストの対象者を除く）';
+// 訓練の一覧の報告率と防衛失敗率のセル。集計がない(読めなかった)ときは「-」。
+function campaignRateCells(r) {
+  if (!r) return '<td>-</td><td>-</td>';
+  return `<td class="${goodRateClass(r.report_rate,5,20)}">${countRate(r.report_count, r.report_rate)}</td>
+      <td class="${rateClass(r.failure_rate,25,50)}">${countRate(r.failure_count, r.failure_rate)}</td>`;
+}
 let reportTestFilter = 'prod';  // prod=本番のみ / test=テストのみ / all=全部
 function setReportFilter(v) { reportTestFilter = v; renderReports(); }
 async function renderReports() {
@@ -2577,9 +2613,10 @@ async function renderReports() {
       <td class="${rateClass(s.click_rate,25,50)}">${countRate(s.click_count, s.click_rate)}</td>
       <td class="${rateClass(authRateOf(s.auth_count, s.click_count) ?? 0,5,20)}">${countRate(s.auth_count, authRateOf(s.auth_count, s.click_count))}</td>
       <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
+      ${campaignRateCells(s)}
       <td><i class="bi bi-chevron-right"></i></td>
     </tr>`;
-  }).join('') : emptyRow(8);
+  }).join('') : emptyRow(10);
   if (reportSelectedId && Cache.reports[reportSelectedId]) showReportDetail(reportSelectedId);
   else { $('#reportDetail').classList.add('d-none'); reportSelectedId = null; }
 }
@@ -2590,6 +2627,7 @@ async function showReportDetail(id) {
   const s = c.summary || c;
   $('#reportDetail').classList.remove('d-none');
   $('#reportDetailTitle').textContent = `${c.name} — 反応内訳`;
+  renderReportOverviewKpis(s);
   if (reportChart) reportChart.destroy();
   reportChart = new Chart($('#reportChart'), {
     type: 'bar',
@@ -2606,6 +2644,26 @@ async function showReportDetail(id) {
   });
   await renderFailures(id);
   await renderReportDetail(id);
+}
+// 概要の数字(報告率、防衛失敗率、配信エラーの人数)。値は数だけなので textContent で入れる。
+function renderReportOverviewKpis(s) {
+  const el = $('#reportOverviewKpis');
+  if (!el) return;
+  const item = (label, value, title) => {
+    const box = document.createElement('div');
+    box.className = 'report-kpi border rounded px-3 py-2';
+    box.dataset.kpi = label;
+    if (title) box.title = title;
+    const l = document.createElement('div'); l.className = 'small text-muted'; l.textContent = label;
+    const v = document.createElement('div'); v.className = 'fw-semibold'; v.textContent = value;
+    box.append(l, v);
+    return box;
+  };
+  el.replaceChildren(
+    item('報告率', `${pct(s.report_rate)}（${Number(s.report_count) || 0}人）`, REPORT_RATE_TITLE),
+    item('防衛失敗率', `${pct(s.failure_rate)}（${Number(s.failure_count) || 0}人）`, FAILURE_RATE_TITLE),
+    item('配信エラー', `${Number(s.delivery_error_count) || 0}人`, '送信できなかった宛先の人数（送信の失敗・保留の記録がある宛先。送信後のバウンスは含みません）'),
+  );
 }
 // P7: v1同等の詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン)
 async function renderReportDetail(campaignId) {
@@ -3161,18 +3219,24 @@ function renderTemplatesScenario(all) {
     pairedIds.add(s.id);
     pairedIds.add(b.id);
     return `<tr style="cursor:pointer" data-scenario-key="${esc(key)}" onclick="scenarioViewer(this.dataset.scenarioKey)">
-      <td>${++rowNumber}</td><td>${esc(s.name)}</td><td class="text-muted small">${esc(b.name)}</td>
+      <td>${++rowNumber}</td><td>${esc(s.name)}${tplDescriptionHtml(b.description || s.description)}</td><td class="text-muted small">${esc(b.name)}</td>
       <td>${Number(s.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
       <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`;
   }).join('');
   // ペアが欠けた場合も、元の件名・本文を一覧から失わない。
   const orphans = all.filter((t) => (t.kind === 'subject' || t.kind === 'body') && !pairedIds.has(t.id));
   const orphanRows = orphans.map((t) => `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
-    <td>${++rowNumber}</td><td>${esc(t.name)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
+    <td>${++rowNumber}</td><td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
     <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
     <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`).join('');
   $('#templatesHead').innerHTML = '<tr><th>連番</th><th>件名</th><th>本文</th><th></th><th></th></tr>';
   $('#templatesBody').innerHTML = (scenRows + orphanRows) || emptyRow(5);
+}
+// 一覧の名称の下に出す概要(元の事例、手口、見分けるポイント)。長い概要は1行で切り、全文は title で見せる。
+function tplDescriptionHtml(description) {
+  const text = String(description || '').trim();
+  if (!text) return '';
+  return `<div class="small text-muted text-truncate tpl-description" style="max-width:32rem" title="${esc(text)}">${esc(text.replace(/\s+/g, ' '))}</div>`;
 }
 // 偽ログイン: 種別(auth_flag)ごとにグループ化し、種別内の通番を振る。
 function renderTemplatesPhish(all) {
@@ -3183,7 +3247,7 @@ function renderTemplatesPhish(all) {
     counters[flag] = (counters[flag] || 0) + 1;
     return `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
       <td>${esc(AUTH_FLAG_NAME[flag] || flag)} #${counters[flag]}</td>
-      <td>${esc(t.name)}</td><td>${esc(t.format)}</td>
+      <td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td>${esc(t.format)}</td>
       <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
       <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`;
   }).join('');
@@ -3193,7 +3257,7 @@ function renderTemplatesPhish(all) {
 // ネタバラシ/eラーニング等: 一覧+ビューア。
 function renderTemplatesSimple(all, kind) {
   const rows = all.filter((t) => t.kind === kind).map((t, i) => `<tr style="cursor:pointer" onclick="tplViewer(${t.id})">
-    <td>${i + 1}</td><td>${esc(t.name)}</td><td>${esc(t.format)}</td>
+    <td>${i + 1}</td><td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td>${esc(t.format)}</td>
     <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
     <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`).join('');
   $('#templatesHead').innerHTML = '<tr><th>連番</th><th>名称</th><th>形式</th><th></th><th></th></tr>';
@@ -3224,6 +3288,7 @@ function templateForm(t = {}) {
       <select class="form-select" name="auth_flag" id="tplAuthFlag">${Object.entries(AUTH_FLAG_NAME).map(([k, l]) => `<option value="${k}"${String(t.auth_flag ?? 0) === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
     <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
     <div class="mb-2"><label class="form-label">内容</label><textarea class="form-control" name="content" id="tplContent" rows="8" required>${esc(t.content)}</textarea></div>
+    ${tplDescriptionField('tplDescription', t.description)}
     <div class="mb-2">
       <button type="button" class="btn btn-sm btn-outline-info" id="tplPreviewBtn"><i class="bi bi-eye"></i> プレビュー（差込をサンプル値で表示）</button>
     </div>
@@ -3296,7 +3361,15 @@ function scenarioForm() {
     <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
     <div class="mb-2"><label class="form-label">本文</label>
       <textarea class="form-control" name="body_content" id="tplContent" rows="10" required></textarea></div>
+    ${tplDescriptionField('scenDescription', '')}
   </form>`;
+}
+// 概要の入力欄(テンプレートとシナリオの作成・編集で共通)。受講者には見せない、管理者向けの説明。
+const TPL_DESCRIPTION_MAX = 2000;
+function tplDescriptionField(id, value) {
+  return `<div class="mb-2"><label class="form-label" for="${id}">概要（任意）</label>
+      <textarea class="form-control" name="description" id="${id}" rows="3" maxlength="${TPL_DESCRIPTION_MAX}" placeholder="元の事例、手口、見分けるポイント">${esc(value || '')}</textarea>
+      <div class="form-text">テンプレートの一覧と訓練の作成画面に出ます。訓練メールの本文には入りません。</div></div>`;
 }
 function newScenario() {
   showModal('新規シナリオ（件名＋本文）', scenarioForm(), async () => {
@@ -3307,6 +3380,7 @@ function newScenario() {
         subject_content: f.subject_content.value.trim(),
         body_content: f.body_content.value,
         format: f.format.value,
+        description: f.description.value.trim(),
       } });
     toast('シナリオを作成しました', 'ok');
     tplKindFilter = 'scenario';
@@ -3323,7 +3397,7 @@ function newTemplate() {
   showModal('新規テンプレート', templateForm(), async () => {
     const f = $('#tplForm');
     await api('api/templates.php', { method: 'POST', query: { action: 'create' },
-      body: { name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, ...templateAuthFlag(f) } });
+      body: { name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, description: f.description.value.trim(), ...templateAuthFlag(f) } });
     toast('作成しました', 'ok'); renderTemplates();
   });
   bindTemplateForm();
@@ -3333,7 +3407,7 @@ async function editTemplate(id) {
   showModal('テンプレート編集', templateForm(template), async () => {
     const f = $('#tplForm');
     await api('api/templates.php', { method: 'POST', query: { action: 'update' },
-      body: { id, name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, ...templateAuthFlag(f) } });
+      body: { id, name: f.name.value.trim(), kind: f.kind.value, format: f.format.value, content: f.content.value, description: f.description.value.trim(), ...templateAuthFlag(f) } });
     toast('更新しました', 'ok'); renderTemplates();
   });
   bindTemplateForm();
@@ -3410,6 +3484,11 @@ function tplPreviewHtml(content, format, height = '40vh') {
   return `<pre class="border rounded p-2 bg-light" style="max-height:${height};overflow:auto;white-space:pre-wrap">${esc(c)}</pre>`;
 }
 
+// 編集できない人に見せる概要(読むだけ)。
+function tplDescriptionView(description) {
+  const text = String(description || '').trim();
+  return text ? `<div class="border rounded p-2 mb-2 small bg-light" style="white-space:pre-wrap"><div class="fw-semibold mb-1">概要</div>${esc(text)}</div>` : '';
+}
 // 単一テンプレート(偽ログイン/ネタバラシ/eラーニング等)のプレビュー/HTML/編集ビューア。
 // テンプレート編集可否: 共有プリセットはシステム管理者だけ(全テナントに効く)、自テナント分は operator 以上。
 function canEditTemplate(isPreset) {
@@ -3428,6 +3507,7 @@ async function tplViewer(id) {
     : '';
   const body = `${sharedBanner}
     <div class="small text-muted mb-2">${esc(labelKind(t.kind))}：${esc(t.name)}（形式：${esc(t.format)}）</div>
+    ${editable ? tplDescriptionField('tvDescription', t.description) : tplDescriptionView(t.description)}
     <ul class="nav nav-pills mb-2" id="tvTabs">
       <li class="nav-item"><a class="nav-link active" href="#" data-tv="preview">プレビュー</a></li>
       <li class="nav-item"><a class="nav-link" href="#" data-tv="html">HTMLソース</a></li>
@@ -3443,7 +3523,7 @@ async function tplViewer(id) {
       if (!content.trim()) throw new Error('内容を入力してください');
       if (shared && !confirm('全テナント共通のテンプレートです。すべてのテナントに反映されます。保存しますか？')) return;
       await api('api/templates.php', { method: 'POST', query: { action: 'update' },
-        body: { id, name: t.name, kind: t.kind, format: t.format, content } });
+        body: { id, name: t.name, kind: t.kind, format: t.format, content, description: $('#tvDescription').value.trim() } });
       toast('保存しました', 'ok'); renderTemplates();
     });
   } else {
@@ -3503,14 +3583,16 @@ async function scenarioViewer(scenarioKey) {
         ? '<div class="alert alert-warning py-2 small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>この件名・本文は<strong>全テナント共通</strong>です。変更はすべてのテナントに反映されます。</div>'
         : '<div class="alert alert-secondary py-2 small mb-2">共有テンプレート（編集にはテナント管理者以上の権限が必要です）。</div>')
     : '';
+  const scenarioDescription = bodyT.description || subj.description || '';
   const body = `${sharedBanner}<div class="small text-muted mb-2">シナリオ「${esc(subj.name)}」の件名と本文</div>
+    ${editable ? tplDescriptionField('svDescription', scenarioDescription) : tplDescriptionView(scenarioDescription)}
     ${section(subj, 'svSubject')}${section(bodyT, 'svBody')}
     ${editable ? `<div class="mt-2 text-end"><button type="button" class="btn btn-sm btn-outline-danger" id="svDeleteBtn"><i class="bi bi-trash"></i> このシナリオ（件名＋本文）を削除</button></div>` : ''}`;
   if (editable) {
     showModal('シナリオ内容', body, async () => {
       if (preset && !confirm('全テナント共通の件名・本文です。すべてのテナントに反映されます。保存しますか？')) return;
       await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: subj.id, name: subj.name, kind: 'subject', format: subj.format, content: $('#svSubject').value } });
-      await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: bodyT.id, name: bodyT.name, kind: 'body', format: bodyT.format, content: $('#svBody').value } });
+      await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: bodyT.id, name: bodyT.name, kind: 'body', format: bodyT.format, content: $('#svBody').value, description: $('#svDescription').value.trim() } });
       toast('保存しました', 'ok'); renderTemplates();
     });
   } else {

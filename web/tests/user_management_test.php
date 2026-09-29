@@ -64,7 +64,7 @@ function login(string $email, string $password): int
     return call_handler('auth_handle_login', ['email' => $email, 'password' => $password])['code'];
 }
 
-const GOOD_PW = 'Str0ng-Passw0rd';
+const GOOD_PW = 'Str0ng-Heron-Kiwi';
 
 // ============ PW: パスワードの決まり ============
 check(PasswordPolicy::violation('Abcdefgh12!') !== null, 'PW-1: 11文字は通らない');
@@ -135,7 +135,7 @@ check((int) Db::one("SELECT COUNT(*) AS c FROM audit_log WHERE action = 'user.pa
 check(Db::one("SELECT COUNT(*) AS c FROM audit_log WHERE detail LIKE ?", ['%' . $token . '%'])['c'] === 0, 'TK-9: 監査ログにトークンを書かない');
 check(login('invitee@example.test', GOOD_PW) === 200, 'TK-10: 設定したパスワードでログインできる');
 
-[$code, $data] = pwset_handle('set', ['token' => $token, 'password' => 'An0ther-Passw0rd'], '198.51.100.10');
+[$code, $data] = pwset_handle('set', ['token' => $token, 'password' => 'An0ther-Heron-Kiwi'], '198.51.100.10');
 check($code === 410 && $data['reason'] === 'used' && str_contains($data['error'], '既に使われています'), 'TK-11: 使ったリンクは2回目は使えず、理由を日本語で出す');
 check(login('invitee@example.test', GOOD_PW) === 200, 'TK-12: 2回目の試行でパスワードは変わらない');
 
@@ -155,7 +155,7 @@ check($code === 200, 'TK-18: 最新のリンクは使える');
 
 // 期限切れ
 Db::run("UPDATE user_password_tokens SET expires_at = datetime('now','localtime','-1 minutes') WHERE token_hash = ?", [hash('sha256', $second)]);
-[$code, $data] = pwset_handle('set', ['token' => $second, 'password' => 'An0ther-Passw0rd'], '198.51.100.11');
+[$code, $data] = pwset_handle('set', ['token' => $second, 'password' => 'An0ther-Heron-Kiwi'], '198.51.100.11');
 check($code === 410 && $data['reason'] === 'expired' && str_contains($data['error'], '有効期限'), 'TK-19: 期限切れのリンクは使えず、理由を出す');
 [$code, $data] = pwset_handle('check', ['token' => str_repeat('a', 64)], '198.51.100.11');
 check($code === 404 && $data['reason'] === 'invalid', 'TK-20: 存在しないトークンは「正しくありません」');
@@ -166,15 +166,15 @@ check($code === 404, 'TK-21: 形の違うトークンも「正しくありませ
 call_handler('users_handle_send_password_mail', ['id' => (int) userRow('direct@example.test')['id']], 'tenant_admin');
 $directToken = lastToken();
 $inviteeHash = userRow('invitee@example.test')['password_hash'];
-pwset_handle('set', ['token' => $directToken, 'password' => 'D1rect-Passw0rd'], '198.51.100.12');
-check(userRow('invitee@example.test')['password_hash'] === $inviteeHash && password_verify('D1rect-Passw0rd', userRow('direct@example.test')['password_hash']),
+pwset_handle('set', ['token' => $directToken, 'password' => 'D1rect-Heron-Kiwi'], '198.51.100.12');
+check(userRow('invitee@example.test')['password_hash'] === $inviteeHash && password_verify('D1rect-Heron-Kiwi', userRow('direct@example.test')['password_hash']),
     'TK-22: トークンは発行したユーザのパスワードだけを変える');
 
 // 管理者によるパスワードの変更も、リンクを無効にしてセッションの世代を上げる
 call_handler('users_handle_send_password_mail', ['id' => (int) $invitee['id']], 'tenant_admin');
 $pending = lastToken();
 $epoch = (int) userRow('invitee@example.test')['session_epoch'];
-$r = call_handler('users_handle_update', ['id' => (int) $invitee['id'], 'password' => 'Adm1n-Changed-Pw'], 'tenant_admin');
+$r = call_handler('users_handle_update', ['id' => (int) $invitee['id'], 'password' => 'Kiw1-Changed-Pw'], 'tenant_admin');
 check($r['code'] === 200 && (int) userRow('invitee@example.test')['session_epoch'] === $epoch + 1, 'TK-23: 管理者がパスワードを変えるとセッションの世代が上がる');
 [$code, $data] = pwset_handle('check', ['token' => $pending], '198.51.100.12');
 check($code === 410 && $data['reason'] === 'revoked', 'TK-24: 管理者がパスワードを変えると、まだ使えたリンクは無効');
@@ -193,7 +193,7 @@ $mailsBefore = count($GLOBALS['__MAILS']);
 Db::run("UPDATE tenants SET status = 'suspended' WHERE id = 1");
 $r = call_handler('users_handle_send_password_mail', ['id' => (int) userRow('direct@example.test')['id']], 'tenant_admin');
 check($r['code'] === 409 && count($GLOBALS['__MAILS']) === $mailsBefore, 'TS-3: 停止中のテナントのユーザには送らない');
-[$code, $data] = pwset_handle('set', ['token' => $suspendToken, 'password' => 'Susp3nded-Passw0rd'], '198.51.100.13');
+[$code, $data] = pwset_handle('set', ['token' => $suspendToken, 'password' => 'Susp3nded-Heron-Kiwi'], '198.51.100.13');
 check($code === 403 && $data['reason'] === 'blocked', 'TS-4: 停止中のテナントのユーザはパスワードを設定できない');
 $r = call_handler('users_handle_create', ['email' => 'blocked@example.test', 'name' => 'x', 'role' => 'viewer', 'send_invite' => true], 'tenant_admin');
 check($r['code'] === 409 && Db::one("SELECT 1 FROM users WHERE email = 'blocked@example.test'") === null, 'TS-5: 停止中のテナントでは招待つきの作成を断る');

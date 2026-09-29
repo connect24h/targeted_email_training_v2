@@ -90,8 +90,8 @@ const setPassword = async (url, password) => {
 };
 
 const INVITEE = 'e2e-invitee@example.test';
-const FIRST_PW = 'E2e-First-Passw0rd';
-const SECOND_PW = 'E2e-Second-Passw0rd';
+const FIRST_PW = 'E2e-First-Heron7';
+const SECOND_PW = 'E2e-Second-Heron7';
 
 try {
   // ---- 一覧: 最終ログインとパスワードの列 ----

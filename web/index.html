@@ -148,7 +148,7 @@
         <!-- 本番/テスト フィルタ（renderCampaigns が描画）。 -->
         <div id="campaignFilterBar" class="mb-2"></div>
         <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead id="campaignsHead"><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr></thead>
+          <thead id="campaignsHead"><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>報告率</th><th>防衛失敗率</th><th>開始</th><th>操作</th></tr></thead>
           <tbody id="campaignsBody"></tbody>
         </table></div>
       </section>
@@ -203,7 +203,7 @@
             <span id="reportFilterBar"></span>
           </div>
           <div class="table-responsive"><table class="table table-hover align-middle mb-0">
-            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝訓練メールを報告した人数÷対象数（テストの対象者を除く）">報告</th><th title="防衛失敗率＝リンクを踏んで偽サイトを表示したか、認証情報を入力した人数÷対象数（両方した人も1人。テストの対象者を除く）">防衛失敗</th><th></th></tr></thead>
             <tbody id="reportsBody"></tbody>
           </table></div>
         </div>
@@ -232,6 +232,7 @@
           </ul>
           <div class="tab-content report-tab-content">
             <div class="tab-pane fade show active" id="reportPane-overview" role="tabpanel" aria-labelledby="reportTab-overview" tabindex="0">
+              <div class="d-flex flex-wrap gap-2 mb-3" id="reportOverviewKpis" aria-live="polite"></div>
               <div class="row g-3">
                 <div class="col-lg-5"><div class="card h-100"><div class="card-header">反応の内訳</div>
                   <div class="card-body"><canvas id="reportChart" height="200"></canvas></div></div></div>
@@ -462,6 +463,7 @@
           </select>
           <input type="text" class="form-control form-control-sm" id="smKeyword" placeholder="件名・送信者・報告者で絞込" style="width:auto">
           <button class="btn btn-sm btn-outline-primary" id="smApplyBtn"><i class="bi bi-arrow-clockwise"></i> 更新</button>
+          <button class="btn btn-sm btn-outline-secondary" id="smExportBtn" title="いまの絞り込みの条件で一覧を CSV に出力します（最大1万件）"><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV出力</button>
         </div>
         <div class="table-responsive"><table class="table table-sm table-hover align-middle">
           <thead><tr><th>受付日時</th><th>受付元</th><th>送信者</th><th>件名</th><th>報告者</th><th>推奨分類</th><th>分類</th><th>確認状況</th><th>優先度</th><th class="text-end">スコア</th></tr></thead>
@@ -474,6 +476,28 @@
             <button class="btn btn-outline-secondary" id="smNextBtn">次 <i class="bi bi-chevron-right"></i></button>
           </div>
         </div>
+        <details class="card mt-3" id="smRulesCard">
+          <summary class="card-header">登録した条件（送信者、件名の語、URL のドメイン）</summary>
+          <div class="card-body">
+            <p class="small text-muted mb-2">当たったメールの所見に「登録した条件に一致」と条件の名前を出します。分類を自動で変えたり、メールを送ったり消したりはしません。
+              新しく届いたメールと、再解析したメールに効きます。</p>
+            <form id="smRuleForm" class="row g-2 align-items-end mb-2">
+              <div class="col-md-3"><label class="form-label small mb-1" for="smRuleName">条件の名前</label>
+                <input class="form-control form-control-sm" id="smRuleName" maxlength="100" required placeholder="例: 取引先を装う送信者"></div>
+              <div class="col-md-3"><label class="form-label small mb-1" for="smRuleKind">種類</label>
+                <select class="form-select form-select-sm" id="smRuleKind">
+                  <option value="sender">送信者（アドレスかドメイン）</option><option value="subject_keyword">件名の語</option><option value="url_domain">URL のドメイン</option>
+                </select></div>
+              <div class="col-md-4"><label class="form-label small mb-1" for="smRuleValue">照合する値</label>
+                <input class="form-control form-control-sm" id="smRuleValue" maxlength="200" required placeholder="例: example.com / 請求書"></div>
+              <div class="col-md-2 d-grid"><button type="submit" class="btn btn-sm btn-outline-primary" id="smRuleAddBtn"><i class="bi bi-plus-lg" aria-hidden="true"></i> 追加</button></div>
+            </form>
+            <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+              <thead><tr><th>名前</th><th>種類</th><th>値</th><th>状態</th><th class="text-end">操作</th></tr></thead>
+              <tbody id="smRulesBody"></tbody>
+            </table></div>
+          </div>
+        </details>
       </section>
 
       <section data-panel="logs" class="view-panel d-none">
@@ -908,13 +932,13 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=77ea3086"></script>
+<script src="app.js?v=562c358e"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
 <script src="assets/campaign-automations.js?v=ebfd2f29"></script>
 <script src="assets/positions.js?v=b35a4a4e"></script>
-<script src="assets/suspicious-mails.js?v=54af2ebb"></script>
+<script src="assets/suspicious-mails.js?v=a1a6f063"></script>
 <script src="assets/surveys.js?v=80becb08"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
 </body>

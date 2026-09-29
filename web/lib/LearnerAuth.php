@@ -258,7 +258,8 @@ final class LearnerAuth
             UserPasswordTokens::audit((int) $me['user']['tenant_id'], $userId, 'my_password.failed', 'user_id=' . $userId, $ip);
             throw new LearnerAuthException('今のパスワードが正しくありません', 400);
         }
-        $violation = PasswordPolicy::violation($new);
+        $violation = PasswordPolicy::violation($new)
+            ?? PasswordDenyList::learnerViolation($new, (int) $me['user']['tenant_id'], (string) ($me['user']['email'] ?? ''));
         if ($violation !== null) {
             throw new LearnerAuthException($violation, 400);
         }

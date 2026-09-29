@@ -38,6 +38,7 @@ final class TenantPurge
         ['report_mail_matches', 'tenant_id = ?'],
         ['suspicious_mail_history', 'suspicious_mail_id IN (SELECT id FROM suspicious_mails WHERE tenant_id = ?)'],
         ['suspicious_mails', 'tenant_id = ?'],
+        ['suspicious_mail_rules', 'tenant_id = ?'],
         ['credential_captures', 'tenant_id = ?'],
         ['campaign_template_snapshots', 'tenant_id = ?'],
         ['campaign_report_snapshots', 'tenant_id = ?'],

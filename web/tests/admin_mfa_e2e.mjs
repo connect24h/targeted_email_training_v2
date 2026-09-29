@@ -23,7 +23,7 @@ const PASSWORD = env('TET2_E2E_PASSWORD');
 const ADMIN = 'mfa-e2e-admin@example.test';
 const OPERATOR = 'mfa-e2e-op@example.test';
 // 方針(16文字)より短い、12文字・3種の試験用の値(本物の資格情報ではない)
-const WEAK_12 = 'Abcdefgh123!';
+const WEAK_12 = 'Kqzwmvtr123!';
 let passed = 0;
 const ok = (m) => { passed += 1; console.log(`PASS: ${m}`); };
 

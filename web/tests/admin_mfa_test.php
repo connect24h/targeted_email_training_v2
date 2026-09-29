@@ -41,7 +41,7 @@ Secrets::reset();
 load_api('auth');
 load_api('users');
 
-const PW = 'Str0ng-Passw0rd';
+const PW = 'Str0ng-Heron-Kiwi';
 $hash = password_hash(PW, PASSWORD_DEFAULT);
 Db::run("INSERT INTO users (id, tenant_id, email, password_hash, name, role, status) VALUES
     (20, 1, 'mfa-admin@example.test', ?, 'MFA Admin', 'tenant_admin', 'active'),
@@ -301,19 +301,19 @@ $r = asUser('users_handle_policy_set', 20, ['scope' => 'global', 'min_length' =>
 check($r['code'] === 403, 'POL-4: 組織管理者は全体の方針を変えられない');
 $r = asUser('users_handle_policy_set', 20, ['min_length' => 16, 'min_classes' => 4, 'require_mfa' => false]);
 check($r['code'] === 200 && $r['payload']['effective']['min_length'] === 16 && auditHas('security_policy.update'), 'POL-5: 組織管理者は自組織の方針を厳しくできる');
-check(AdminSecurityPolicy::violation('Abcdefgh123!', 1) !== null, 'POL-6: 方針より短いパスワードは通らない');
-check(AdminSecurityPolicy::violation('Abcdefghijk1234x', 1) !== null, 'POL-7: 方針が4種なら3種のパスワードは通らない');
-check(AdminSecurityPolicy::violation('Abcdefghij12!xyz', 1) === null, 'POL-8: 方針に合うパスワードは通る');
-check(AdminSecurityPolicy::violation('abcdefghijklmnop', 2) !== null && AdminSecurityPolicy::violation('Abcdefgh123!', 2) === null,
+check(AdminSecurityPolicy::violation('Kqzwmvtr123!', 1) !== null, 'POL-6: 方針より短いパスワードは通らない');
+check(AdminSecurityPolicy::violation('Kqzwmvtrjyk1234x', 1) !== null, 'POL-7: 方針が4種なら3種のパスワードは通らない');
+check(AdminSecurityPolicy::violation('Kqzwmvtrjy12!xyz', 1) === null, 'POL-8: 方針に合うパスワードは通る');
+check(AdminSecurityPolicy::violation('abcdefghijklmnop', 2) !== null && AdminSecurityPolicy::violation('Kqzwmvtr123!', 2) === null,
     'POL-9: ほかの組織は従来の決まり(PasswordPolicy)のまま');
-$r = call_handler('users_handle_create', ['email' => 'weak-policy@example.test', 'name' => 'W', 'role' => 'viewer', 'password' => 'Abcdefgh123!'], 'tenant_admin', [actor(20)]);
+$r = call_handler('users_handle_create', ['email' => 'weak-policy@example.test', 'name' => 'W', 'role' => 'viewer', 'password' => 'Kqzwmvtr123!'], 'tenant_admin', [actor(20)]);
 check($r['code'] === 400 && str_contains($r['payload']['error'], '16文字以上'), 'POL-10: ユーザの作成で方針に合わないパスワードを拒む');
-$r = call_handler('users_handle_update', ['id' => 21, 'password' => 'Abcdefgh123!'], 'tenant_admin', [actor(20)]);
+$r = call_handler('users_handle_update', ['id' => 21, 'password' => 'Kqzwmvtr123!'], 'tenant_admin', [actor(20)]);
 check($r['code'] === 400, 'POL-11: パスワードの変更でも方針に合わないものを拒む');
-$r = call_handler('users_handle_create', ['email' => 'strong-policy@example.test', 'name' => 'S', 'role' => 'viewer', 'password' => 'Abcdefghij12!xyz'], 'tenant_admin', [actor(20)]);
+$r = call_handler('users_handle_create', ['email' => 'strong-policy@example.test', 'name' => 'S', 'role' => 'viewer', 'password' => 'Kqzwmvtrjy12!xyz'], 'tenant_admin', [actor(20)]);
 check($r['code'] === 201, 'POL-12: 方針に合うパスワードで作成できる');
-check(UserPasswordTokens::policyViolation(['role' => 'operator', 'tenant_id' => 1], 'Abcdefgh123!') !== null
-    && UserPasswordTokens::policyViolation(['role' => 'learner', 'tenant_id' => 1], 'Abcdefgh123!') === null,
+check(UserPasswordTokens::policyViolation(['role' => 'operator', 'tenant_id' => 1], 'Kqzwmvtr123!') !== null
+    && UserPasswordTokens::policyViolation(['role' => 'learner', 'tenant_id' => 1], 'Kqzwmvtr123!') === null,
     'POL-13: パスワード設定のリンクも方針を使う(受講者のマイページは従来の決まり)');
 $r = call_handler('users_handle_list', [], 'tenant_admin', [actor(20)]);
 check(str_contains($r['payload']['password_policy'], '16文字以上') && $r['payload']['security_policy']['min_classes'] === 4, 'POL-14: 一覧は方針の説明を返す');

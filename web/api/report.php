@@ -38,6 +38,17 @@ function report_rate(int $count, int $targetCount): float
     return round($count / $targetCount * 100, 1);
 }
 
+/**
+ * 防衛失敗 = 訓練メールのリンクを踏んで偽サイトを表示した(click)か、認証情報を入力した(auth)。
+ * followup.php の「防衛失敗者」と再教育の推奨(report_retrain_rows)と同じ定義で、tracking_id ごとに1回だけ数える
+ * (click と auth の両方がある人も1)。防衛失敗率と報告率の分母は対象数(target_count、テストの対象者を除く)。
+ *
+ * 配信エラー = 送信できなかった宛先。campaign_targets.send_status が failed か deferred、
+ * または送信済みになっていない宛先に delivery_log の failed か deferred の記録があるもの。
+ * いまのワーカーは成功(sent)だけを DB に書くので、多くの訓練では 0 になる(送信後のバウンスは取り込んでいない)。
+ */
+const REPORT_FAILURE_EVENTS_SQL = "('click', 'auth')";
+
 function report_summary_from_counts(array $row): array
 {
     $targetCount = (int) ($row['target_count'] ?? 0);
@@ -45,6 +56,8 @@ function report_summary_from_counts(array $row): array
     $openCount = (int) ($row['open_count'] ?? 0);
     $clickCount = (int) ($row['click_count'] ?? 0);
     $authCount = (int) ($row['auth_count'] ?? 0);
+    $reportCount = (int) ($row['report_count'] ?? 0);
+    $failureCount = (int) ($row['failure_count'] ?? 0);
     return [
         'target_count' => $targetCount,
         'sent_count' => $sentCount,
@@ -55,7 +68,20 @@ function report_summary_from_counts(array $row): array
         'click_rate' => report_rate($clickCount, $targetCount),
         'auth_count' => $authCount,
         'auth_rate' => report_rate($authCount, $clickCount),
+        'report_count' => $reportCount,
+        'report_rate' => report_rate($reportCount, $targetCount),
+        'failure_count' => $failureCount,
+        'failure_rate' => report_rate($failureCount, $targetCount),
+        'delivery_error_count' => (int) ($row['delivery_error_count'] ?? 0),
     ];
+}
+
+/** 配信エラーの宛先か(campaign_targets の別名 ct に対する条件)。定義は report_summary_from_counts の注記。 */
+function report_delivery_error_sql(): string
+{
+    return "(ct.send_status IN ('failed', 'deferred')
+             OR (ct.send_status <> 'sent' AND EXISTS (SELECT 1 FROM delivery_log dl
+                 WHERE dl.campaign_id = ct.campaign_id AND dl.tracking_id = ct.tracking_id AND dl.result IN ('failed', 'deferred'))))";
 }
 
 /**
@@ -110,9 +136,20 @@ function report_summary_row(int $campaignId, int $tenantId): array
              WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type = 'report'
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
                                INNER JOIN targets t2 ON t2.id = ct2.target_id
-                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS report_count",
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS report_count,
+            (SELECT COUNT(DISTINCT e.tracking_id)
+             FROM events e
+             WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.event_type IN " . REPORT_FAILURE_EVENTS_SQL . "
+               AND NOT EXISTS (SELECT 1 FROM campaign_targets ct2
+                               INNER JOIN targets t2 ON t2.id = ct2.target_id
+                               WHERE ct2.tracking_id = e.tracking_id AND t2.is_test = 1)) AS failure_count,
+            (SELECT COUNT(*)
+             FROM campaign_targets ct
+             INNER JOIN campaigns c ON c.id = ct.campaign_id
+             INNER JOIN targets t ON t.id = ct.target_id
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0 AND " . report_delivery_error_sql() . ") AS delivery_error_count",
         [$tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId,
-         $tenantId, $campaignId, $tenantId, $campaignId]
+         $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId]
     ) ?? [];
 }
 
@@ -152,7 +189,8 @@ function report_closed_summary(?array $snapshot, array $liveRow): array
     $data = $snapshot === null ? null : json_decode((string) $snapshot['payload'], true);
     if (!is_array($data)) { throw new RuntimeException('クローズ済みレポートの確定値がありません'); }
     if (isset($data['campaign_summary']) && is_array($data['campaign_summary'])) {
-        return $data['campaign_summary'];
+        // 報告率、防衛失敗率、配信エラー(2026-10 に追加)を持たない旧版の確定値は、その項目だけ今の集計で補う
+        return $data['campaign_summary'] + report_summary_from_counts($liveRow);
     }
     $detail = $data['summary'] ?? [];
     return report_summary_from_counts([
@@ -161,6 +199,9 @@ function report_closed_summary(?array $snapshot, array $liveRow): array
         'open_count' => (int) ($detail['beacon_opened'] ?? 0),
         'click_count' => (int) ($detail['link_clicked'] ?? 0),
         'auth_count' => (int) ($detail['auth_count'] ?? 0),
+        'report_count' => (int) ($detail['report_count'] ?? ($liveRow['report_count'] ?? 0)),
+        'failure_count' => (int) ($liveRow['failure_count'] ?? 0),
+        'delivery_error_count' => (int) ($liveRow['delivery_error_count'] ?? 0),
     ]);
 }
 
@@ -181,13 +222,17 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
                 COALESCE(ct.sent_count, 0) AS sent_count,
                 COALESCE(ev.open_count, 0) AS open_count,
                 COALESCE(ev.click_count, 0) AS click_count,
-                COALESCE(ev.auth_count, 0) AS auth_count
+                COALESCE(ev.auth_count, 0) AS auth_count,
+                COALESCE(ev.report_count, 0) AS report_count,
+                COALESCE(ev.failure_count, 0) AS failure_count,
+                COALESCE(ct.delivery_error_count, 0) AS delivery_error_count
          FROM campaigns c
          LEFT JOIN campaign_report_snapshots rs ON rs.campaign_id=c.id AND rs.tenant_id=c.tenant_id AND c.closed_at IS NOT NULL
          LEFT JOIN (
              SELECT ct.campaign_id,
                     COUNT(*) AS target_count,
-                    SUM(CASE WHEN ct.send_status = 'sent' THEN 1 ELSE 0 END) AS sent_count
+                    SUM(CASE WHEN ct.send_status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
+                    SUM(CASE WHEN " . report_delivery_error_sql() . " THEN 1 ELSE 0 END) AS delivery_error_count
              FROM campaign_targets ct
              INNER JOIN campaigns c2 ON c2.id = ct.campaign_id
              INNER JOIN targets t2 ON t2.id = ct.target_id
@@ -198,9 +243,11 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
              SELECT e.campaign_id,
                     COUNT(DISTINCT CASE WHEN e.event_type = 'open' THEN e.tracking_id END) AS open_count,
                     COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.tracking_id END) AS click_count,
-                    COUNT(DISTINCT CASE WHEN e.event_type = 'auth' THEN e.tracking_id END) AS auth_count
+                    COUNT(DISTINCT CASE WHEN e.event_type = 'auth' THEN e.tracking_id END) AS auth_count,
+                    COUNT(DISTINCT CASE WHEN e.event_type = 'report' THEN e.tracking_id END) AS report_count,
+                    COUNT(DISTINCT CASE WHEN e.event_type IN " . REPORT_FAILURE_EVENTS_SQL . " THEN e.tracking_id END) AS failure_count
              FROM events e
-             WHERE e.tenant_id = ? AND e.event_type IN ('open', 'click', 'auth')
+             WHERE e.tenant_id = ? AND e.event_type IN ('open', 'click', 'auth', 'report')
                AND NOT EXISTS (SELECT 1 FROM campaign_targets ct3
                                INNER JOIN targets t3 ON t3.id = ct3.target_id
                                WHERE ct3.tracking_id = e.tracking_id AND t3.is_test = 1)
