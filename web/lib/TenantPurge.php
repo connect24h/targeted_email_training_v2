@@ -40,6 +40,10 @@ final class TenantPurge
         ['suspicious_mails', 'tenant_id = ?'],
         ['suspicious_mail_rules', 'tenant_id = ?'],
         ['credential_captures', 'tenant_id = ?'],
+        // 段D の送信(D-a): 種明かしメールと報告の通知の送った記録と設定。campaigns より先に消す
+        ['notification_sends', 'tenant_id = ?'],
+        ['campaign_reveal_settings', 'tenant_id = ?'],
+        ['tenant_report_notify', 'tenant_id = ?'],
         ['campaign_template_snapshots', 'tenant_id = ?'],
         ['campaign_report_snapshots', 'tenant_id = ?'],
         // 返信の取込の台帳(段B1)。突き合わせられずテナントの決まらない行(tenant_id NULL)は、どのテナントのものでもないので残す

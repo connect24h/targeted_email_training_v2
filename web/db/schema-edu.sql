@@ -92,6 +92,10 @@ CREATE TABLE IF NOT EXISTS edu_deliveries (
   lock_material_during_test INTEGER NOT NULL DEFAULT 0, -- 1 = テストを始めた後は、提出するまで教材を返さない
   allow_after_deadline INTEGER NOT NULL DEFAULT 0,     -- 1 = 期限の後も受講できる(期限の後の完了はレポートで期限後になる)
   retake_from_test INTEGER NOT NULL DEFAULT 0,         -- 1 = 不合格の後の受け直しを、教材を飛ばして確認テストから始める
+  remind_start_days INTEGER,                           -- 自動の催促(D1): 期限の何日前から送るか。NULL = 開始から送る(従来)
+  remind_interval_days INTEGER,                        -- 自動の催促: 何日ごとに送るか。NULL = 既定(TET2_REMIND_INTERVAL_DAYS か 3日)
+  remind_after_deadline INTEGER NOT NULL DEFAULT 0,    -- 1 = 期限の後も送る(remind_max_count の回数まで。期限後の受講を許す配信だけ)
+  remind_max_count INTEGER,                            -- 自動の催促の上限の回数。NULL = 上限なし(期限まで)
   series_id        INTEGER REFERENCES edu_delivery_series(id), -- 毎月の配信(schema-edu-delivery.sql)から作った回
   target_positions TEXT,                                -- target_type=position の役職区分(JSON配列)
   risk_results     TEXT,                                -- target_type=risk の訓練の結果の区分(JSON配列)
@@ -141,6 +145,7 @@ CREATE TABLE IF NOT EXISTS edu_assignments (
   completed_at TEXT,
   score        INTEGER,
   last_reminded_at TEXT,
+  remind_count INTEGER NOT NULL DEFAULT 0,             -- 自動の催促を送った回数(D1 の上限に使う)
   created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   UNIQUE (delivery_id, target_id),
   FOREIGN KEY (tenant_id)   REFERENCES tenants(id),

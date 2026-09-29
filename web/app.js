@@ -770,6 +770,8 @@ async function renderCampaigns() {
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
+        ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="openRevealMailSettings(${c.id})" title="種明かしメール（既定は送らない）" aria-label="種明かしメールの設定" data-reveal-mail="${c.id}"><i class="bi bi-envelope-open"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && !c.closed_at
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="toggleTestCampaign(${c.id}, ${Number(c.is_test) ? 1 : 0})" title="${Number(c.is_test) ? '本番系へ切替（分類のみ・送信データには影響しません）' : 'テスト系へ切替（分類のみ・送信データには影響しません）'}"><i class="bi ${Number(c.is_test) ? 'bi-toggle-on' : 'bi-toggle-off'}"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
@@ -3860,7 +3862,8 @@ async function renderEduDeliveries() {
         <button class="btn btn-sm btn-outline-secondary" data-edu-delivery-edit="${Number(d.id)}" title="配信を編集"><i class="bi bi-pencil"></i> 編集</button>
         <button class="btn btn-sm btn-outline-success" onclick="launchEduDelivery(${d.id})" title="${d.status === 'scheduled' ? '予約を待たずに今すぐ開始' : '配信開始'}"><i class="bi bi-send"></i></button>`:''}
         ${roleAtLeast(State.user.role,'operator') && d.status==='running'?`
-        <button class="btn btn-sm btn-outline-warning" onclick="remindEduDelivery(${d.id})" title="未完了者へ催促メール"><i class="bi bi-envelope-exclamation"></i></button>`:''}
+        <button class="btn btn-sm btn-outline-warning" onclick="remindEduDelivery(${d.id})" title="未完了者へ催促メール"><i class="bi bi-envelope-exclamation"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="openEduReminderSettings(${d.id})" title="自動の催促の設定" aria-label="自動の催促の設定" data-edu-reminder="${Number(d.id)}"><i class="bi bi-alarm"></i></button>`:''}
         ${roleAtLeast(State.user.role,'operator') ? (Number(d.completed) > 0 || Number(d.started_count) > 0
           ? '<span class="small text-muted ms-1">受講履歴を保持（削除不可）</span>'
           : `<button class="btn btn-sm btn-outline-danger" onclick="deleteEduDelivery(${d.id})" title="受講開始前の配信を削除"><i class="bi bi-trash"></i> 削除</button>`) : ''}
@@ -4169,12 +4172,14 @@ async function editEduDelivery(id) {
     <div class="form-check"><input class="form-check-input" type="checkbox" id="eduEditAllowRetake"${Number(delivery.allow_retake_after_pass ?? 1) === 1 ? ' checked' : ''}>
       <label class="form-check-label" for="eduEditAllowRetake">完了（合格）した後も受け直せる</label></div>
     <div class="mt-2">${eduDeliveryOptionFields('eduEditOpt', delivery)}</div>
+    ${eduReminderFields('eduEditRem', delivery)}
   </form>`;
   showModal('教育配信を編集', body, async () => {
     const title = $('#eduEditTitle').value.trim();
     if (!title) throw new Error('タイトルを入力してください');
     const payload = { id, title, feedback_mode: $('#eduEditFeedback').value, send_invites: $('#eduEditSendInvites').checked,
-      allow_retake_after_pass: $('#eduEditAllowRetake').checked, ...eduDeliveryOptionValues($('#eduDeliveryEditForm')) };
+      allow_retake_after_pass: $('#eduEditAllowRetake').checked, ...eduDeliveryOptionValues($('#eduDeliveryEditForm')),
+      ...eduReminderValues($('#eduDeliveryEditForm')) };
     // 空にして保存したら予約を解除する(null を送る。送らないと API は予約をそのまま残す)
     payload.scheduled_at = $('#eduEditScheduledAt').value || null;
     await api('api/edu_deliveries.php', { method: 'POST', query: { action: 'update' }, body: payload });

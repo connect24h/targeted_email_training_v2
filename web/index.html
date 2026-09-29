@@ -478,6 +478,7 @@
           <div class="d-flex gap-2 align-items-center flex-wrap">
             <input type="email" class="form-control form-control-sm" id="smReporterEmail" placeholder="報告者メール（任意）" style="width:220px" data-perm="operator">
             <button class="btn btn-primary btn-sm" id="smUploadBtn" data-perm="operator"><i class="bi bi-upload"></i> .eml をアップロード</button>
+            <button class="btn btn-outline-secondary btn-sm" id="smNotifyBtn" data-perm="tenant_admin" title="報告が届いたら社内の担当者へ知らせる（既定は知らせない）"><i class="bi bi-bell"></i> 担当者への通知</button>
             <input type="file" id="smFileInput" accept=".eml,message/rfc822" class="d-none">
           </div>
         </div>
@@ -1117,7 +1118,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=ef8a2007"></script>
+<script src="app.js?v=e5301aed"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
@@ -1129,5 +1130,6 @@
 <script src="assets/notification-templates.js?v=135f8f2a"></script>
 <script src="assets/edu-tags.js?v=a9c10979"></script>
 <script src="assets/dept-levels.js?v=e0b24e4f"></script>
+<script src="assets/sending-da.js?v=6476bab6"></script>
 </body>
 </html>

@@ -273,6 +273,60 @@ function edu_d_flag(array $body, string $key, int $default): int
     json_error($key . ' は true か false で指定してください', 400);
 }
 
+/** 自動の催促の設定(D1、G34)の項目名。 */
+const EDU_REMIND_KEYS = ['remind_start_days', 'remind_interval_days', 'remind_after_deadline', 'remind_max_count'];
+
+/** 催促の設定の数の項目。null(か空)は「決めない」(既定の動き)。 */
+function edu_d_remind_int(array $body, string $key, int $max): ?int
+{
+    $v = $body[$key] ?? null;
+    if ($v === null || $v === '') {
+        return null;
+    }
+    if (!is_int($v) || $v < 1 || $v > $max) {
+        json_error($key . ' は 1〜' . $max . ' の整数で指定してください', 400);
+    }
+    return $v;
+}
+
+/**
+ * 自動の催促の設定(D1、G34)。本文に催促の項目が1つもなければ null(変えない)。
+ * 期限の後も送るのは、上限の回数を決め、期限の後も受講できる配信だけ(受講できないリンクを送り続けない)。
+ * @return array{remind_start_days:?int, remind_interval_days:?int, remind_after_deadline:int, remind_max_count:?int}|null
+ */
+function edu_d_reminder_settings(array $body, bool $allowAfterDeadline): ?array
+{
+    if (array_intersect(EDU_REMIND_KEYS, array_keys($body)) === []) {
+        return null;
+    }
+    $settings = [
+        'remind_start_days' => edu_d_remind_int($body, 'remind_start_days', 60),
+        'remind_interval_days' => edu_d_remind_int($body, 'remind_interval_days', 30),
+        'remind_after_deadline' => edu_d_flag($body, 'remind_after_deadline', 0),
+        'remind_max_count' => edu_d_remind_int($body, 'remind_max_count', 20),
+    ];
+    if ($settings['remind_after_deadline'] === 1) {
+        if ($settings['remind_max_count'] === null) {
+            json_error('期限の後も催促する時は、催促の上限の回数を決めてください', 400);
+        }
+        if (!$allowAfterDeadline) {
+            json_error('期限の後も催促するには、受講の設定の「期限の後も受講できるようにする」を選んでください', 400);
+        }
+    }
+    return $settings;
+}
+
+/** 催促の設定を保存する(4つの列を必ずそろえて書く。NULL に戻すこともできる)。 */
+function edu_d_save_reminder(int $id, int $tenantId, array $settings): void
+{
+    Db::run(
+        'UPDATE edu_deliveries SET remind_start_days = ?, remind_interval_days = ?, remind_after_deadline = ?, remind_max_count = ?
+         WHERE id = ? AND tenant_id = ?',
+        [$settings['remind_start_days'], $settings['remind_interval_days'], $settings['remind_after_deadline'],
+            $settings['remind_max_count'], $id, $tenantId]
+    );
+}
+
 /** 日時の項目。画面の 'YYYY-MM-DDTHH:MM' も受け付け、'YYYY-MM-DD HH:MM:SS' に揃える。 */
 function edu_d_datetime(array $body, string $key): ?string
 {
@@ -465,7 +519,8 @@ function edu_d_handle_create(array $actor): never
     $deadline = edu_d_deadline($body);
     edu_d_assert_schedule_order($scheduledAt, $deadline);
 
-    $columns = $config['columns'] + [
+    $reminder = edu_d_reminder_settings($body, $config['columns']['allow_after_deadline'] === 1) ?? [];
+    $columns = $config['columns'] + $reminder + [
         'tenant_id' => $tenantId,
         'status' => $scheduledAt !== null ? 'scheduled' : 'draft',
         'scheduled_at' => $scheduledAt,
@@ -546,10 +601,14 @@ function edu_d_handle_update(array $actor): never
     foreach (EDU_DELIVERY_OPTION_FLAGS as $key) {
         $options[$key] = array_key_exists($key, $body) ? edu_d_flag($body, $key, 0) : null;
     }
+    $reminder = edu_d_reminder_settings($body, ($options['allow_after_deadline'] ?? (int) $delivery['allow_after_deadline']) === 1);
+    if ($reminder === null && $options['allow_after_deadline'] === 0 && (int) $delivery['remind_after_deadline'] === 1) {
+        json_error('期限の後も催促する設定のままでは、期限の後の受講を止められません。先に催促の設定を変えてください', 400);
+    }
 
     if ($title === null && $passScore === null && $scheduledAt === null && !$clearSchedule && $deadline === null
         && $triggeredBy === null && $feedbackMode === null && $sendInvites === null && $allowRetake === null
-        && array_filter($options, static fn(?int $v): bool => $v !== null) === []) {
+        && array_filter($options, static fn(?int $v): bool => $v !== null) === [] && $reminder === null) {
         json_error('更新項目がありません', 400);
     }
     // 下書きに予約の日時を入れたら予約にする(その日時に edu_scheduler.php が開始する)。予約を解除したら下書きに戻す
@@ -575,6 +634,9 @@ function edu_d_handle_update(array $actor): never
             $options['shuffle_options'], $options['lock_material_during_test'], $options['allow_after_deadline'],
             $options['retake_from_test'], $status, $id, $tenantId]
     );
+    if ($reminder !== null) {
+        edu_d_save_reminder($id, $tenantId, $reminder);
+    }
     audit('edu_delivery.update', 'delivery_id=' . $id);
     json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
 }
@@ -746,6 +808,32 @@ function edu_d_handle_contact_update(array $actor): never
  * remind: 指定配信の未完了受講者(status assigned/started)へ受講URL付き催促メールを送る。
  * launch 済み(running)の配信が対象。トークンは既存 assignment のものを再利用(新規発行しない)。
  */
+/**
+ * 自動の催促の設定だけを変える(D1、G34)。開始後(running)の配信でも変えられる(自動の催促は tet2-edu-reminder が送る)。
+ * 変えても今は送らない。
+ */
+function edu_d_handle_reminder(array $actor): never
+{
+    $actor = require_role('operator');
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
+    $id = edu_d_id_body($body);
+    $delivery = edu_d_assert_owned($id, $tenantId);
+    if (!in_array((string) $delivery['status'], ['draft', 'scheduled', 'running'], true)) {
+        json_error('終わった配信の催促の設定は変えられません', 409);
+    }
+    $settings = edu_d_reminder_settings($body, (int) $delivery['allow_after_deadline'] === 1);
+    if ($settings === null) {
+        json_error('催促の設定を指定してください', 400);
+    }
+    edu_d_save_reminder($id, $tenantId, $settings);
+    audit('edu_delivery.reminder_settings', 'delivery_id=' . $id . ',start_days=' . ($settings['remind_start_days'] ?? '-')
+        . ',interval_days=' . ($settings['remind_interval_days'] ?? '-') . ',after_deadline=' . $settings['remind_after_deadline']
+        . ',max_count=' . ($settings['remind_max_count'] ?? '-'));
+    json_out(['success' => true, 'delivery' => edu_d_assert_owned($id, $tenantId)]);
+}
+
 function edu_d_handle_remind(array $actor): never
 {
     tet2_require_csrf();
@@ -846,6 +934,9 @@ try {
     }
     if ($action === 'remind' && $method === 'POST') {
         edu_d_handle_remind($actor);
+    }
+    if ($action === 'reminder' && $method === 'POST') {
+        edu_d_handle_reminder($actor);
     }
     if ($action === 'delete' && $method === 'POST') {
         edu_d_handle_delete($actor);

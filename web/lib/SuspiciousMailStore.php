@@ -70,7 +70,7 @@ final class SuspiciousMailStore
                 message_id, subject, from_email, from_name, received_at, is_training, tracking_id, analysis_json, findings_json, score,
                 suggested_category, category, analyzer_version, created_at, updated_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-            $tenantId, $meta['source'] ?? 'upload', $meta['report_mail_id'] ?? null, $meta['reporter_email'] ?? null, $meta['uploaded_by'] ?? null,
+            $tenantId, $meta['source'] ?? 'upload', $meta['report_mail_id'] ?? null, self::cleanReporter($meta['reporter_email'] ?? null), $meta['uploaded_by'] ?? null,
             $path, $sha, strlen($raw),
             $target['message_id'] ?? null, mb_substr((string) ($target['subject'] ?? ''), 0, 300), $target['from_email'] ?? null,
             mb_substr((string) ($target['from_name'] ?? ''), 0, 200) ?: null, $receivedAt,
@@ -80,6 +80,19 @@ final class SuspiciousMailStore
             SuspiciousMailAnalyzer::VERSION, $now, $now,
         ]);
         return ['id' => $id, 'duplicate' => false];
+    }
+
+    /**
+     * 報告者のアドレスは外から来る値(報告のメールの From、アップロードの入力)。CR・LF・NUL を含む値は保存せず空にする
+     * (取り込みは続ける。報告を失わないため)。担当者への通知(ReportNotify)などで差し込む時に行を増やさせない。
+     */
+    public static function cleanReporter(mixed $email): ?string
+    {
+        if (!is_string($email) || preg_match('/[\r\n\0]/', $email) === 1) {
+            return null;
+        }
+        $email = trim($email);
+        return $email === '' ? null : $email;
     }
 
     /** ReportMailIngest から呼ぶ。訓練メールでない報告を不審メールとして登録する。失敗は呼び出し側で握る。 */

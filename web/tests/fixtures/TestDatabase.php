@@ -40,6 +40,7 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-material-versions.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-edu-tags.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-notification-templates.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-sending-da.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

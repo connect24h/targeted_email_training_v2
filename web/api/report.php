@@ -12,6 +12,7 @@ require_once __DIR__."/../lib/ReplyMaildir.php";
 require_once __DIR__."/../lib/TrainingActions.php";
 // 部署の階層(部署ごとの表を1段目、2段目、全部でまとめる。C3)
 require_once __DIR__."/../lib/DeptPath.php";
+require_once __DIR__."/../lib/RevealMail.php";
 
 function report_json_body(): array
 {
@@ -1002,6 +1003,25 @@ function report_handle_uncommit(): never
     json_out(['success' => true, 'is_committed' => false]);
 }
 
+/**
+ * 訓練を閉じた後の種明かしメール(段D の D2 の (b) と (c))。訓練で選んだ時だけ送る(既定は切で、何も送らない)。
+ * 送れなくてもクローズは取り消さない(残りと失敗は timer の CLI が送り直す)。
+ */
+function report_reveal_after_close(int $tenantId, int $campaignId): array
+{
+    try {
+        $r = RevealMail::afterClose($tenantId, $campaignId);
+    } catch (Throwable $e) {
+        error_log('reveal_mail after close: ' . $e->getMessage());
+        return ['sent' => 0, 'failed' => 0, 'remaining' => 0, 'error' => true];
+    }
+    $sent = $r[RevealMail::KIND_CLOSED] + $r[RevealMail::KIND_REPORTED];
+    if ($sent + $r['failed'] > 0) {
+        audit('campaign.reveal_mail', 'campaign_id=' . $campaignId . ',sent=' . $sent . ',failed=' . $r['failed'] . ',remaining=' . $r['remaining']);
+    }
+    return ['sent' => $sent, 'failed' => $r['failed'], 'remaining' => $r['remaining']];
+}
+
 /** 確定済みキャンペーンを閉じ、入力本文だけを原子的に消去する。統計は保持する。 */
 function report_handle_close(): never
 {
@@ -1047,7 +1067,8 @@ function report_handle_close(): never
         json_error($error->getMessage(), 409);
     }
     audit('campaign.close', 'campaign_id=' . $campaignId . ',purged_captures=' . $result['purged_captures']);
-    json_out(['success' => true, 'is_closed' => true, 'closed_at' => $result['closed_at'], 'purged_captures' => $result['purged_captures']]);
+    json_out(['success' => true, 'is_closed' => true, 'closed_at' => $result['closed_at'], 'purged_captures' => $result['purged_captures'],
+        'reveal_mail' => report_reveal_after_close($tenantId, $campaignId)]);
 }
 
 /**

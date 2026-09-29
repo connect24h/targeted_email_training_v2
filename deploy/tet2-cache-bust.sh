@@ -38,6 +38,7 @@ ASSETS=(
   assets/notification-templates.js
   assets/edu-tags.js
   assets/dept-levels.js
+  assets/sending-da.js
 )
 
 asset_hash() {

@@ -109,6 +109,27 @@ sudo systemctl enable --now tet2-delivery-ingest.timer
 - 送信の有効・無効（`TET2_SURVEY_MAIL_ENABLED`、配信の「案内メールを送る」、無効の timer）は変えない。文面を変えても、送らない設定のものは送らない。
 - 新しいアセット `web/assets/notification-templates.js` は `deploy/tet2-cache-bust.sh` の対象に入れてある。
 
+### 段D の送信(D-a: 催促の設定 D1、種明かしメール D2、担当者への報告の通知 D3)
+
+`20261105-sending-da` migrationを**コードより先に**適用する。`edu_deliveries`へ催促の設定の4列（`remind_start_days`・`remind_interval_days`・`remind_after_deadline`・`remind_max_count`）、`edu_assignments.remind_count`を足し、`campaign_reveal_settings`・`tenant_report_notify`・`notification_sends`の3表を作るだけ。設定の行は作らないので、配備の直後はどれも送らない。新しい`EduReminder`と`report.php`（訓練のクローズ）はこれらを毎回読むため、migration前にコードを配備すると自動の催促と訓練のクローズが500になる。
+
+- 既定はすべて切。催促の設定が空の配信は今までと同じ（3日ごと、期限まで）。種明かしメールは訓練ごと、報告の通知はテナントごとに入れた時だけ送る。
+- 送る処理は`web/db/reveal_mail.php`（冪等。1人に1つの条件で1通、報告と通知先の組で1通）。timerは`deploy/systemd/tet2-reveal-mail.{service,timer}`（5分ごと、`*:4/5`）を用意したが、配備では有効にならない。**有効化は利用者の承認が要る**（実在の従業員と社内の担当者へメールが届く）。例外は訓練のクローズの操作で、その訓練で「終了後」か「報告した人へ」を選んでいれば、クローズの時に200通まで送る（残りはCLI）。
+- 種明かしメールの(a)「失敗した直後」だけが訓練の実施中に送る条件で、失敗した本人にだけ送る。(b)と(c)はクローズの後だけ。テストの訓練、届かない宛先、在籍していない人、装置の判定には送らない。
+- 種明かしメールのリンクは`reveal_view.php?token=...`（受講者ポータル`TET2_EDU_BASE_URL`の基点）。認証なしで開くページなので、受講者のサイト（sat.cojp.online）の許可のリストに`reveal_view.php`を足す（Apacheの変更は別承認）。eventsには何も書かない（測定に入らない）。反映後、無効のトークンで404、`api/reveal_mail.php`と`api/report_notify.php`が403かログインへの転送になることを実HTTPで確かめる。
+- 報告の通知は、報告用のアドレスに届いた訓練以外の報告（`suspicious_mails`の`source='maildir'`）だけ。件名・差出人・報告者・受信日時と管理画面のURLだけを入れ、本文と添付は入れない。差し込む値はどれも1行に直す。1テナントに1時間30通まで。取り込みでも、CR・LF・NULを含む報告者のアドレスは空にして保存する。
+- `tet2-edu-reminder`のtimerは無効のまま。催促の設定は、そのtimerを有効にした時に効く。
+- 新しい文面の種類（`reveal_failed`・`reveal_closed`・`reveal_reported`・`report_notify`）はユーザ管理の「通知の文面」で直せる。
+- 新しいアセット`web/assets/sending-da.js`は`deploy/tet2-cache-bust.sh`の対象に入れてある。
+
+```bash
+# 本番のコピーで結果を確かめる(投函せずにファイルへ書く)
+TET2_DB_PATH=/abs/path/tet2-copy.sqlite TET2_MAIL_OUTBOX_DIR=/abs/path/outbox php web/db/reveal_mail.php
+# 承認後だけ
+sudo systemctl daemon-reload
+sudo systemctl enable --now tet2-reveal-mail.timer
+```
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```

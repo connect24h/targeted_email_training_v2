@@ -67,7 +67,7 @@ try {
   await admin.locator('#ntEditor:not(.d-none)').waitFor();
 
   // ---- 一覧と既定の文面 ----
-  assert.equal(await admin.locator('#ntKind option').count(), 10);
+  assert.equal(await admin.locator('#ntKind option').count(), 14);
   assert.equal(await admin.locator('#ntKind').inputValue(), 'edu_invite');
   assert.match(await admin.locator('#ntState').textContent(), /既定の文面/);
   assert.equal(await admin.locator('#ntSubject').inputValue(), '【受講のご案内】{配信名}');
@@ -75,7 +75,7 @@ try {
   await waitText(admin.locator('#ntPreviewSubject'), /^【受講のご案内】見本の教育/);
   assert.match(await admin.locator('#ntPreviewBody').textContent(), /^見本 太郎 様\n[\s\S]*take\.php\?token=sample-token-for-preview/);
   assert.equal(await admin.locator('#ntResetBtn').isDisabled(), true);
-  ok('通知の文面のタブ: 10種類、既定の文面、見本の値で差し込んだプレビュー');
+  ok('通知の文面のタブ: 14種類、既定の文面、見本の値で差し込んだプレビュー');
 
   // ---- 検証: URL の差し込みを消す、知らない差し込み ----
   await admin.locator('#ntBody').fill('{氏名} 様\nURL を消した本文');
