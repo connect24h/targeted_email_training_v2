@@ -1121,8 +1121,114 @@ async function renderMasters() {
           <thead><tr><th>名前</th><th>更新日時</th><th class="text-end">操作</th></tr></thead>
           <tbody id="revealPagesBody"><tr><td colspan="3" class="small text-muted">読み込み中…</td></tr></tbody>
         </table></div>
+      </div></div>
+    <div class="card mt-3"><div class="card-header py-2 small fw-bold d-flex justify-content-between align-items-center">
+        <span>送信エンドポイント（ビーコンURL・送信元アドレス）</span>
+        <span class="btn-group btn-group-sm" data-perm="tenant_admin">
+          <button class="btn btn-outline-primary" onclick="addSendEndpoint('beacon')"><i class="bi bi-plus-lg me-1"></i>ビーコンを追加</button>
+          <button class="btn btn-outline-primary" onclick="addSendEndpoint('from')"><i class="bi bi-plus-lg me-1"></i>送信元を追加</button>
+        </span>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">キャンペーンの「送信環境」や各コンテンツで選べる、ビーコンベースURLと送信元アドレスの登録元です。複数選ぶと対象者へ均等に振り分けられます。共有（全テナント共通）はシステム管理者だけが編集できます。</p>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th>種別</th><th>値</th><th>ラベル</th><th>範囲</th><th class="text-end">操作</th></tr></thead>
+          <tbody id="sendEndpointsBody"><tr><td colspan="5" class="small text-muted">読み込み中…</td></tr></tbody>
+        </table></div>
       </div></div>`;
   loadRevealPagesList().catch(() => {});
+  loadSendEndpointsList().catch(() => {});
+}
+
+/* ---- 送信エンドポイントのマスタ管理 ---- */
+const SendEndpointsState = { rows: {} };
+
+async function loadSendEndpointsList() {
+  const body = $('#sendEndpointsBody');
+  if (!body) return;
+  let data;
+  try {
+    data = await api('api/send_endpoints.php', { query: { action: 'list' } });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="5" class="small text-danger">${esc(e.message)}</td></tr>`;
+    return;
+  }
+  SendEndpointsState.rows = {};
+  for (const r of data.endpoints) SendEndpointsState.rows[r.id] = r;
+  const role = State.user?.role;
+  const kindLabel = (k) => k === 'beacon' ? 'ビーコン' : '送信元';
+  body.innerHTML = data.endpoints.length ? data.endpoints.map((r) => {
+    // 共有行は superadmin だけ編集可。テナント行は tenant_admin 以上。
+    const canEdit = r.shared ? role === 'superadmin' : ['tenant_admin', 'superadmin'].includes(role);
+    return `<tr>
+      <td class="small text-nowrap">${esc(kindLabel(r.kind))}</td>
+      <td class="text-break"><code class="small">${esc(r.value)}</code></td>
+      <td class="small text-break">${esc(r.label || '')}</td>
+      <td class="small text-nowrap">${r.shared ? '<span class="badge bg-secondary">共有</span>' : '<span class="badge bg-info-subtle text-dark border">自組織</span>'}</td>
+      <td class="text-end text-nowrap">${canEdit
+        ? `<button class="btn btn-sm btn-outline-primary" onclick="editSendEndpoint(${Number(r.id)})"><i class="bi bi-pencil"></i></button>
+           <button class="btn btn-sm btn-outline-danger" onclick="deleteSendEndpoint(${Number(r.id)})" aria-label="削除"><i class="bi bi-trash"></i></button>`
+        : '<span class="small text-muted">閲覧のみ</span>'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="small text-muted">まだ登録がありません。</td></tr>';
+}
+
+function sendEndpointForm(row = null, kind = 'beacon') {
+  const k = row ? row.kind : kind;
+  const isSuper = State.user?.role === 'superadmin';
+  const kindLabel = k === 'beacon' ? 'ビーコンベースURL' : '送信元アドレス';
+  const ph = k === 'beacon' ? 'https://track.example.com/' : 'noreply@example.com';
+  return `<form id="sendEndpointForm" data-kind="${k}">
+    <div class="mb-2"><label class="form-label">${esc(kindLabel)}</label>
+      <input class="form-control" name="value" type="${k === 'from' ? 'email' : 'text'}" required
+        placeholder="${esc(ph)}" value="${esc(row ? row.value : '')}"></div>
+    <div class="mb-2"><label class="form-label">ラベル（任意）</label>
+      <input class="form-control" name="label" maxlength="100" value="${esc(row && row.label ? row.label : '')}" placeholder="表示用の名前"></div>
+    ${isSuper && (!row || row.shared) ? `<div class="form-check mb-2">
+      <input class="form-check-input" type="checkbox" name="shared" id="epShared" ${row && row.shared ? 'checked disabled' : ''}>
+      <label class="form-check-label" for="epShared">共有（全テナント共通・システム管理者のみ）</label></div>` : ''}
+  </form>`;
+}
+
+function addSendEndpoint(kind) {
+  showModal(kind === 'beacon' ? 'ビーコンを追加' : '送信元を追加', sendEndpointForm(null, kind), async () => {
+    const f = document.getElementById('sendEndpointForm');
+    const body = { kind: f.dataset.kind, value: f.value.value.trim() };
+    const label = f.label.value.trim();
+    if (label) body.label = label;
+    if (f.shared && f.shared.checked) body.shared = true;
+    if (State.user?.role === 'superadmin' && State.activeTenantId && !(f.shared && f.shared.checked)) body.tenant_id = Number(State.activeTenantId);
+    await api('api/send_endpoints.php', { method: 'POST', query: { action: 'create' }, body });
+    toast('追加しました', 'ok');
+    await loadSendEndpointsList();
+  });
+}
+
+async function editSendEndpoint(id) {
+  const row = SendEndpointsState.rows[id];
+  if (!row) return;
+  showModal('エンドポイントを編集', sendEndpointForm(row), async () => {
+    const f = document.getElementById('sendEndpointForm');
+    const body = { id: Number(id), value: f.value.value.trim() };
+    body.label = f.label.value.trim();
+    if (State.user?.role === 'superadmin' && !row.shared && State.activeTenantId) body.tenant_id = Number(State.activeTenantId);
+    await api('api/send_endpoints.php', { method: 'POST', query: { action: 'update' }, body });
+    toast('更新しました', 'ok');
+    await loadSendEndpointsList();
+  });
+}
+
+async function deleteSendEndpoint(id) {
+  const row = SendEndpointsState.rows[id];
+  if (!row) return;
+  if (!confirm(`「${row.value}」を削除しますか？\nこの値を選んでいた過去のキャンペーンの送信・集計には影響しません（値は各キャンペーンに控えられています）。`)) return;
+  try {
+    const body = { id: Number(id) };
+    if (State.user?.role === 'superadmin' && !row.shared && State.activeTenantId) body.tenant_id = Number(State.activeTenantId);
+    await api('api/send_endpoints.php', { method: 'POST', query: { action: 'delete' }, body });
+    toast('削除しました', 'ok');
+    await loadSendEndpointsList();
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 /* ---- 種明かしページ(複数・G29) ---- */
@@ -2052,11 +2158,12 @@ async function loadCampaignFile(file, btn) {
 
 async function openCampaignModal(campaignId = null, initialStep = 0) {
   const isEdit = campaignId !== null;
-  const [tpls, tgts, grps, beacons, campaigns, revealPages] = await Promise.all([
+  const [tpls, tgts, grps, beacons, fromCand, campaigns, revealPages] = await Promise.all([
     api('api/templates.php', { query: { action: 'list' } }),
     api('api/targets.php', { query: { action: 'list' } }),
     api('api/groups.php', { query: { action: 'list' } }),
     api('api/campaigns.php', { query: { action: 'beacon_bases' } }),
+    api('api/campaigns.php', { query: { action: 'from_addresses' } }).catch(() => ({ from_addresses: [] })),
     api('api/campaigns.php', { query: { action: 'list' } }),
     api('api/master_upload.php', { query: { action: 'reveal_list' } }).catch(() => ({ pages: [] })),
   ]);
@@ -2066,6 +2173,35 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     editData = await api('api/campaigns.php', { query: { action: 'get', id: campaignId } });
   }
   const beaconList = beacons.beacon_bases || ['http://85.131.251.224/'];
+  const fromList = fromCand.from_addresses || [];
+  // 複数選択＋直接入力ウィジェット。候補(マスタ＋過去値)をチェックで複数選び、直接入力も足せる。
+  // data-endpoints-widget に kind を持たせ、選択値の収集(collectEndpointWidget)と復元(fillEndpointWidget)で使う。
+  const endpointWidget = (name, kind, candidates, opts = {}) => {
+    const cls = kind === 'beacon' ? 'ep-beacon' : 'ep-from';
+    const listId = 'epList-' + name;
+    const checks = (candidates || []).map((v, i) => `
+      <div class="form-check form-check-inline">
+        <input class="form-check-input ep-check" type="checkbox" id="${listId}-${i}" value="${esc(v)}">
+        <label class="form-check-label small" for="${listId}-${i}">${esc(v)}</label>
+      </div>`).join('') || '<span class="text-muted small">登録済みの候補がありません。下の欄で直接追加できます。</span>';
+    const checkBtn = kind === 'beacon'
+      ? `<button type="button" class="btn btn-outline-secondary ep-check-btn"><i class="bi bi-broadcast"></i> 疎通確認</button>` : '';
+    return `<div class="endpoint-widget border rounded p-2 ${cls}" data-endpoints-widget="${kind}" data-ep-name="${name}">
+      <div class="ep-candidates mb-1">${checks}</div>
+      <div class="input-group input-group-sm">
+        <input class="form-control ep-add-input" type="${kind === 'from' ? 'email' : 'text'}" placeholder="${kind === 'from' ? '直接入力：メールアドレス' : '直接入力：http(s):// のベースURL'}">
+        <button type="button" class="btn btn-outline-primary ep-add-btn"><i class="bi bi-plus-lg"></i> 追加</button>
+        ${checkBtn}
+      </div>
+      <div class="form-check mt-1">
+        <input class="form-check-input ep-save-master" type="checkbox" id="${listId}-savemaster">
+        <label class="form-check-label small text-muted" for="${listId}-savemaster">直接入力した値をマスタにも登録する</label>
+      </div>
+      <div class="ep-added small mt-1"></div>
+      <div class="ep-check-result small"></div>
+      ${opts.hint ? `<div class="form-text">${opts.hint}</div>` : ''}
+    </div>`;
+  };
   const byKind = (k) => (tpls.templates || []).filter((t) => t.kind === k);
   const opt = (arr) => arr.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   // 偽ログイン専用: 認証種別(auth_flag)をラベルに出す。
@@ -2123,16 +2259,13 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       </section>
       <section class="campaign-editor-section" data-campaign-step="delivery"><h3 tabindex="-1">送信環境</h3>
       <div class="row g-2">
-        <div class="col-md-12 mb-2"><label class="form-label">送信元アドレス（キャンペーン既定・各コンテンツで上書き可）</label><input class="form-control" name="from_address" type="email" required></div>
+        <div class="col-md-12 mb-2"><label class="form-label">送信元アドレス（キャンペーン既定・各コンテンツで上書き可）</label>
+          ${endpointWidget('from', 'from', fromList, { hint: '複数選ぶと対象者へ均等に振り分けます。1件だけなら全員がそのアドレスになります。到達性(SPF/DKIM)は運用側で用意してください。' })}
+        </div>
       </div>
       <div class="row g-2">
         <div class="col-md-12 mb-2"><label class="form-label">ビーコンベースURL（キャンペーン既定・各コンテンツで上書き可。登録済みから選択、または直接入力）</label>
-          <div class="input-group">
-            <input class="form-control" name="beacon_base" id="beaconBaseInput" list="beaconBaseList" value="${esc(beaconList[0])}" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="beaconCheckBtn"><i class="bi bi-broadcast"></i> 疎通確認</button>
-          </div>
-          <datalist id="beaconBaseList">${beaconList.map((b) => `<option value="${esc(b)}"></option>`).join('')}</datalist>
-          <div class="form-text" id="beaconCheckResult"></div>
+          ${endpointWidget('beacon', 'beacon', beaconList, { hint: '複数選ぶと対象者へ均等に振り分けます。追跡サーバへ解決・到達できるホストだけを選んでください。' })}
         </div>
       </div>
       <div class="row g-2">
@@ -2242,9 +2375,9 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       </div>
       <div class="row g-2 mt-1">
         <div class="col-md-6"><label class="form-label small text-muted">送信元アドレス（任意・未指定ならキャンペーン既定）</label>
-          <input class="form-control form-control-sm c-from" type="email" placeholder="このコンテンツ専用の送信元"></div>
+          ${endpointWidget('cfrom-' + idx, 'from', fromList, {})}</div>
         <div class="col-md-6"><label class="form-label small text-muted">ビーコンURL（任意・未指定ならキャンペーン既定）</label>
-          <input class="form-control form-control-sm c-beacon" list="beaconBaseList" placeholder="このコンテンツ専用の追跡URL"></div>
+          ${endpointWidget('cbeacon-' + idx, 'beacon', beaconList, {})}</div>
       </div>
       </div>
     </div>`;
@@ -2272,18 +2405,29 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       if (row.querySelector('.c-zip').checked) c.attachment_zip = 1;
       if (row.querySelector('.c-suppress-url').checked) c.suppress_body_url = 1;
       if (row.querySelector('.c-suppress-email').checked) c.suppress_prefill_email = 1;
-      // コンテンツ別の送信元/ビーコンURL(任意)。空ならキャンペーン既定を使う。
-      const cFrom = row.querySelector('.c-from').value.trim();
-      if (cFrom) c.from_address = cFrom;
-      const cBeacon = row.querySelector('.c-beacon').value.trim();
-      if (cBeacon) c.beacon_base = cBeacon;
+      // コンテンツ別の送信元/ビーコンURL(複数選択＋直接入力・任意)。空ならキャンペーン既定を使う。
+      const cFromList = collectEndpointWidget(row.querySelector('[data-ep-name^="cfrom-"]'));
+      const cBeaconList = collectEndpointWidget(row.querySelector('[data-ep-name^="cbeacon-"]'));
+      if (cFromList.length) { c.from_addresses = cFromList; c.from_address = cFromList[0]; }
+      if (cBeaconList.length) { c.beacon_bases = cBeaconList; c.beacon_base = cBeaconList[0]; }
       return c;
     });
     if (!contents.length) throw new Error('コンテンツを1件以上追加してください');
+    // キャンペーン既定の複数選択(送信元・ビーコン)。単数列は先頭要素をサーバでも入れるが、UI からも送る。
+    const fromDefaults = collectEndpointWidget(f.querySelector('[data-ep-name="from"]'));
+    const beaconDefaults = collectEndpointWidget(f.querySelector('[data-ep-name="beacon"]'));
+    if (!fromDefaults.length) {
+      campaignEditorSteps.openStep('delivery');
+      const err = new Error('送信元アドレスを1件以上選ぶか入力してください');
+      err.handled = true;
+      toast(err.message, 'err');
+      throw err;
+    }
     const payload = {
       name: f.name.value.trim(),
       contents,
-      from_address: f.from_address.value.trim(),
+      from_address: fromDefaults[0],
+      from_addresses: fromDefaults,
       send_mode: f.send_mode.value,
       weekdays_only: f.weekdays_only.checked,
       is_test: f.is_test.checked,
@@ -2299,7 +2443,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     if (f.split_interval_min.value) payload.split_interval_min = Number(f.split_interval_min.value);
     if (f.business_start.value.trim()) payload.business_start = f.business_start.value.trim();
     if (f.business_end.value.trim()) payload.business_end = f.business_end.value.trim();
-    if (f.beacon_base && f.beacon_base.value.trim()) payload.beacon_base = f.beacon_base.value.trim();
+    if (beaconDefaults.length) { payload.beacon_bases = beaconDefaults; payload.beacon_base = beaconDefaults[0]; }
     if (!payload.target_ids.length && !payload.group_ids.length) {
       // 対象者の手順へ移り、欄の下に理由を出す(最終確認の手順に留まったままにしない)
       campaignEditorSteps.openStep('targets');
@@ -2309,6 +2453,8 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       err.handled = true;
       throw err;
     }
+    // 直接入力した値のうち「マスタにも登録する」を選んだものを先にマスタへ登録する(任意・失敗は無視)。
+    await saveEndpointWidgetsToMaster(f);
     if (isEdit) {
       payload.id = campaignId;
       await api('api/campaigns.php', { method: 'POST', query: { action: 'update' }, body: payload });
@@ -2466,8 +2612,11 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       row.querySelector('.c-zip').checked = Number(prefill.attachment_zip) === 1;
       row.querySelector('.c-suppress-url').checked = Number(prefill.suppress_body_url) === 1;
       row.querySelector('.c-suppress-email').checked = Number(prefill.suppress_prefill_email) === 1;
-      if (prefill.from_address) row.querySelector('.c-from').value = prefill.from_address;
-      if (prefill.beacon_base) row.querySelector('.c-beacon').value = prefill.beacon_base;
+      // コンテンツ別の複数指定を復元(JSON 配列。無ければ単数列を1件として復元)。
+      const cFromVals = parseEndpointList(prefill.from_addresses, prefill.from_address);
+      const cBeaconVals = parseEndpointList(prefill.beacon_bases, prefill.beacon_base);
+      fillEndpointWidget(row.querySelector('[data-ep-name^="cfrom-"]'), cFromVals);
+      fillEndpointWidget(row.querySelector('[data-ep-name^="cbeacon-"]'), cBeaconVals);
     } else {
       syncAttachment(row); // 初期状態(link)で添付を無効化
       // 初期状態で最初のシナリオを選択して件名・本文を連動させておく(ちぐはぐ防止の既定)。
@@ -2541,8 +2690,9 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     const f = document.getElementById('campaignForm');
     const setVal = (name, val) => { if (f[name] !== undefined && val !== null && val !== undefined) f[name].value = val; };
     setVal('name', c.name);
-    setVal('from_address', c.from_address);
-    if (c.beacon_base) setVal('beacon_base', c.beacon_base);
+    // 送信元・ビーコンの複数選択を復元(JSON 配列。無ければ単数列を1件として)。
+    fillEndpointWidget(f.querySelector('[data-ep-name="from"]'), parseEndpointList(c.from_addresses, c.from_address));
+    fillEndpointWidget(f.querySelector('[data-ep-name="beacon"]'), parseEndpointList(c.beacon_bases, c.beacon_base));
     setVal('send_mode', c.send_mode || 'normal');
     if (c.split_count) setVal('split_count', c.split_count);
     if (c.split_interval_min) setVal('split_interval_min', c.split_interval_min);
@@ -2603,9 +2753,8 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
   });
   campaignForm.target_ids.addEventListener('change', renderCampaignTargetSummary);
   syncCampaignTargetSummary();
-  // P6: ビーコンベースURLの疎通確認ボタン
-  const checkBtn = document.getElementById('beaconCheckBtn');
-  if (checkBtn) checkBtn.addEventListener('click', checkBeaconUrl);
+  // 送信元・ビーコンの複数選択ウィジェット(追加/削除/疎通確認)をフォーム全体へ委譲する。
+  wireEndpointWidgets(campaignForm);
   // 対象日プレビュー(平日限定の可視化)
   const wpBtn = document.getElementById('weekdayPreviewBtn');
   if (wpBtn) wpBtn.addEventListener('click', showWeekdayPreview);
@@ -2653,24 +2802,137 @@ function showWeekdayPreview() {
   area.innerHTML = `<div class="small text-muted mb-1">配信対象日：${sendable} 日 / 全 ${days.length} 日${weekdaysOnly ? '（平日限定：土日は除外）' : '（全曜日）'}。取消線＝配信されない日。</div>
     <div class="border rounded p-2" style="max-height:120px;overflow:auto">${chips}</div>`;
 }
-async function checkBeaconUrl() {
-  const input = document.getElementById('beaconBaseInput');
-  const result = document.getElementById('beaconCheckResult');
-  const btn = document.getElementById('beaconCheckBtn');
-  const url = (input?.value || '').trim();
-  if (!url) { result.innerHTML = '<span class="text-warning">URLを入力してください</span>'; return; }
-  btn.disabled = true;
-  result.innerHTML = '<span class="text-muted">確認中…</span>';
-  try {
-    const r = await api('api/url_check.php', { method: 'POST', body: { url } });
-    if (r.reachable) {
-      result.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> 到達可能（HTTP ${r.http_status}, ${r.response_ms}ms）</span>`;
+// (旧 checkBeaconUrl は checkEndpointBeacons に統合。単一入力のビーコン疎通確認は廃止)
+/* ===== 送信エンドポイントの複数選択ウィジェット(beacon/from) ===== */
+// JSON 配列(文字列)を string[] にする。空/不正なら単数値 single を1件の配列にフォールバック。
+function parseEndpointList(json, single) {
+  if (json !== null && json !== undefined && json !== '') {
+    try {
+      const arr = typeof json === 'string' ? JSON.parse(json) : json;
+      if (Array.isArray(arr)) {
+        const out = arr.filter((v) => typeof v === 'string' && v.trim() !== '');
+        if (out.length) return out;
+      }
+    } catch (e) { /* フォールバックへ */ }
+  }
+  return (single !== null && single !== undefined && String(single).trim() !== '') ? [String(single)] : [];
+}
+// 選択済み(チェック済み)＋直接追加した値を、重複なく順序を保って返す。
+function collectEndpointWidget(el) {
+  if (!el) return [];
+  const out = [];
+  const add = (v) => { v = (v || '').trim(); if (v && !out.includes(v)) out.push(v); };
+  el.querySelectorAll('.ep-check:checked').forEach((c) => add(c.value));
+  el.querySelectorAll('.ep-added [data-ep-val]').forEach((c) => add(c.getAttribute('data-ep-val')));
+  return out;
+}
+// 既存値を復元する。候補にあればチェック、無ければ追加チップにする。
+function fillEndpointWidget(el, values) {
+  if (!el || !Array.isArray(values)) return;
+  const known = new Set();
+  el.querySelectorAll('.ep-check').forEach((c) => known.add(c.value));
+  values.forEach((v) => {
+    v = (v || '').trim();
+    if (!v) return;
+    if (known.has(v)) {
+      el.querySelectorAll('.ep-check').forEach((c) => { if (c.value === v) c.checked = true; });
     } else {
-      result.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle"></i> 到達できません（${esc(r.error || '応答なし')}）</span>`;
+      addEndpointChip(el, v);
     }
-  } catch (e) {
-    result.innerHTML = `<span class="text-danger">${esc(e.message)}</span>`;
-  } finally { btn.disabled = false; }
+  });
+}
+// 直接入力の値をチップとして足す(×で外せる)。kind で簡易バリデーション。
+function addEndpointChip(el, value) {
+  value = (value || '').trim();
+  if (!value) return false;
+  const kind = el.getAttribute('data-endpoints-widget');
+  if (kind === 'from' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { toast('メールアドレスの形式で入力してください', 'err'); return false; }
+  if (kind === 'beacon' && !/^https?:\/\/[^\s/][^\s]*$/.test(value)) { toast('http:// または https:// で始まるURLを入力してください', 'err'); return false; }
+  // 既にチェック候補にあるならチェックを立てるだけ
+  let inCandidates = false;
+  el.querySelectorAll('.ep-check').forEach((c) => { if (c.value === value) { c.checked = true; inCandidates = true; } });
+  if (inCandidates) return true;
+  // 既に追加済みなら何もしない
+  if (el.querySelector(`.ep-added [data-ep-val="${CSS.escape(value)}"]`)) return true;
+  const added = el.querySelector('.ep-added');
+  const chip = document.createElement('span');
+  chip.className = 'badge bg-primary-subtle text-dark border me-1 mb-1';
+  chip.setAttribute('data-ep-val', value);
+  chip.innerHTML = `${esc(value)} <a href="#" class="ep-chip-remove text-danger text-decoration-none" aria-label="削除">×</a>`;
+  added.appendChild(chip);
+  return true;
+}
+// モーダル内のエンドポイントウィジェットへ、追加・削除・疎通確認のイベントを1回だけ委譲する。
+function wireEndpointWidgets(root) {
+  if (!root || root.__epWired) return;
+  root.__epWired = true;
+  root.addEventListener('click', async (e) => {
+    const widget = e.target.closest('[data-endpoints-widget]');
+    if (!widget) return;
+    if (e.target.closest('.ep-add-btn')) {
+      e.preventDefault();
+      const input = widget.querySelector('.ep-add-input');
+      if (addEndpointChip(widget, input.value)) input.value = '';
+      return;
+    }
+    if (e.target.closest('.ep-chip-remove')) {
+      e.preventDefault();
+      e.target.closest('[data-ep-val]').remove();
+      return;
+    }
+    if (e.target.closest('.ep-check-btn')) {
+      e.preventDefault();
+      await checkEndpointBeacons(widget);
+      return;
+    }
+  });
+  // Enter で追加(送信の暴発を防ぐ)。
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const input = e.target.closest('.ep-add-input');
+    if (!input) return;
+    e.preventDefault();
+    const widget = input.closest('[data-endpoints-widget]');
+    if (addEndpointChip(widget, input.value)) input.value = '';
+  });
+}
+// 選択(＋直接追加)した各 beacon の疎通を確認する(P6)。
+async function checkEndpointBeacons(widget) {
+  const result = widget.querySelector('.ep-check-result');
+  const urls = collectEndpointWidget(widget);
+  const target = urls.length ? urls : [(widget.querySelector('.ep-add-input')?.value || '').trim()].filter(Boolean);
+  if (!target.length) { result.innerHTML = '<span class="text-warning">確認するビーコンを選ぶか入力してください</span>'; return; }
+  const btn = widget.querySelector('.ep-check-btn');
+  if (btn) btn.disabled = true;
+  result.innerHTML = '<span class="text-muted">確認中…</span>';
+  const lines = [];
+  for (const url of target) {
+    try {
+      const r = await api('api/url_check.php', { method: 'POST', body: { url } });
+      lines.push(r.reachable
+        ? `<div class="text-success"><i class="bi bi-check-circle"></i> ${esc(url)}（HTTP ${r.http_status}, ${r.response_ms}ms）</div>`
+        : `<div class="text-danger"><i class="bi bi-x-circle"></i> ${esc(url)}（${esc(r.error || '応答なし')}）</div>`);
+    } catch (e) {
+      lines.push(`<div class="text-danger"><i class="bi bi-x-circle"></i> ${esc(url)}（${esc(e.message)}）</div>`);
+    }
+  }
+  result.innerHTML = lines.join('');
+  if (btn) btn.disabled = false;
+}
+// 直接入力してマスタにも登録するチェックが入ったウィジェットの、候補に無い値をマスタへ保存する。
+async function saveEndpointWidgetsToMaster(root) {
+  const widgets = Array.from(root.querySelectorAll('[data-endpoints-widget]'));
+  for (const w of widgets) {
+    const save = w.querySelector('.ep-save-master');
+    if (!save || !save.checked) continue;
+    const kind = w.getAttribute('data-endpoints-widget');
+    const chips = Array.from(w.querySelectorAll('.ep-added [data-ep-val]')).map((c) => c.getAttribute('data-ep-val'));
+    for (const value of chips) {
+      try {
+        await api('api/send_endpoints.php', { method: 'POST', query: { action: 'create' }, body: { kind, value } });
+      } catch (e) { /* 重複(409)などは無視。保存は任意なので失敗しても本体保存は続ける */ }
+    }
+  }
 }
 function multiVals(sel) { return Array.from(sel.selectedOptions).map((o) => Number(o.value)); }
 
