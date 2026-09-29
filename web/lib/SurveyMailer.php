@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/NotificationTemplates.php';
 require_once __DIR__ . '/SurveyService.php';
 require_once __DIR__ . '/TenantStatus.php';
 
@@ -44,7 +45,7 @@ final class SurveyMailer
                AND t.status = 'active'",
             [$deliveryId, $tenantId]
         );
-        $result = self::sendAll($rows, (string) $delivery['survey_title'], $delivery['deadline'], false, 'invited_at');
+        $result = self::sendAll($tenantId, $rows, (string) $delivery['survey_title'], $delivery['deadline'], false, 'invited_at');
         if ($result['sent'] > 0) {
             Db::run("UPDATE survey_deliveries SET invited_at = datetime('now','localtime') WHERE id = ?", [$deliveryId]);
         }
@@ -63,7 +64,7 @@ final class SurveyMailer
             self::assertTenantOperational($tenantId);
         }
         $now ??= time();
-        $sql = "SELECT a.id, a.access_token, t.email, t.name, s.title AS survey_title, d.deadline
+        $sql = "SELECT a.id, a.tenant_id, a.access_token, t.email, t.name, s.title AS survey_title, d.deadline
                 FROM survey_assignments a
                 INNER JOIN survey_deliveries d ON d.id = a.delivery_id
                 INNER JOIN surveys s ON s.id = d.survey_id
@@ -84,7 +85,7 @@ final class SurveyMailer
         }
         $total = ['targets' => 0, 'sent' => 0, 'failed' => 0];
         foreach (Db::all($sql, $params) as $row) {
-            $r = self::sendAll([$row], (string) $row['survey_title'], $row['deadline'], true, 'last_reminded_at');
+            $r = self::sendAll((int) $row['tenant_id'], [$row], (string) $row['survey_title'], $row['deadline'], true, 'last_reminded_at');
             foreach ($total as $k => $_) {
                 $total[$k] += $r[$k];
             }
@@ -128,20 +129,19 @@ final class SurveyMailer
      * @param list<array<string,mixed>> $rows
      * @return array{targets:int, sent:int, failed:int}
      */
-    private static function sendAll(array $rows, string $title, ?string $deadline, bool $reminder, string $stampColumn): array
+    private static function sendAll(int $tenantId, array $rows, string $title, ?string $deadline, bool $reminder, string $stampColumn): array
     {
         $sent = 0;
         $failed = 0;
         foreach ($rows as $r) {
-            $name = trim((string) ($r['name'] ?? ''));
-            $subject = ($reminder ? '【回答のお願い（締切間近）】' : '【アンケートのお願い】') . $title;
-            $body = ($name !== '' ? $name . ' 様' : 'ご担当者 様') . "\n\n"
-                . 'アンケート「' . $title . "」へのご協力をお願いします。\n"
-                . "下記の URL から回答できます（ログイン不要）。\n\n"
-                . self::surveyUrl((string) $r['access_token']) . "\n\n"
-                . ($deadline !== null ? '回答の締切: ' . substr((string) $deadline, 0, 16) . "\n\n" : '')
-                . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
-            if (EduMailer::send((string) $r['email'], $subject, $body)) {
+            // 文面はテナントの上書きがあればそれ、なければ既定(NotificationTemplates の survey_invite / survey_reminder)
+            $mail = NotificationTemplates::render($tenantId, $reminder ? 'survey_reminder' : 'survey_invite', [
+                '氏名' => (string) ($r['name'] ?? ''),
+                'アンケート名' => $title,
+                '回答URL' => self::surveyUrl((string) $r['access_token']),
+                '期限' => $deadline !== null ? substr((string) $deadline, 0, 16) : '',
+            ]);
+            if (EduMailer::send((string) $r['email'], $mail['subject'], $mail['body'])) {
                 $sent++;
                 // 列名は呼び出し側の固定値(invited_at / last_reminded_at)だけ。
                 Db::run("UPDATE survey_assignments SET {$stampColumn} = datetime('now','localtime') WHERE id = ?", [(int) $r['id']]);

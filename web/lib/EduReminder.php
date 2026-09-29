@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/NotificationTemplates.php';
 require_once __DIR__ . '/TenantStatus.php';
 
 final class EduReminder
@@ -32,7 +33,7 @@ final class EduReminder
         //        (未リマインド or 前回から intervalDays 日以上経過)
         $rows = Db::all(
             "SELECT a.id AS assignment_id, a.access_token, a.last_reminded_at, a.tenant_id,
-                    d.title, t.email, t.name
+                    d.title, d.deadline, t.email, t.name
              FROM edu_assignments a
              INNER JOIN edu_deliveries d ON d.id = a.delivery_id
              INNER JOIN targets t ON t.id = a.target_id
@@ -50,17 +51,11 @@ final class EduReminder
         $sent = 0;
         $failed = 0;
         foreach ($rows as $r) {
-            $name = trim((string) ($r['name'] ?? ''));
-            $greeting = $name !== '' ? ($name . ' 様') : 'ご担当者 様';
-            $url = EduMailer::takeUrl((string) $r['access_token']);
-            $subject = '【受講のお願い(リマインド)】' . (string) $r['title'];
-            $body = $greeting . "\n\n"
-                . 'セキュリティ教育「' . (string) $r['title'] . "」が未受講です。\n"
-                . "お手数ですが下記URLよりご受講ください（所要5〜10分・ログイン不要）。\n\n"
-                . $url . "\n\n"
-                . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
+            // 文面はテナントの上書きがあればそれ、なければ既定(NotificationTemplates の edu_reminder_auto)
+            $mail = NotificationTemplates::render((int) $r['tenant_id'], 'edu_reminder_auto', NotificationTemplates::eduVars(
+                (string) ($r['name'] ?? ''), (string) $r['title'], (string) $r['access_token'], $r['deadline'] ?? null));
 
-            if (EduMailer::send((string) $r['email'], $subject, $body)) {
+            if (EduMailer::send((string) $r['email'], $mail['subject'], $mail['body'])) {
                 $sent++;
                 Db::run(
                     "UPDATE edu_assignments SET last_reminded_at = datetime('now','localtime') WHERE id = ?",

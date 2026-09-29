@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/NotificationTemplates.php';
 require_once __DIR__ . '/TenantStatus.php';
 require_once __DIR__ . '/EduDeliveryLauncher.php';
 require_once __DIR__ . '/EduAutoEnrollRuns.php';
@@ -134,7 +135,7 @@ final class EduAutoEnroll
         if ($assignmentIds === []) {
             return;
         }
-        $delivery = Db::one('SELECT title, send_invites FROM edu_deliveries WHERE id = ?', [$deliveryId]);
+        $delivery = Db::one('SELECT title, deadline, send_invites FROM edu_deliveries WHERE id = ?', [$deliveryId]);
         // 教育のメールは既定で送らない。配信で「案内メールを送る」を選んだときだけ送る。
         if ($delivery === null || (int) $delivery['send_invites'] !== 1) {
             return;
@@ -152,11 +153,11 @@ final class EduAutoEnroll
             if ($row === null) {
                 continue;
             }
-            $sent = EduMailer::send(
-                (string) $row['email'],
-                self::inviteSubject($title),
-                self::inviteBody((string) ($row['name'] ?? ''), $title, (string) $row['access_token'])
-            );
+            // 文面はテナントの上書きがあればそれ、なければ既定(NotificationTemplates の edu_followup_invite)。
+            // 既定は訓練失敗直後の案内なので、責める文面にしない(受講率を下げるため)。
+            $mail = NotificationTemplates::render($tenantId, 'edu_followup_invite', NotificationTemplates::eduVars(
+                (string) ($row['name'] ?? ''), $title, (string) $row['access_token'], $delivery['deadline'] ?? null));
+            $sent = EduMailer::send((string) $row['email'], $mail['subject'], $mail['body']);
             if ($sent) {
                 Db::run(
                     "UPDATE edu_assignments SET last_reminded_at = datetime('now','localtime') WHERE id = ?",
@@ -164,23 +165,6 @@ final class EduAutoEnroll
                 );
             }
         }
-    }
-
-    /** 訓練失敗直後の案内なので、責める文面にしない(受講率を下げるため)。 */
-    private static function inviteSubject(string $title): string
-    {
-        return '【受講のご案内】' . $title;
-    }
-
-    private static function inviteBody(string $name, string $title, string $token): string
-    {
-        $greeting = trim($name) !== '' ? (trim($name) . ' 様') : 'ご担当者 様';
-        return $greeting . "\n\n"
-            . "先日の標的型メール訓練の結果にもとづき、フォローアップ教育「" . $title . "」をご案内します。\n"
-            . "訓練で気づけなかった点を短時間で確認できます。下記URLよりご受講ください"
-            . "（所要5〜10分・ログイン不要）。\n\n"
-            . EduMailer::takeUrl($token) . "\n\n"
-            . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
     }
 
     /**

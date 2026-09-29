@@ -84,6 +84,8 @@ final class TenantPurge
         // 多要素認証の回復コードとテナントの方針(段階1)。同じく明示して消す
         ['user_mfa_recovery_codes', 'user_id IN (SELECT id FROM users WHERE tenant_id = ?)'],
         ['tenant_security_policies', 'tenant_id = ?'],
+        // 通知の文面の上書き(C2)
+        ['notification_templates', 'tenant_id = ?'],
         ['users', 'tenant_id = ?'],
     ];
 

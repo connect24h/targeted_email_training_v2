@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/NotificationTemplates.php';
 require_once __DIR__ . '/PasswordPolicy.php';
 require_once __DIR__ . '/AdminSecurityPolicy.php';
 require_once __DIR__ . '/TenantStatus.php';
@@ -237,61 +238,32 @@ final class UserPasswordTokens
 
     /**
      * 招待・再設定のメールを1通送る。成功で true。本文に URL と期限を入れる(トークンはログに書かない)。
+     * 文面はユーザの所属テナントの上書きがあればそれ、なければ既定(NotificationTemplates の admin_* / learner_*)。
+     * システム管理者(テナントなし)は既定の文面。
      */
     public static function sendMail(array $user, string $token, string $purpose, string $site = 'admin'): bool
     {
-        $name = trim((string) ($user['name'] ?? ''));
         $expires = Db::one('SELECT expires_at FROM user_password_tokens WHERE token_hash = ?', [self::hashToken($token)]);
         $expiresAt = $expires !== null ? substr((string) $expires['expires_at'], 0, 16) : '';
+        $tenantId = isset($user['tenant_id']) && $user['tenant_id'] !== null ? (int) $user['tenant_id'] : null;
+        $vars = [
+            '氏名' => (string) ($user['name'] ?? ''),
+            '設定URL' => self::url($token, $site === 'my' ? 'my' : 'admin'),
+            'メールアドレス' => (string) $user['email'],
+            '有効期限' => $expiresAt,
+            'パスワードの決まり' => PasswordPolicy::DESCRIPTION,
+        ];
         if ($site === 'my') {
-            return self::sendLearnerMail($user, $token, $purpose, $name, $expiresAt);
-        }
-        if ($purpose === 'invite') {
-            $subject = '【TET v2】管理画面のアカウントのパスワード設定のお願い';
-            $lead = "TET v2（標的型メール訓練・教育の管理画面）のアカウントが作られました。\n"
-                . "下記の URL を開き、パスワードを設定してください。\n";
+            // 受講者のマイページの招待・再設定のメール(リンクは受講者のサイトのパスワード設定のページ)
+            $kind = $purpose === 'invite' ? 'learner_invite' : 'learner_reset';
+            $vars['マイページURL'] = self::learnerBaseUrl() . '/my.php';
+            $vars['アカウントの注記'] = (string) ($user['role'] ?? '') !== 'learner'
+                ? '※このパスワードは管理画面のパスワードと共通です（同じアカウントです）。' : '';
         } else {
-            $subject = '【TET v2】パスワード再設定のご案内';
-            $lead = "TET v2（標的型メール訓練・教育の管理画面）のパスワードの再設定を、管理者が受け付けました。\n"
-                . "下記の URL を開き、新しいパスワードを設定してください。\n";
+            $kind = $purpose === 'invite' ? 'admin_invite' : 'admin_reset';
         }
-        $body = ($name !== '' ? $name . ' 様' : 'ご担当者 様') . "\n\n"
-            . $lead . "\n"
-            . self::url($token) . "\n\n"
-            . 'ログインに使うメールアドレス: ' . (string) $user['email'] . "\n"
-            . ($expiresAt !== '' ? 'リンクの有効期限: ' . $expiresAt . '（72時間。1回だけ使えます）' . "\n" : '')
-            . 'パスワードの決まり: ' . PasswordPolicy::DESCRIPTION . "\n\n"
-            . "お心当たりがない場合は、このメールを破棄してください。\n"
-            . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
-        return EduMailer::send((string) $user['email'], $subject, $body);
-    }
-
-    /** 受講者のマイページの招待・再設定のメール(リンクは受講者のサイトのパスワード設定のページ)。 */
-    private static function sendLearnerMail(array $user, string $token, string $purpose, string $name, string $expiresAt): bool
-    {
-        if ($purpose === 'invite') {
-            $subject = '【セキュリティ教育】マイページのパスワード設定のお願い';
-            $lead = "セキュリティ教育の受講者のマイページをご用意しました。\n"
-                . "マイページでは、受講する教育と回答するアンケート、ご自分の成績を確認でき、教育を受け直せます。\n"
-                . "下記の URL を開き、パスワードを設定してください。\n";
-        } else {
-            $subject = '【セキュリティ教育】マイページのパスワード再設定のご案内';
-            $lead = "セキュリティ教育の受講者のマイページのパスワードの再設定を受け付けました。\n"
-                . "下記の URL を開き、新しいパスワードを設定してください。\n";
-        }
-        $shared = (string) ($user['role'] ?? '') !== 'learner'
-            ? "※このパスワードは管理画面のパスワードと共通です（同じアカウントです）。\n" : '';
-        $body = ($name !== '' ? $name . ' 様' : 'ご担当者 様') . "\n\n"
-            . $lead . "\n"
-            . self::url($token, 'my') . "\n\n"
-            . 'ログインに使うメールアドレス: ' . (string) $user['email'] . "\n"
-            . ($expiresAt !== '' ? 'リンクの有効期限: ' . $expiresAt . '（72時間。1回だけ使えます）' . "\n" : '')
-            . 'パスワードの決まり: ' . PasswordPolicy::DESCRIPTION . "\n"
-            . 'マイページ: ' . self::learnerBaseUrl() . "/my.php\n"
-            . $shared . "\n"
-            . "お心当たりがない場合は、このメールを破棄してください。\n"
-            . "※本メールは自動送信です。ご不明点は社内の担当者へお問い合わせください。\n";
-        return EduMailer::send((string) $user['email'], $subject, $body);
+        $mail = NotificationTemplates::render($tenantId, $kind, $vars);
+        return EduMailer::send((string) $user['email'], $mail['subject'], $mail['body']);
     }
 
     /**
