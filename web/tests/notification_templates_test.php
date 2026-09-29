@@ -155,8 +155,8 @@ function legacy_learner(array $user, string $token, string $purpose, string $exp
 // ---------------------------------------------------------------------------
 // DF: 既定の文面 = 以前の文面(レンダラを直接呼ぶ。値の組み合わせを総当たり)
 // ---------------------------------------------------------------------------
-check(count(NotificationTemplates::KINDS) === 10 && array_keys(NotificationTemplates::definitions()) === NotificationTemplates::KINDS,
-    'DF-0: 通知の種類は10個で、一覧と定義が一致する');
+check(count(NotificationTemplates::KINDS) === 15 && array_keys(NotificationTemplates::definitions()) === NotificationTemplates::KINDS,
+    'DF-0: 通知の種類は15個(段D の報告者への返信4つと集計通知1つを含む)で、一覧と定義が一致する');
 $names = ['見本 花子', '', '  前後に空白  ', '{受講URL}'];
 $titles = ['標的型メールの見分け方', '  前後に空白の題  ', '題に{氏名}と{配信名}', "改行\nを含む題"];
 $token = str_repeat('ab', 16);
@@ -402,7 +402,7 @@ foreach (['nt_handle_reset', 'nt_handle_preview', 'nt_handle_test_send'] as $fn)
 }
 $r = call_handler('nt_handle_list', [], 'tenant_admin');
 $items = array_column($r['payload']['items'], null, 'kind');
-check($r['code'] === 200 && count($items) === 10 && $items['edu_invite']['customized'] === false
+check($r['code'] === 200 && count($items) === 15 && $items['edu_invite']['customized'] === false
     && $items['edu_invite']['body'] === $items['edu_invite']['default_body']
     && in_array('受講URL', array_column($items['edu_invite']['variables'], 'name'), true)
     && $items['edu_invite']['required'] === ['受講URL'], 'API-2: 組織管理者は種類ごとの今の文面と差し込みの一覧を見られる');
