@@ -898,6 +898,9 @@
           <li class="nav-item" role="presentation" data-role="tenant_admin">
             <button class="nav-link" id="adminUsersTab" data-bs-toggle="tab" data-bs-target="#adminUsersPane" type="button" role="tab" aria-controls="adminUsersPane" aria-selected="false">管理画面ユーザ</button>
           </li>
+          <li class="nav-item" role="presentation" data-role="tenant_admin">
+            <button class="nav-link" id="notifyTemplatesTab" data-bs-toggle="tab" data-bs-target="#notifyTemplatesPane" type="button" role="tab" aria-controls="notifyTemplatesPane" aria-selected="false">通知の文面</button>
+          </li>
         </ul>
         <div class="tab-content">
           <div class="tab-pane fade show active" id="participantsPane" role="tabpanel" aria-labelledby="participantsTab" tabindex="0">
@@ -951,6 +954,53 @@
               <thead><tr><th>#</th><th>メール</th><th>氏名</th><th>ロール</th><th>状態</th><th>最終ログイン</th><th>パスワード</th><th>多要素認証</th><th>操作</th></tr></thead>
               <tbody id="usersBody"></tbody>
             </table></div>
+          </div>
+          <div class="tab-pane fade" id="notifyTemplatesPane" role="tabpanel" aria-labelledby="notifyTemplatesTab" tabindex="0" data-role="tenant_admin">
+            <p class="small text-muted mb-3">教育・アンケートの案内と催促、マイページと管理画面のアカウントのメールの件名と本文を、この組織の文面に変えられます。変えていない通知は既定の文面で送ります。差し込みは下のボタンの一覧だけが使え、URL の差し込みは本文から消せません。</p>
+            <div class="alert alert-warning d-none" id="ntLoadError" role="alert"></div>
+            <div class="row g-3 d-none" id="ntEditor">
+              <div class="col-lg-6">
+                <div class="mb-2">
+                  <label class="form-label" for="ntKind">通知</label>
+                  <select class="form-select form-select-sm" id="ntKind"></select>
+                  <div class="form-text" id="ntUsedBy"></div>
+                  <div class="small mt-1" id="ntState"></div>
+                </div>
+                <div class="mb-2">
+                  <label class="form-label" for="ntSubject">件名</label>
+                  <input type="text" class="form-control form-control-sm" id="ntSubject" maxlength="200" autocomplete="off">
+                </div>
+                <div class="mb-2">
+                  <label class="form-label" for="ntBody">本文</label>
+                  <textarea class="form-control form-control-sm font-monospace" id="ntBody" rows="14" maxlength="5000"></textarea>
+                </div>
+                <div class="mb-2">
+                  <div class="small fw-semibold mb-1">差し込み（押すと、カーソルの位置に入ります。<span class="text-danger">*</span> は本文に必須）</div>
+                  <div id="ntVars"></div>
+                  <details class="small text-muted mt-1"><summary>差し込みの説明</summary><ul class="mb-0 mt-1" id="ntVarHelp"></ul>
+                    <div>期限・有効期限・問い合わせ先などの値が空の時は、その差し込みを含む行ごと消します。</div></details>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                  <button type="button" class="btn btn-primary btn-sm" id="ntSaveBtn"><i class="bi bi-save" aria-hidden="true"></i> 保存</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" id="ntTestSendBtn"><i class="bi bi-envelope" aria-hidden="true"></i> 自分にテスト送信</button>
+                  <button type="button" class="btn btn-outline-danger btn-sm" id="ntResetBtn"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> 既定の文面に戻す</button>
+                </div>
+                <div class="form-text" id="ntTestLimit"></div>
+                <div class="small mt-2" id="ntMessage" role="status"></div>
+              </div>
+              <div class="col-lg-6">
+                <div class="card">
+                  <div class="card-header small fw-semibold">プレビュー（見本の値で差し込み。保存前の文面も見られます）</div>
+                  <div class="card-body">
+                    <div class="alert alert-danger py-1 px-2 small d-none" id="ntPreviewError" role="alert"></div>
+                    <div class="small text-muted">件名</div>
+                    <div class="fw-semibold mb-2" id="ntPreviewSubject"></div>
+                    <div class="small text-muted">本文</div>
+                    <pre class="small mb-0" id="ntPreviewBody" style="white-space:pre-wrap;font-family:inherit"></pre>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -1026,5 +1076,6 @@
 <script src="assets/suspicious-mails.js?v=69293ad2"></script>
 <script src="assets/surveys.js?v=80becb08"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
+<script src="assets/notification-templates.js?v=135f8f2a"></script>
 </body>
 </html>

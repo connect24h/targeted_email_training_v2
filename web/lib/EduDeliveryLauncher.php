@@ -11,6 +11,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduQuestionPicker.php';
 require_once __DIR__ . '/EduMailer.php';
+require_once __DIR__ . '/NotificationTemplates.php';
 require_once __DIR__ . '/EduDeliverySeries.php';
 require_once __DIR__ . '/TenantStatus.php';
 
@@ -356,6 +357,8 @@ final class EduDeliveryLauncher
     public static function sendInvites(int $deliveryId, int $tenantId, string $title, array $tokens): int
     {
         $sent = 0;
+        $deadline = $tokens === [] ? null
+            : (Db::one('SELECT deadline FROM edu_deliveries WHERE id = ? AND tenant_id = ?', [$deliveryId, $tenantId])['deadline'] ?? null);
         foreach ($tokens as $token) {
             $row = Db::one(
                 'SELECT t.email, t.name
@@ -367,14 +370,10 @@ final class EduDeliveryLauncher
             if ($row === null) {
                 continue;
             }
-            $name = trim((string) ($row['name'] ?? ''));
-            $greeting = $name !== '' ? ($name . ' 様') : 'ご担当者 様';
-            $body = $greeting . "\n\n"
-                . 'セキュリティ教育「' . $title . "」が配信されました。\n"
-                . "下記URLよりご受講ください（所要5〜10分・ログイン不要）。\n\n"
-                . EduMailer::takeUrl($token) . "\n\n"
-                . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
-            if (EduMailer::send((string) $row['email'], '【受講のご案内】' . $title, $body)) {
+            // 文面はテナントの上書きがあればそれ、なければ既定(NotificationTemplates の edu_invite)
+            $mail = NotificationTemplates::render($tenantId, 'edu_invite',
+                NotificationTemplates::eduVars((string) ($row['name'] ?? ''), $title, $token, $deadline));
+            if (EduMailer::send((string) $row['email'], $mail['subject'], $mail['body'])) {
                 $sent++;
             }
         }

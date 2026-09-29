@@ -33,6 +33,7 @@ final class MigrationRunner
         '20261025-measurement-b1',
         '20261027-ops-b2a',
         '20261028-ops-b2b',
+        '20261102-notification-templates',
     ];
 
     /**
@@ -289,6 +290,11 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-reveal-pages.sql'));
             $pdo->exec($this->readSchema('schema-edu-material-versions.sql'));
             $this->backfillOpsB2b($pdo);
+            return;
+        }
+        if ($version === '20261102-notification-templates') {
+            // 通知の文面の上書き(C2、G35)。表を足すだけ。行がなければ既定の文面で送るので、既存の送信は変わらない。
+            $pdo->exec($this->readSchema('schema-notification-templates.sql'));
             return;
         }
         if ($version === '20260819-attachment-filename-prefix') {

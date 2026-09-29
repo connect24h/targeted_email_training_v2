@@ -750,6 +750,7 @@ function edu_d_handle_remind(array $actor): never
 {
     tet2_require_csrf();
     require_once __DIR__ . '/../lib/EduMailer.php';
+    require_once __DIR__ . '/../lib/NotificationTemplates.php';
     $body = json_body();
     $tenantId = effective_tenant_id($actor, edu_d_body_optional_int($body, 'tenant_id'));
     $id = edu_d_id_body($body);
@@ -779,16 +780,10 @@ function edu_d_handle_remind(array $actor): never
     $sent = 0;
     $failed = 0;
     foreach ($rows as $r) {
-        $url = EduMailer::takeUrl((string) $r['access_token']);
-        $name = trim((string) ($r['name'] ?? ''));
-        $greeting = $name !== '' ? ($name . ' 様') : 'ご担当者 様';
-        $subject = '【受講のお願い】' . $title;
-        $mailBody = $greeting . "\n\n"
-            . 'セキュリティ教育「' . $title . "」が未受講です。\n"
-            . "下記URLよりご受講ください（所要5〜10分・ログイン不要）。\n\n"
-            . $url . "\n\n"
-            . "※本メールは自動送信です。ご不明点は管理者へお問い合わせください。\n";
-        if (EduMailer::send((string) $r['email'], $subject, $mailBody)) {
+        // 文面はテナントの上書きがあればそれ、なければ既定(NotificationTemplates の edu_reminder)
+        $mail = NotificationTemplates::render($tenantId, 'edu_reminder', NotificationTemplates::eduVars(
+            (string) ($r['name'] ?? ''), $title, (string) $r['access_token'], $delivery['deadline'] ?? null));
+        if (EduMailer::send((string) $r['email'], $mail['subject'], $mail['body'])) {
             $sent++;
         } else {
             $failed++;
