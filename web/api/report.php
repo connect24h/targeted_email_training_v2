@@ -8,6 +8,8 @@ require_once __DIR__."/../lib/TrainingLogRows.php";
 // 返信者(Maildir パース)。ログ管理の同名タブと共有する(2026-08-31)。
 // 全テナント混在の superadmin 限定機能のため、出力可否は reply_maildir_export_allowed() で判定する。
 require_once __DIR__."/../lib/ReplyMaildir.php";
+// 行動履歴と利用者ごとのタブ、判定の修正(段B1)。
+require_once __DIR__."/../lib/TrainingActions.php";
 
 function report_json_body(): array
 {
@@ -799,6 +801,66 @@ function report_handle_beacons(): never
     ]);
 }
 
+/** キャンペーンの ?campaign_id と、利用者のテナントを確かめて返す(viewer 以上の読み取り)。 */
+function report_campaign_param(array $user): array
+{
+    $campaignId = report_query_int('campaign_id');
+    if ($campaignId === null) {
+        json_error('campaign_id は必須です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    assert_campaign_owned($campaignId, $tenantId);
+    return [$campaignId, $tenantId];
+}
+
+/**
+ * 行動履歴(1行動1行)。集計に入らない装置の行も判定つきで出す。IP と端末の概要だけを返し、元の行(raw)は返さない。
+ */
+function report_handle_actions(): never
+{
+    [$campaignId, $tenantId] = report_campaign_param(require_role('viewer'));
+    $result = training_actions_rows($campaignId, $tenantId);
+    json_out(['success' => true, 'actions' => $result['rows'], 'counts' => $result['counts'], 'truncated' => $result['truncated'],
+        'limit' => TRAINING_ACTIONS_LIMIT]);
+}
+
+/** 利用者ごとの1行(報告、返信、初回クリック、配信エラー)。 */
+function report_handle_people(): never
+{
+    [$campaignId, $tenantId] = report_campaign_param(require_role('viewer'));
+    json_out(['success' => true, 'people' => training_people_rows($campaignId, $tenantId)]);
+}
+
+/**
+ * 行動1件の判定を担当者が直す(オペレータ以上、CSRF、監査ログ)。直した判定は次の集計から効く。
+ * 確定済みのレポートの確定値は変わらない(確定を解除すると反映される)。
+ */
+function report_handle_set_verdict(): never
+{
+    $user = require_role('operator');
+    tet2_require_csrf();
+    $body = json_body();
+    $eventId = isset($body['event_id']) ? (int) $body['event_id'] : 0;
+    $verdict = (string) ($body['verdict'] ?? '');
+    if ($eventId < 1) {
+        json_error('event_id が不正です', 400);
+    }
+    if (!in_array($verdict, ['user', 'scanner'], true)) {
+        json_error('判定は user か scanner です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($body['tenant_id']) ? (int) $body['tenant_id'] : null);
+    try {
+        $result = training_set_verdict($eventId, $tenantId, $verdict, (int) $user['id']);
+    } catch (DomainException $error) {
+        json_error($error->getMessage(), in_array($error->getCode(), [404, 409], true) ? $error->getCode() : 409);
+    }
+    if ($result['changed']) {
+        audit('report.event_verdict', json_encode(['tenant_id' => $tenantId] + $result, JSON_UNESCAPED_UNICODE) ?: '');
+    }
+    json_out(['success' => true, 'changed' => $result['changed'], 'verdict' => $verdict,
+        'is_committed' => report_snapshot_of($result['campaign_id'], $tenantId) !== null]);
+}
+
 /** レポートを確定(コミット)する。現時点の全期間集計をスナップショット保存し、以後値を固定する。 */
 function report_handle_commit(): never
 {
@@ -1436,6 +1498,15 @@ try {
     }
     if ($action === 'beacons' && $method === 'GET') {
         report_handle_beacons();
+    }
+    if ($action === 'actions' && $method === 'GET') {
+        report_handle_actions();
+    }
+    if ($action === 'people' && $method === 'GET') {
+        report_handle_people();
+    }
+    if ($action === 'set_verdict' && $method === 'POST') {
+        report_handle_set_verdict();
     }
     if ($action === 'risk_individuals' && $method === 'GET') {
         report_handle_risk_individuals();

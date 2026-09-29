@@ -168,7 +168,9 @@ foreach ($files as $file) {
         $start = (int) strrpos(substr($src, 0, $offset), 'function ');
         $end = strpos($src, 'function ', $offset);
         $body = substr($src, $start, ($end === false ? strlen($src) : $end) - $start);
-        if (!str_contains($body, "verdict = 'user'") && !str_contains($body, "verdict='user'")) {
+        // 行動履歴と判定の修正は、装置の行も見るのが目的なので絞らない
+        $exempt = preg_match('/^function\s+(training_actions_rows|training_set_verdict)\b/', $body) === 1;
+        if (!$exempt && !str_contains($body, "verdict = 'user'") && !str_contains($body, "verdict='user'")) {
             $missing[] = basename($file) . ':' . (substr_count(substr($src, 0, $offset), "\n") + 1);
         }
     }
