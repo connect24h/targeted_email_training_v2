@@ -1,5 +1,14 @@
-// アンケート(U7)のブラウザ E2E。合成 DB を指したローカルサーバーに対して実行する。
-//   TET2_E2E_BASE_URL=http://localhost:8099/ TET2_E2E_EMAIL=... TET2_E2E_PASSWORD=... TET2_E2E_FIXTURE_DIR=... node surveys_e2e.mjs
+// アンケート(U7)のブラウザ E2E。合成 DB を指したローカルサーバーに対して実行する(本番に向けない)。
+// 準備: php fixtures/surveys_e2e_db.php <db> <password>
+//         (sv-admin@example.test と、総務部・情報システム部の対象者2名、kind='all' のグループ「全職員」を作る)
+//       ドキュメントルートに web への symlink tet2 を置き、次で起動する。
+//         TET2_DB_PATH=<db> TET2_EDU_BASE_URL=http://127.0.0.1:<port>/tet2 TET2_MAIL_OUTBOX_DIR=<scratch の outbox>
+//         php -S 127.0.0.1:<port> -t <docroot>
+//       TET2_EDU_BASE_URL は回答用 URL の元になる。未設定だと既定の本番の受講者ポータルの URL になり、SE-5 が本番を開くので必ず設定する。
+//       TET2_MAIL_OUTBOX_DIR は投函の代わりにファイルへ書く出口(SMTP へ出さない)。TET2_SURVEY_MAIL_ENABLED は設定しない(SE-1 が無効を確かめる)。
+// 実行: TET2_E2E_BASE_URL=http://127.0.0.1:<port>/tet2/ TET2_E2E_EMAIL=sv-admin@example.test TET2_E2E_PASSWORD=<password>
+//       TET2_E2E_FIXTURE_DIR=<scratch のディレクトリ(CSV の保存先)> node surveys_e2e.mjs
+//       TET2_E2E_BASE_URL は末尾を '/' にする(画面が api/... を相対で呼ぶため)。DB は1回の実行ごとに作り直す。
 // 流れ: ログイン → 雛形から作成 → 配信 → 回答用 URL の CSV → 回答画面で回答 → 結果。
 // あわせて、題名の HTML が実行されないこと、メール送信が無効ならボタンが押せないことを確かめる。
 import assert from 'node:assert/strict';
