@@ -50,6 +50,8 @@ function tet2_test_boot(?string $seedSql = null): string
     // 分野のタグ(設問の API とタグの API、教育レポートの分野)
     require_once __DIR__ . '/../lib/EduTags.php';
     require_once __DIR__ . '/../lib/EduTagReport.php';
+    // 部署の階層(教育レポートと訓練のレポートの部署の表)
+    require_once __DIR__ . '/../lib/DeptPath.php';
     if ($seedSql !== null) {
         Db::run($seedSql);
     }

@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../lib/EduAnswerReport.php';
 require_once __DIR__ . '/../lib/EduAutoEnrollRuns.php';
 require_once __DIR__ . '/../lib/EduTagReport.php';
+require_once __DIR__ . '/../lib/DeptPath.php';
 
 /**
  * 教育レポート API(集計・閲覧のみ)。report.php と同じ流儀。
@@ -19,6 +20,9 @@ require_once __DIR__ . '/../lib/EduTagReport.php';
  * - action=auto_runs : 自動の教育配信(訓練の失敗、新入社員)の実行履歴と、当てはまって入った人
  * - action=tags      : 分野(タグ)ごと(親と子)の正答率、部署×親のタグの正答率、親のタグごとの月の推移(直近12か月)
  * - action=tag_matrix: 部署×親のタグの正答率。format=csv で CSV
+ * - action=dept_levels: 部署の階層の有無(「/」で区切った部署の最も深い段)。画面が「部署のまとめ方」を出すかに使う
+ * 部署の表(overview の部署別、delivery_depts、tags と tag_matrix の部署×分野)は dept_level=1|2 で部署を1段目か2段目にまとめる
+ * (lib/DeptPath.php)。なし、0、all は今までと同じ出力。まとめる時は件数を足してから率を計算し直す。
  * すべて viewer 以上。テナント分離を機械付与。
  *
  * 合否と期限の決まり(delivery_people、delivery_depts、deliveries、person で共通):
@@ -300,17 +304,45 @@ function edu_rep_overview_by_type(int $tenantId): array
     return $out;
 }
 
+/**
+ * 部署別ランキングを段でまとめる(dept_level=1|2)。部署ごとに点数の合計と数を出して足し、平均を計算し直す
+ * (部署ごとの平均の平均にしない)。並びは平均の高い順、同じ平均は名前の順。行の形は段なしの SQL と同じ。
+ */
+function edu_rep_overview_dept_levels(int $tenantId, int $level): array
+{
+    $rows = Db::all(
+        'SELECT t.department, COUNT(DISTINCT r.id) AS respondent_count,
+                COALESCE(SUM(r.percentage), 0) AS sum_pct, COUNT(r.percentage) AS n_pct
+         FROM edu_responses r
+         INNER JOIN edu_assignments a ON a.id = r.assignment_id
+         INNER JOIN targets t ON t.id = a.target_id
+         WHERE r.tenant_id = ? AND ' . EDU_REP_REAL_TARGET_SQL . '
+         GROUP BY t.department',
+        [$tenantId]
+    );
+    $rows = array_map(static fn(array $r): array => ['department' => $r['department'], 'respondent_count' => (int) $r['respondent_count'],
+        'sum_pct' => (float) $r['sum_pct'], 'n_pct' => (int) $r['n_pct']], $rows);
+    $out = array_map(static fn(array $g): array => [
+        'department' => $g['department'],
+        'respondent_count' => $g['respondent_count'],
+        'avg_pct' => $g['n_pct'] > 0 ? $g['sum_pct'] / $g['n_pct'] : null,
+    ], DeptPath::regroup($rows, 'department', $level, ['respondent_count', 'sum_pct', 'n_pct']));
+    usort($out, static fn(array $a, array $b): int => (($b['avg_pct'] ?? -1) <=> ($a['avg_pct'] ?? -1)) ?: strcmp($a['department'], $b['department']));
+    return $out;
+}
+
 function edu_rep_handle_overview(array $user): never
 {
     $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
 
     // eラーニング(合格制)とアウェアネス(小問)は点数の意味が違うので、平均点は種類ごとに出す(1つにまとめない)
+    $deptLevel = edu_rep_query_dept_level();
     $byType = edu_rep_overview_by_type($tenantId);
     $assigned = array_sum(array_column($byType, 'assigned'));
     $completed = array_sum(array_column($byType, 'completed'));
 
     // 部署別ランキング(target.department 単位の平均%・完了数)
-    $byDept = Db::all(
+    $byDept = $deptLevel !== 0 ? edu_rep_overview_dept_levels($tenantId, $deptLevel) : Db::all(
         "SELECT COALESCE(NULLIF(t.department, ''), '(未設定)') AS department,
                 COUNT(DISTINCT r.id) AS respondent_count,
                 AVG(r.percentage) AS avg_pct
@@ -638,6 +670,16 @@ function edu_rep_delivery_meta(array $delivery): array
     ];
 }
 
+/** dept_level(部署をまとめる段)。なし、0、all は 0(今までと同じ)。 */
+function edu_rep_query_dept_level(): int
+{
+    try {
+        return DeptPath::parseLevel($_GET['dept_level'] ?? null);
+    } catch (InvalidArgumentException $e) {
+        json_error($e->getMessage(), 400);
+    }
+}
+
 function edu_rep_query_format(): string
 {
     $format = $_GET['format'] ?? '';
@@ -752,12 +794,14 @@ function edu_rep_handle_delivery_depts(array $user): never
 {
     $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
     $format = edu_rep_query_format();
+    $deptLevel = edu_rep_query_dept_level();
     $delivery = edu_rep_required_delivery($tenantId);
     $id = (int) $delivery['id'];
     $groups = [];
     foreach (edu_rep_assignment_rows($tenantId, ['delivery_id' => $id]) as $row) {
         $person = edu_rep_present_person($row);
-        $groups[$person['department']][] = $person;
+        // 段でまとめても、率は人の行から数え直すので正しい
+        $groups[$deptLevel === 0 ? $person['department'] : DeptPath::label($row['department'], $deptLevel)][] = $person;
     }
     ksort($groups, SORT_STRING);
     $depts = [];
@@ -908,7 +952,7 @@ function edu_rep_handle_tags(array $user): never
     json_out([
         'success' => true,
         'by_tag' => EduTagReport::byTag($tenantId, EDU_REP_REAL_TARGET_SQL),
-        'matrix' => EduTagReport::departmentMatrix($tenantId, EDU_REP_REAL_TARGET_SQL),
+        'matrix' => EduTagReport::departmentMatrix($tenantId, EDU_REP_REAL_TARGET_SQL, edu_rep_query_dept_level()),
         'trend' => EduTagReport::monthlyTrend($tenantId, EDU_REP_REAL_TARGET_SQL, date('Y-m')),
     ]);
 }
@@ -918,7 +962,7 @@ function edu_rep_handle_tag_matrix(array $user): never
 {
     $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
     $format = edu_rep_query_format();
-    $matrix = EduTagReport::departmentMatrix($tenantId, EDU_REP_REAL_TARGET_SQL);
+    $matrix = EduTagReport::departmentMatrix($tenantId, EDU_REP_REAL_TARGET_SQL, edu_rep_query_dept_level());
     if ($format !== 'csv') {
         json_out(['success' => true, 'matrix' => $matrix]);
     }
@@ -940,6 +984,13 @@ function edu_rep_tag_matrix_csv(array $matrix): string
         return $cells;
     }, $matrix['departments']);
     return edu_rep_csv($header, $rows);
+}
+
+/** 部署の階層の有無。2段以上の部署があれば、画面は部署の表に「部署のまとめ方」を出す。 */
+function edu_rep_handle_dept_levels(array $user): never
+{
+    $depth = DeptPath::tenantMaxDepth(effective_tenant_id($user, edu_rep_query_int('tenant_id')));
+    json_out(['success' => true, 'has_hierarchy' => $depth >= 2, 'max_depth' => $depth]);
 }
 
 /** 自動の教育配信の実行履歴と、当てはまって入った人(G61)。 */
@@ -1000,6 +1051,9 @@ try {
     }
     if ($action === 'tag_matrix') {
         edu_rep_handle_tag_matrix($user);
+    }
+    if ($action === 'dept_levels') {
+        edu_rep_handle_dept_levels($user);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

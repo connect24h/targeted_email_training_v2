@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduTags.php';
+require_once __DIR__ . '/DeptPath.php';
 
 /**
  * 分野(タグ)ごとの正答率(G09、G59、G60 の残り)。教育レポートの「分野」のタブと、受講者のマイページで使う。
@@ -56,13 +57,21 @@ final class EduTagReport
 
     /**
      * 部署 × 親のタグの正答率。列は解答のある親のタグ(タグの並び順)、行は部署の名前の順。解答のないマスは正答率 null。
+     * $deptLevel が 1、2 なら部署を段でまとめ(DeptPath)、解答の数と正解の数を足してから正答率を計算し直す。
+     * 1つの解答は部署と親のタグの組の1つにだけ入るので、足しても二重に数えない。
      * @return array{tags: list<array{id:int,name:string}>, departments: list<array{department:string,cells:list<array{tag_id:int,answered:int,correct:int,correct_rate:?float}>}>}
      */
-    public static function departmentMatrix(int $tenantId, string $realTargetSql): array
+    public static function departmentMatrix(int $tenantId, string $realTargetSql, int $deptLevel = 0): array
     {
         $cells = [];
         foreach (self::aggregate($tenantId, $realTargetSql, self::PARENT_MAP_SQL, 'm.tag_id, ' . self::DEPT_SQL, self::DEPT_SQL . ' AS department,') as $row) {
-            $cells[(string) $row['department']][(int) $row['tag_id']] = $row;
+            if ($deptLevel === 0) {
+                $cells[(string) $row['department']][(int) $row['tag_id']] = $row;
+                continue;
+            }
+            $cell = &$cells[DeptPath::label((string) $row['department'], $deptLevel)][(int) $row['tag_id']];
+            $cell = ['answered' => ($cell['answered'] ?? 0) + (int) $row['answered'], 'correct' => ($cell['correct'] ?? 0) + (int) $row['correct']];
+            unset($cell);
         }
         $tags = self::parentsWithData($tenantId, array_merge(...array_map('array_keys', array_values($cells ?: [[]]))));
         ksort($cells, SORT_STRING);

@@ -10,6 +10,8 @@ require_once __DIR__."/../lib/TrainingLogRows.php";
 require_once __DIR__."/../lib/ReplyMaildir.php";
 // 行動履歴と利用者ごとのタブ、判定の修正(段B1)。
 require_once __DIR__."/../lib/TrainingActions.php";
+// 部署の階層(部署ごとの表を1段目、2段目、全部でまとめる。C3)
+require_once __DIR__."/../lib/DeptPath.php";
 
 function report_json_body(): array
 {
@@ -660,6 +662,47 @@ function report_handle_detail(): never
     $data['is_committed'] = false;
     $data['is_closed'] = false;
     json_out($data);
+}
+
+/**
+ * 部署ごとの表(C3、G14)。会社別と同じ数え方(report_detail_axis)を部署の文字列ごとに出し、dept_level=1|2 なら
+ * 段でまとめる(DeptPath)。1人は1つの部署にだけ入るので、件数を足してから率を計算し直せば正しい。
+ * 並びは部署の名前の順(親の直後に子)。期間(start_date、end_date)と test_filter は詳細と同じ。
+ * 確定のスナップショットは部署を持たないので、確定済みでも今の記録から集計する(is_committed で画面が注記する)。
+ * 詳細(action=detail)の出力は変えないため、別の action にした。
+ */
+function report_handle_departments(): never
+{
+    $user = require_role('viewer');
+    $campaignId = report_query_int('campaign_id');
+    if ($campaignId === null) {
+        json_error('campaign_id は必須です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    $campaign = assert_campaign_owned($campaignId, $tenantId);
+    try {
+        $level = DeptPath::parseLevel($_GET['dept_level'] ?? null);
+    } catch (InvalidArgumentException $e) {
+        json_error($e->getMessage(), 400);
+    }
+    $testFilter = $_GET['test_filter'] ?? 'prod';
+    if (!in_array($testFilter, ['prod', 'test', 'all'], true)) { $testFilter = 'prod'; }
+    [$periodClause, $periodParams] = report_detail_period();
+    if ($campaign['closed_at'] !== null && ($periodClause !== '' || $testFilter !== 'prod')) {
+        json_error('クローズ済みレポートは確定値のみ表示できます', 409);
+    }
+    $axis = "TRIM(COALESCE(t.department, ''))";
+    $rows = report_detail_axis($campaignId, $tenantId, $axis, $axis, $periodClause, $periodParams, $testFilter);
+    $grouped = DeptPath::regroup($rows, 'axis_key', $level, ['cnt', 'link_clicked', 'beacon_opened', 'auth_count', 'report_count']);
+    $depth = DeptPath::tenantMaxDepth($tenantId);
+    json_out([
+        'success' => true,
+        'dept_level' => $level,
+        'has_hierarchy' => $depth >= 2,
+        'max_depth' => $depth,
+        'is_committed' => report_snapshot_of($campaignId, $tenantId) !== null,
+        'departments' => report_detail_shape($grouped, 'department'),
+    ]);
 }
 
 /**
@@ -1505,6 +1548,9 @@ try {
     }
     if ($action === 'detail' && $method === 'GET') {
         report_handle_detail();
+    }
+    if ($action === 'departments' && $method === 'GET') {
+        report_handle_departments();
     }
     if ($action === 'individuals' && $method === 'GET') {
         report_handle_individuals();
