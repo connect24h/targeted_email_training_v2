@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 65, 'fresh DBに65個の業務tableがある');
+check(count($businessTables) === 66, 'fresh DBに66個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -77,6 +77,7 @@ $expectedTables = [
     'edu_summary_settings',
     'edu_delivery_summaries',
     'campaign_survey_followups',
+    'send_endpoints',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -85,11 +86,12 @@ foreach ($expectedTables as $table) {
 $expectedColumns = [
     'users' => ['last_login_at', 'password_pending', 'session_epoch', 'target_id', 'mfa_secret', 'mfa_enabled_at', 'mfa_last_step'],
     'tenants' => ['deleted_at', 'contact_name', 'contact_email', 'contract_end_date', 'target_limit', 'memo'],
-    'campaigns' => ['beacon_base', 'content_delivery', 'deleted_at', 'closed_at', 'closed_by', 'credential_capture_approval_ref', 'test_redirect_emails', 'reveal_page_id'],
+    'campaigns' => ['beacon_base', 'beacon_bases', 'from_addresses', 'content_delivery', 'deleted_at', 'closed_at', 'closed_by', 'credential_capture_approval_ref', 'test_redirect_emails', 'reveal_page_id'],
+    'campaign_contents' => ['beacon_bases', 'from_addresses'],
     'edu_materials' => ['format', 'page_count', 'source_name', 'version'],
     'edu_attempts' => ['test_started_at', 'material_version'],
     'suspicious_mails' => ['first_action_at', 'resolved_at'],
-    'campaign_targets' => ['content_no', 'delivery_state', 'delivery_state_at', 'delivery_detail'],
+    'campaign_targets' => ['content_no', 'delivery_state', 'delivery_state_at', 'delivery_detail', 'resolved_beacon_base', 'resolved_from_address'],
     'events' => ['verdict', 'verdict_reason', 'verdict_source', 'verdict_by', 'verdict_at'],
     'targets' => ['position_category', 'tenant_no', 'archived_at', 'is_test', 'employee_no', 'memo'],
     'groups' => ['status', 'archived_at'],

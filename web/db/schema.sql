@@ -149,7 +149,9 @@ CREATE TABLE IF NOT EXISTS campaigns (
   end_at              TEXT,
   is_test             INTEGER NOT NULL DEFAULT 0,
   data_dir            TEXT,
-  beacon_base         TEXT,
+  beacon_base         TEXT,                      -- 後方互換の単数列。複数指定時は beacon_bases の先頭を入れる
+  beacon_bases        TEXT,                      -- 複数のビーコンベースURL(JSON配列)。空/NULL は単数列/従来フォールバック
+  from_addresses      TEXT,                      -- 複数の送信元アドレス(JSON配列)。空/NULL は単数列/従来フォールバック
   content_delivery    TEXT NOT NULL DEFAULT 'distribute',
   deleted_at          TEXT DEFAULT NULL,
   closed_at           TEXT DEFAULT NULL,          -- 確定後のクローズ。本文消去と同一transaction
@@ -176,8 +178,10 @@ CREATE TABLE IF NOT EXISTS campaign_contents (
   attachment_ext      TEXT,
   attachment_filename TEXT,                      -- 添付ファイル名の接頭辞。NULL は 'kunren' 相当(後方互換)
   attachment_zip      INTEGER NOT NULL DEFAULT 0,
-  from_address        TEXT,
-  beacon_base         TEXT,
+  from_address        TEXT,                      -- 後方互換の単数列。複数指定時は from_addresses の先頭
+  beacon_base         TEXT,                      -- 後方互換の単数列。複数指定時は beacon_bases の先頭
+  beacon_bases        TEXT,                      -- 複数のビーコンベースURL(JSON配列)
+  from_addresses      TEXT,                      -- 複数の送信元アドレス(JSON配列)
   suppress_body_url   INTEGER NOT NULL DEFAULT 0,
   suppress_prefill_email INTEGER NOT NULL DEFAULT 0,
   UNIQUE (campaign_id, content_no),
@@ -194,6 +198,8 @@ CREATE TABLE IF NOT EXISTS campaign_targets (
   koban           INTEGER,                       -- list.csv 項番
   auth_flag       INTEGER,
   from_address    TEXT,
+  resolved_beacon_base  TEXT,                    -- 起動時に対象者ごとへ確定したビーコンベースURL(送信・測定・表示の一致の要)
+  resolved_from_address TEXT,                    -- 起動時に対象者ごとへ確定した送信元アドレス
   attachment_path TEXT,
   send_status     TEXT NOT NULL DEFAULT 'pending', -- pending/sent/failed/deferred
   sent_at         TEXT,

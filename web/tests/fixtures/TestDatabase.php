@@ -42,6 +42,7 @@ final class TestDatabase
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-notification-templates.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-sending-da.sql'));
         $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-sending-db.sql'));
+        $pdo->exec(self::readFile(__DIR__ . '/../../db/schema-multi-endpoint.sql'));
         if ($seed) {
             $pdo->exec(self::readFile(__DIR__ . '/synthetic.sql'));
         }

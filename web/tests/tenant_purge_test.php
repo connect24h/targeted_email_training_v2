@@ -128,6 +128,8 @@ function seedTenant(int $t, string $tag): void
     Db::run("INSERT INTO edu_delivery_summaries (tenant_id, delivery_id, status) VALUES (?, ?, 'sent')", [$t, $delivery]);
     Db::run("INSERT INTO campaign_survey_followups (campaign_id, tenant_id, enabled, survey_id, delivery_id) VALUES (?, ?, 1, ?, ?)",
         [$campaign, $t, $survey, $surveyDelivery]);
+    // 送信エンドポイントのマスタ(テナントの行。共有 tenant_id NULL の既定IP は残す)
+    Db::run("INSERT INTO send_endpoints (tenant_id, kind, value, label) VALUES (?, 'from', ?, ?)", [$t, "from-{$tag}@purge.test", "F {$tag}"]);
 }
 
 /** audit_log を除く全テーブルの全行(rowid の順)。比べるための写し。 */

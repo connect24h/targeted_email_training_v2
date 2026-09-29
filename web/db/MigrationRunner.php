@@ -37,6 +37,7 @@ final class MigrationRunner
         '20261102-notification-templates',
         '20261105-sending-da',
         '20261106-sending-db',
+        '20261110-multi-endpoint',
     ];
 
     /**
@@ -321,6 +322,14 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-sending-db.sql'));
             return;
         }
+        if ($version === '20261110-multi-endpoint') {
+            // 送信エンドポイントのマスタ(ビーコン/送信元)と、キャンペーン・コンテンツの複数指定列、
+            // 対象者ごとの確定値の列を足すだけ。既存の行は列が空のまま=今と同じ挙動(単数列→config→既定IP)。
+            // 共有の既定IP 1行だけを入れる(顧客固有の値は配備時に別途投入)。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-multi-endpoint.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -594,6 +603,8 @@ final class MigrationRunner
             ],
             'campaigns' => [
                 'beacon_base' => 'TEXT',
+                'beacon_bases' => 'TEXT',
+                'from_addresses' => 'TEXT',
                 'content_delivery' => "TEXT NOT NULL DEFAULT 'distribute'",
                 'deleted_at' => 'TEXT DEFAULT NULL',
                 'closed_at' => 'TEXT DEFAULT NULL',
@@ -620,6 +631,8 @@ final class MigrationRunner
                 'delivery_state' => "TEXT DEFAULT NULL CHECK (delivery_state IS NULL OR delivery_state IN ('delivered','undeliverable'))",
                 'delivery_state_at' => 'TEXT',
                 'delivery_detail' => 'TEXT',
+                'resolved_beacon_base' => 'TEXT',
+                'resolved_from_address' => 'TEXT',
             ],
             'events' => [
                 'verdict' => "TEXT NOT NULL DEFAULT 'user' CHECK (verdict IN ('user','scanner'))",
@@ -631,6 +644,8 @@ final class MigrationRunner
             'campaign_contents' => [
                 'suppress_prefill_email' => 'INTEGER NOT NULL DEFAULT 0',
                 'attachment_filename' => 'TEXT',
+                'beacon_bases' => 'TEXT',
+                'from_addresses' => 'TEXT',
             ],
             'edu_categories' => ['is_shared' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_questions' => [
