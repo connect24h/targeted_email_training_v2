@@ -148,7 +148,7 @@
         <!-- 本番/テスト フィルタ（renderCampaigns が描画）。 -->
         <div id="campaignFilterBar" class="mb-2"></div>
         <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead id="campaignsHead"><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr></thead>
+          <thead id="campaignsHead"><tr><th>#</th><th>名称</th><th>状態</th><th>対象</th><th>報告率</th><th>防衛失敗率</th><th>開始</th><th>操作</th></tr></thead>
           <tbody id="campaignsBody"></tbody>
         </table></div>
       </section>
@@ -203,7 +203,7 @@
             <span id="reportFilterBar"></span>
           </div>
           <div class="table-responsive"><table class="table table-hover align-middle mb-0">
-            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>名称</th><th>対象</th><th>送信率</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝訓練メールを報告した人数÷対象数（テストの対象者を除く）">報告</th><th title="防衛失敗率＝リンクを踏んで偽サイトを表示したか、認証情報を入力した人数÷対象数（両方した人も1人。テストの対象者を除く）">防衛失敗</th><th></th></tr></thead>
             <tbody id="reportsBody"></tbody>
           </table></div>
         </div>
@@ -232,6 +232,7 @@
           </ul>
           <div class="tab-content report-tab-content">
             <div class="tab-pane fade show active" id="reportPane-overview" role="tabpanel" aria-labelledby="reportTab-overview" tabindex="0">
+              <div class="d-flex flex-wrap gap-2 mb-3" id="reportOverviewKpis" aria-live="polite"></div>
               <div class="row g-3">
                 <div class="col-lg-5"><div class="card h-100"><div class="card-header">反応の内訳</div>
                   <div class="card-body"><canvas id="reportChart" height="200"></canvas></div></div></div>

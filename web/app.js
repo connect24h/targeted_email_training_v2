@@ -697,8 +697,15 @@ function setCampaignTestFilter(v) { campaignTestFilter = v; renderCampaigns(); }
 async function renderCampaigns() {
   renderSendControl();  // 送信制御パネル(ステータス+アラート)を描画・ポーリング開始
   const tenantId = State.activeTenantId;
-  const { campaigns } = await api('api/campaigns.php', { query: { action: 'list' } });
+  // 報告率と防衛失敗率はレポートの集計(report.php の campaigns)をそのまま使う。1回の問い合わせで全訓練分を返すので、行ごとに問い合わせない。
+  // 集計を読めなくても一覧と操作ボタンは出す(率は「-」)。
+  const [{ campaigns }, rates] = await Promise.all([
+    api('api/campaigns.php', { query: { action: 'list' } }),
+    api('api/report.php', { query: { action: 'campaigns', test_filter: 'all' } }).catch(() => ({ campaigns: [] })),
+  ]);
   if (State.view !== 'campaigns' || State.activeTenantId !== tenantId) return;
+  const rateById = {};
+  for (const r of (rates.campaigns || [])) rateById[r.id] = r;
   // #列は表示上の通し番号(作成順=古い順に固定で1,2,3…)。並び順を変えても番号は変わらない。
   // 古い順(id昇順)でordinalを確定 → id→番号 のマップを作る。
   const campaignsAsc = campaigns.slice().sort((a, b) => a.id - b.id);
@@ -723,7 +730,7 @@ async function renderCampaigns() {
   const sortLabel = campaignSortDesc ? '最新が上(降順)' : '古い順が上(昇順)';
   const head = document.getElementById('campaignsHead');
   if (head) {
-    head.innerHTML = `<tr><th><button class="btn btn-sm btn-link p-0 text-decoration-none" onclick="toggleCampaignSort()" title="${sortLabel}・クリックで切替">#<i class="bi ${sortArrow}"></i></button></th><th>名称</th><th>状態</th><th>対象</th><th>開始</th><th>操作</th></tr>`;
+    head.innerHTML = `<tr><th><button class="btn btn-sm btn-link p-0 text-decoration-none" onclick="toggleCampaignSort()" title="${sortLabel}・クリックで切替">#<i class="bi ${sortArrow}"></i></button></th><th>名称</th><th>状態</th><th>対象</th><th title="${esc(REPORT_RATE_TITLE)}">報告率</th><th title="${esc(FAILURE_RATE_TITLE)}">防衛失敗率</th><th>開始</th><th>操作</th></tr>`;
   }
   $('#campaignsBody').innerHTML = shown.length ? shown.map((c) => `
     <tr>
@@ -731,6 +738,7 @@ async function renderCampaigns() {
       <td>${esc(c.name)}${Number(c.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}</td>
       <td><span class="badge st-${c.status}">${STATUS_LABEL[c.status] || c.status}</span>${c.closed_at ? ' <span class="badge bg-secondary">クローズ</span>' : ''}</td>
       <td>${c.target_count}</td>
+      ${campaignRateCells(rateById[c.id])}
       <td class="small text-muted">${fmtDate(c.start_at)}</td>
       <td><div class="d-flex flex-wrap gap-1">
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'draft'
@@ -760,7 +768,7 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
       </div></td>
-    </tr>`).join('') : emptyRow(6);
+    </tr>`).join('') : emptyRow(8);
   // 進行中(実行中/予約)のキャンペーンがあれば、送信完了→done 遷移を画面に反映するため
   // 15秒ごとに一覧を自動更新する。緊急停止ボタンが完了後も残る問題への対処。
   if (campaignsRefreshTimer) { clearTimeout(campaignsRefreshTimer); campaignsRefreshTimer = null; }
@@ -2561,6 +2569,15 @@ function rateClass(v, warn, danger) { const n = Number(v) || 0; return n >= dang
 // 報告率は「高いほど良い」ので rateClass とは色の向きが逆になる。
 // 失敗率と同じ関数を使い回すと、よく報告している部署が赤く出て判断を誤る。
 function goodRateClass(v, ok, great) { const n = Number(v) || 0; return n >= great ? 'val-success' : n >= ok ? 'val-warning' : 'val-danger'; }
+// 報告率と防衛失敗率の定義(サーバの report_summary_from_counts と同じ)。見出しの title に出す。
+const REPORT_RATE_TITLE = '報告率＝訓練メールを報告した人数÷対象数（テストの対象者を除く）';
+const FAILURE_RATE_TITLE = '防衛失敗率＝リンクを踏んで偽サイトを表示したか、認証情報を入力した人数÷対象数（両方した人も1人。テストの対象者を除く）';
+// 訓練の一覧の報告率と防衛失敗率のセル。集計がない(読めなかった)ときは「-」。
+function campaignRateCells(r) {
+  if (!r) return '<td>-</td><td>-</td>';
+  return `<td class="${goodRateClass(r.report_rate,5,20)}">${countRate(r.report_count, r.report_rate)}</td>
+      <td class="${rateClass(r.failure_rate,25,50)}">${countRate(r.failure_count, r.failure_rate)}</td>`;
+}
 let reportTestFilter = 'prod';  // prod=本番のみ / test=テストのみ / all=全部
 function setReportFilter(v) { reportTestFilter = v; renderReports(); }
 async function renderReports() {
@@ -2587,9 +2604,10 @@ async function renderReports() {
       <td class="${rateClass(s.click_rate,25,50)}">${countRate(s.click_count, s.click_rate)}</td>
       <td class="${rateClass(authRateOf(s.auth_count, s.click_count) ?? 0,5,20)}">${countRate(s.auth_count, authRateOf(s.auth_count, s.click_count))}</td>
       <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
+      ${campaignRateCells(s)}
       <td><i class="bi bi-chevron-right"></i></td>
     </tr>`;
-  }).join('') : emptyRow(8);
+  }).join('') : emptyRow(10);
   if (reportSelectedId && Cache.reports[reportSelectedId]) showReportDetail(reportSelectedId);
   else { $('#reportDetail').classList.add('d-none'); reportSelectedId = null; }
 }
@@ -2600,6 +2618,7 @@ async function showReportDetail(id) {
   const s = c.summary || c;
   $('#reportDetail').classList.remove('d-none');
   $('#reportDetailTitle').textContent = `${c.name} — 反応内訳`;
+  renderReportOverviewKpis(s);
   if (reportChart) reportChart.destroy();
   reportChart = new Chart($('#reportChart'), {
     type: 'bar',
@@ -2616,6 +2635,26 @@ async function showReportDetail(id) {
   });
   await renderFailures(id);
   await renderReportDetail(id);
+}
+// 概要の数字(報告率、防衛失敗率、配信エラーの人数)。値は数だけなので textContent で入れる。
+function renderReportOverviewKpis(s) {
+  const el = $('#reportOverviewKpis');
+  if (!el) return;
+  const item = (label, value, title) => {
+    const box = document.createElement('div');
+    box.className = 'report-kpi border rounded px-3 py-2';
+    box.dataset.kpi = label;
+    if (title) box.title = title;
+    const l = document.createElement('div'); l.className = 'small text-muted'; l.textContent = label;
+    const v = document.createElement('div'); v.className = 'fw-semibold'; v.textContent = value;
+    box.append(l, v);
+    return box;
+  };
+  el.replaceChildren(
+    item('報告率', `${pct(s.report_rate)}（${Number(s.report_count) || 0}人）`, REPORT_RATE_TITLE),
+    item('防衛失敗率', `${pct(s.failure_rate)}（${Number(s.failure_count) || 0}人）`, FAILURE_RATE_TITLE),
+    item('配信エラー', `${Number(s.delivery_error_count) || 0}人`, '送信できなかった宛先の人数（送信の失敗・保留の記録がある宛先。送信後のバウンスは含みません）'),
+  );
 }
 // P7: v1同等の詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン)
 async function renderReportDetail(campaignId) {
