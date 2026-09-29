@@ -37,6 +37,7 @@ ASSETS=(
   assets/surveys.js
   assets/notification-templates.js
   assets/edu-tags.js
+  assets/dept-levels.js
 )
 
 asset_hash() {

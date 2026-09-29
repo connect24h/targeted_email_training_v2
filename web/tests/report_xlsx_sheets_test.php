@@ -88,12 +88,12 @@ $reportValueColumns = "(int) (\$r['report_count'] ?? 0),\n"
 check(substr_count((string) $reportSrc, $reportValueColumns) === 3,
     'レポートExcel: 3明細シートの各行に報告数/報告率を出力する');
 
-// レポートUIも一覧・会社別・役職別・コンテンツ別の4表で対象比を表示する。
+// レポートUIも一覧・会社別・役職別・コンテンツ別・部署別(C3)の5表で対象比を表示する。
 $indexSrc = (string) file_get_contents(__DIR__ . '/../index.html');
 $appSrc = (string) file_get_contents(__DIR__ . '/../app.js');
 check(str_contains($indexSrc, '認証率(対象比)')
-    && substr_count($indexSrc, '認証率(対象比)') === 4,
-    'レポートUI: 認証率(対象比)ヘッダが4表にある');
+    && substr_count($indexSrc, '認証率(対象比)') === 5,
+    'レポートUI: 認証率(対象比)ヘッダが5表にある');
 check(str_contains($appSrc, 'function authTargetRateOf'),
     'レポートUI: authTargetRateOf ヘルパーがある');
 check(str_contains($appSrc, "query.set('start_date', sd)"),

@@ -2849,7 +2849,8 @@ async function renderReportDetail(campaignId) {
   // ビーコン(tracking_id)単位の開封明細。all配信で1人×Nコンテンツを個別に確認する。
   await renderReportBeacons(campaignId);
   // 利用者ごとの1行と行動履歴(段B1)。どちらも失敗しても他のタブは見られるよう、中で握って表に出す
-  await Promise.all([renderReportPeople(campaignId), renderReportActions(campaignId)]);
+  // 部署別(C3)は別の要求。部署を「/」で区切ったテナントでは1段目、2段目でまとめられる
+  await Promise.all([renderReportPeople(campaignId), renderReportActions(campaignId), renderReportDepartments(campaignId)]);
 }
 
 // ビーコン別 開封明細の取得・描画(tracking_id 単位。人物単位に潰さず全パターンを出す)。
@@ -4985,9 +4986,10 @@ function renderEduRepPeople() {
 }
 function renderEduRepDepts() {
   const id = eduRep.deliveryId;
-  $('#eduRepDeptsCsv').href = eduRepCsvUrl('delivery_depts');
   return eduRepFill('#eduRepDeptsBody', async () => {
-    const r = await api('api/edu_report.php', { query: { action: 'delivery_depts', id } });
+    const level = deptLevelQuery(await deptLevelFor('eduRepDeptsLevel'));
+    $('#eduRepDeptsCsv').href = eduRepCsvUrl('delivery_depts', level);
+    const r = await api('api/edu_report.php', { query: { action: 'delivery_depts', id, ...level } });
     return (r.departments || []).length ? r.departments.map((d) => `
       <tr><td>${esc(d.department)}</td><td>${Number(d.assigned)}</td><td>${Number(d.completed)}</td><td>${Number(d.incomplete)}</td>
         <td>${d.passed === null ? '—' : Number(d.passed)}</td><td>${eduRate(d.pass_rate)}</td><td>${eduRate(d.on_time_pass_rate)}</td></tr>`).join('')
@@ -5170,8 +5172,21 @@ function bindEduReportControls() {
   $('#eduMaterialSearch')?.addEventListener('input', renderEduMaterialRows);
 }
 
+/** 部署別ランキングの行。部署のまとめ方(C3)を変えた時は、この表だけを取り直す。 */
+function fillEduReportDeptRank(rows) {
+  $('#eduReportDeptBody').innerHTML = (rows || []).length ? rows.map((d) =>
+    `<tr><td>${esc(d.department)}</td><td>${d.average_score}%</td><td>${d.respondent_count}</td></tr>`).join('') : emptyRow(3);
+}
+async function renderEduReportDeptRank() {
+  const level = await deptLevelFor('eduReportDeptLevel');
+  try {
+    const r = await api('api/edu_report.php', { query: { action: 'overview', ...deptLevelQuery(level) } });
+    fillEduReportDeptRank(r.by_department);
+  } catch (e) { toast(e.message, 'err'); }
+}
 async function renderEduReportOverview() {
-  const r = await api('api/edu_report.php', { query: { action: 'overview' } });
+  const level = await deptLevelFor('eduReportDeptLevel');
+  const r = await api('api/edu_report.php', { query: { action: 'overview', ...deptLevelQuery(level) } });
   const s = r.summary;
   // eラーニング(合格制)とアウェアネス(小問)は点数の意味が違うので、平均点を分けて出す。テスト用と削除済みの対象者は数えない
   const el = (r.by_type || {}).elearning || {};
@@ -5183,8 +5198,7 @@ async function renderEduReportOverview() {
     { label: `アウェアネスの平均点（回答 ${Number(aw.respondent_count || 0)}件）`, value: pct(aw.average_score), icon: 'bi-lightbulb' },
     { label: '割当 / 完了', value: `${s.assigned} / ${s.completed}`, icon: 'bi-people' },
   ].map(kpiCard).join('');
-  $('#eduReportDeptBody').innerHTML = (r.by_department || []).length ? r.by_department.map((d) =>
-    `<tr><td>${esc(d.department)}</td><td>${d.average_score}%</td><td>${d.respondent_count}</td></tr>`).join('') : emptyRow(3);
+  fillEduReportDeptRank(r.by_department);
   $('#eduReportCatBody').innerHTML = (r.by_category || []).filter((c) => c.answered > 0).length ?
     r.by_category.filter((c) => c.answered > 0).map((c) =>
       `<tr><td>${esc(c.name)}</td><td>${c.correct_rate}%</td><td>${c.answered}</td></tr>`).join('') : emptyRow(3);

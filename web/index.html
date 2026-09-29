@@ -228,7 +228,7 @@
           <ul class="nav nav-tabs report-tabs" id="reportTabs" role="tablist">
             <li class="nav-item" role="presentation"><button class="nav-link active" id="reportTab-overview" data-bs-toggle="tab" data-bs-target="#reportPane-overview" type="button" role="tab" aria-controls="reportPane-overview" aria-selected="true"><i class="bi bi-graph-up me-1" aria-hidden="true"></i>概要</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-failures" data-bs-toggle="tab" data-bs-target="#reportPane-failures" type="button" role="tab" aria-controls="reportPane-failures" aria-selected="false"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>防衛失敗者</button></li>
-            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-attributes" data-bs-toggle="tab" data-bs-target="#reportPane-attributes" type="button" role="tab" aria-controls="reportPane-attributes" aria-selected="false"><i class="bi bi-building me-1" aria-hidden="true"></i>会社・役職別</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-attributes" data-bs-toggle="tab" data-bs-target="#reportPane-attributes" type="button" role="tab" aria-controls="reportPane-attributes" aria-selected="false"><i class="bi bi-building me-1" aria-hidden="true"></i>会社・部署・役職別</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-contents" data-bs-toggle="tab" data-bs-target="#reportPane-contents" type="button" role="tab" aria-controls="reportPane-contents" aria-selected="false"><i class="bi bi-files me-1" aria-hidden="true"></i>コンテンツ別</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-beacons" data-bs-toggle="tab" data-bs-target="#reportPane-beacons" type="button" role="tab" aria-controls="reportPane-beacons" aria-selected="false"><i class="bi bi-upc-scan me-1" aria-hidden="true"></i>ビーコン明細</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-people" data-bs-toggle="tab" data-bs-target="#reportPane-people" type="button" role="tab" aria-controls="reportPane-people" aria-selected="false"><i class="bi bi-people me-1" aria-hidden="true"></i>利用者ごと</button></li>
@@ -267,6 +267,14 @@
                   <div class="table-responsive">
                         <table class="table table-sm mb-0"><thead><tr><th>役職</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByPosition"></tbody></table>
+                      </div></div>
+                <div class="col-12"><div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
+                  <h6 class="text-muted mb-0"><i class="bi bi-diagram-3 me-1"></i>部署別</h6>
+                  <div class="d-none align-items-center gap-1 fw-normal" data-dept-level-wrap><label class="small text-muted text-nowrap mb-0" for="reportDeptLevel">部署のまとめ方</label><select class="form-select form-select-sm w-auto" id="reportDeptLevel" data-dept-level><option value="0">全部</option><option value="1">1段目</option><option value="2">2段目</option></select></div></div>
+                  <div class="small text-muted d-none" id="reportDeptNote">部署別は確定値ではなく、今の記録から集計しています（確定のときに部署ごとの数を残していないため）。</div>
+                  <div class="table-responsive">
+                        <table class="table table-sm mb-0"><thead><tr><th>部署</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
+                          <tbody id="reportByDept"></tbody></table>
                       </div></div>
               </div>
             </div>
@@ -752,7 +760,8 @@
         </div>
         <div class="row g-3">
           <div class="col-md-6">
-            <div class="card"><div class="card-header py-2 small fw-bold">部署別ランキング</div>
+            <div class="card"><div class="card-header py-2 small fw-bold d-flex flex-wrap justify-content-between align-items-center gap-2"><span>部署別ランキング</span>
+              <div class="d-none align-items-center gap-1 fw-normal" data-dept-level-wrap><label class="small text-muted text-nowrap mb-0" for="eduReportDeptLevel">部署のまとめ方</label><select class="form-select form-select-sm w-auto" id="eduReportDeptLevel" data-dept-level><option value="0">全部</option><option value="1">1段目</option><option value="2">2段目</option></select></div></div>
               <div class="table-responsive"><table class="table table-sm mb-0">
                 <thead><tr><th>部署</th><th>平均</th><th>人数</th></tr></thead>
                 <tbody id="eduReportDeptBody"></tbody>
@@ -817,7 +826,8 @@
                 </table></div>
               </div>
               <div class="tab-pane fade" id="eduRepSubPane-depts" role="tabpanel" aria-labelledby="eduRepSub-depts" tabindex="0">
-                <div class="d-flex justify-content-end mb-2">
+                <div class="d-flex flex-wrap justify-content-end align-items-center gap-2 mb-2">
+                  <div class="d-none align-items-center gap-1 fw-normal" data-dept-level-wrap><label class="small text-muted text-nowrap mb-0" for="eduRepDeptsLevel">部署のまとめ方</label><select class="form-select form-select-sm w-auto" id="eduRepDeptsLevel" data-dept-level><option value="0">全部</option><option value="1">1段目</option><option value="2">2段目</option></select></div>
                   <a class="btn btn-sm btn-outline-secondary" id="eduRepDeptsCsv" href="#" download><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV</a>
                 </div>
                 <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
@@ -912,7 +922,8 @@
             </table></div></div>
           <div class="card mb-3"><div class="card-header py-2 small fw-bold d-flex justify-content-between align-items-center">
               <span>部署 × 分野（親のタグ）の正答率</span>
-              <a class="btn btn-sm btn-outline-secondary" id="eduRepTagMatrixCsv" href="#" download><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV</a></div>
+              <div class="d-flex flex-wrap align-items-center gap-2"><div class="d-none align-items-center gap-1 fw-normal" data-dept-level-wrap><label class="small text-muted text-nowrap mb-0" for="eduRepTagMatrixLevel">部署のまとめ方</label><select class="form-select form-select-sm w-auto" id="eduRepTagMatrixLevel" data-dept-level><option value="0">全部</option><option value="1">1段目</option><option value="2">2段目</option></select></div>
+              <a class="btn btn-sm btn-outline-secondary" id="eduRepTagMatrixCsv" href="#" download><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV</a></div></div>
             <div class="table-responsive"><table class="table table-sm align-middle mb-0" id="eduRepTagMatrix">
               <thead id="eduRepTagMatrixHead"><tr><th>部署</th></tr></thead>
               <tbody id="eduRepTagMatrixBody"></tbody>
@@ -1106,7 +1117,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=4ef5ac8d"></script>
+<script src="app.js?v=ef8a2007"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
@@ -1116,6 +1127,7 @@
 <script src="assets/surveys.js?v=80becb08"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
 <script src="assets/notification-templates.js?v=135f8f2a"></script>
-<script src="assets/edu-tags.js?v=8832aed9"></script>
+<script src="assets/edu-tags.js?v=a9c10979"></script>
+<script src="assets/dept-levels.js?v=e0b24e4f"></script>
 </body>
 </html>

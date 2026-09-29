@@ -159,13 +159,24 @@ function eduTagRateCell(rate, answered) {
   if (rate === null || rate === undefined) return '<td class="text-muted"><span class="visually-hidden">解答なし</span></td>';
   return `<td title="回答 ${Number(answered)} 件">${esc(String(rate))}%</td>`;
 }
-function eduRepTagCsvUrl() {
-  const params = new URLSearchParams({ action: 'tag_matrix', format: 'csv' });
+function eduRepTagCsvUrl(level = 0) {
+  const params = new URLSearchParams({ action: 'tag_matrix', format: 'csv', ...deptLevelQuery(level) });
   if (State.user?.role === 'superadmin' && State.activeTenantId) params.set('tenant_id', State.activeTenantId);
   return `api/edu_report.php?${params}`;
 }
+/** 部署 × 分野の表。部署のまとめ方(C3)が全部なら分野のタブの読み込み($load)を使い、1段目か2段目なら取り直す。 */
+function renderEduRepTagMatrix(load = null) {
+  return eduRepFill('#eduRepTagMatrixBody', async () => {
+    const level = await deptLevelFor('eduRepTagMatrixLevel');
+    $('#eduRepTagMatrixCsv').href = eduRepTagCsvUrl(level);
+    const { matrix: m } = level === 0 && load ? await load
+      : await api('api/edu_report.php', { query: { action: 'tag_matrix', ...deptLevelQuery(level) } });
+    $('#eduRepTagMatrixHead').innerHTML = `<tr><th>部署</th>${m.tags.map((t) => `<th>${esc(t.name)}</th>`).join('')}</tr>`;
+    if (!m.departments.length) return eduNoteRow(m.tags.length + 1, 'タグの付いた設問の解答がまだありません');
+    return m.departments.map((d) => `<tr><th scope="row" class="fw-normal">${esc(d.department)}</th>${d.cells.map((c) => eduTagRateCell(c.correct_rate, c.answered)).join('')}</tr>`).join('');
+  });
+}
 function renderEduRepTags() {
-  $('#eduRepTagMatrixCsv').href = eduRepTagCsvUrl();
   const load = api('api/edu_report.php', { query: { action: 'tags' } });
   const byTag = eduRepFill('#eduRepTagsBody', async () => {
     const { by_tag: rows } = await load;
@@ -173,12 +184,7 @@ function renderEduRepTags() {
     return rows.map((t) => `<tr${t.parent_id === null ? ' class="fw-semibold"' : ''}><td>${eduTagNameCell(t)} ${eduTagIsShared(t) ? '<span class="badge bg-info">共有</span>' : ''}</td>
       <td>${Number(t.answered)}</td>${eduTagRateCell(t.correct_rate, t.answered)}</tr>`).join('');
   });
-  const matrix = eduRepFill('#eduRepTagMatrixBody', async () => {
-    const { matrix: m } = await load;
-    $('#eduRepTagMatrixHead').innerHTML = `<tr><th>部署</th>${m.tags.map((t) => `<th>${esc(t.name)}</th>`).join('')}</tr>`;
-    if (!m.departments.length) return eduNoteRow(m.tags.length + 1, 'タグの付いた設問の解答がまだありません');
-    return m.departments.map((d) => `<tr><th scope="row" class="fw-normal">${esc(d.department)}</th>${d.cells.map((c) => eduTagRateCell(c.correct_rate, c.answered)).join('')}</tr>`).join('');
-  });
+  const matrix = renderEduRepTagMatrix(load);
   const trend = eduRepFill('#eduRepTagTrendBody', async () => {
     const { trend: tr } = await load;
     $('#eduRepTagTrendHead').innerHTML = `<tr><th>分野</th>${tr.months.map((mo) => `<th class="text-nowrap">${esc(mo.slice(2).replace('-', '/'))}</th>`).join('')}</tr>`;
