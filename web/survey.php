@@ -199,6 +199,7 @@ header('Cache-Control: no-store');
     const answers = {};
     const others = {};
     let firstInvalid = null;
+    let otherMissing = false;
     questions.forEach((q, i) => {
       const node = $('q' + i);
       node.classList.remove('is-invalid');
@@ -216,13 +217,14 @@ header('Cache-Control: no-store');
         if (text === '') {
           node.classList.add('is-invalid');
           firstInvalid = firstInvalid || node;
+          otherMissing = true;
           return;
         }
         others[q.id] = text;
       }
     });
     if (firstInvalid) {
-      $('svError').textContent = '必須の設問と、選んだ「その他」の内容を入力してください。';
+      $('svError').textContent = otherMissing ? '選んだ「その他」の内容を入力してください。' : '必須の設問に回答してください。';
       $('svError').classList.remove('d-none');
       firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
