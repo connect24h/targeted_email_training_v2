@@ -1,0 +1,10 @@
+[Unit]
+Description=Run TET v2 education delivery summary every hour
+# 配備だけでは有効にならない。有効化(systemctl enable --now)は利用者の承認を得てから別に行う。
+
+[Timer]
+OnCalendar=*-*-* *:20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

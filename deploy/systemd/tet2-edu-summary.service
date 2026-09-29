@@ -1,0 +1,16 @@
+[Unit]
+Description=TET v2 Education delivery summary (notify contacts after the deadline)
+After=network.target
+
+# 有効化は利用者の承認が要る(deploy/README.md の「受講期間の終了時の集計通知」)。
+# 送るのは、教育配信の画面で集計通知を有効にし、担当者のアドレスを登録した組織だけ。
+
+[Service]
+Type=oneshot
+User=training
+Group=www-data
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/bin/php /var/www/html/tet2/db/edu_delivery_summary.php
+StandardOutput=append:/opt/training/tet2-data/edu-summary.log
+StandardError=append:/opt/training/tet2-data/edu-summary.log
