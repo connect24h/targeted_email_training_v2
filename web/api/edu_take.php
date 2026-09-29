@@ -102,6 +102,10 @@ function take_resolve(string $token): array
     if (!TenantStatus::isOperational((int) $a['tenant_id'])) {
         take_error(TenantStatus::PARTICIPANT_BLOCKED_MESSAGE, 403);
     }
+    // 受講できるのは開始済み(running)の配信だけ。終了・中止した配信は、期限後の受講を認める設定でも受け付けない
+    if ((string) ($a['delivery_status'] ?? '') !== 'running') {
+        take_error('この配信は受講を受け付けていません', 410);
+    }
     // 期限の後の受講を認める配信は通す(完了の日時が期限の後なので、レポートでは期限後として数える)
     if (take_is_expired($a['token_expiry'] ?? null) && (int) ($a['allow_after_deadline'] ?? 0) !== 1) {
         take_error('この受講リンクは有効期限が切れています', 410);

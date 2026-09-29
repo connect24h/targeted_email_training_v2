@@ -44,6 +44,15 @@ check($code === 200, 'TP-1: 有効なテナントの受講リンクは開ける'
 [$code] = stake_start($surveyToken);
 check($code === 200, 'TP-1: 有効なテナントのアンケートは開ける');
 
+// 終了・中止した配信の受講リンクは、期限後の受講を認める設定でも開けない(開始済みの配信だけ受け付ける)
+Db::run("UPDATE edu_deliveries SET status = 'cancelled' WHERE id = ?", [$deliveryId]);
+[$code] = take_resolve_code($eduToken);
+check($code === 410, 'TP-1b: 中止した配信の受講リンクは 410');
+Db::run("UPDATE edu_deliveries SET status = 'done', allow_after_deadline = 1 WHERE id = ?", [$deliveryId]);
+[$code] = take_resolve_code($eduToken);
+check($code === 410, 'TP-1b: 期限後の受講を認める配信でも、終了した配信は 410');
+Db::run("UPDATE edu_deliveries SET status = 'running', allow_after_deadline = 0 WHERE id = ?", [$deliveryId]);
+
 foreach (['suspended', 'deleted'] as $status) {
     Db::run('UPDATE tenants SET status = ? WHERE id = ?', [$status, $tenantId]);
     [$code, $message] = take_resolve_code($eduToken);
