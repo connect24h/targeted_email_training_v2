@@ -13,6 +13,9 @@ Group=www-data
 SupplementaryGroups=adm vmail
 Environment=TET2_MAIL_LOG=/var/log/mail.log
 Environment=TET2_REPORT_MAILDIR=/home/report/Maildir
+# 読み書きの場所は変えずに足せる守りだけを入れる(権限を上げさせない、一時ファイルを分ける)。
+NoNewPrivileges=true
+PrivateTmp=true
 ExecStart=/usr/bin/php /var/www/html/tet2/db/delivery_ingest.php
 StandardOutput=append:/opt/training/tet2-data/delivery-ingest.log
 StandardError=append:/opt/training/tet2-data/delivery-ingest.log
