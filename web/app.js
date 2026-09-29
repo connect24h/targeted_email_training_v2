@@ -406,8 +406,11 @@ async function renderSecurityPolicy() {
   const el = $('#securityPolicySummary');
   try { securityPolicy = await api('api/users.php', { query: { action: 'security_policy' } }); }
   catch (e) { el.textContent = `方針を読み込めませんでした（${e.message}）`; return; }
+  const g = securityPolicy.global || {};
+  const words = (securityPolicy.tenant?.banned_words?.length || 0) + (g.banned_words_count ?? g.banned_words?.length ?? 0);
   el.textContent = securityPolicyText(securityPolicy.effective)
-    + (securityPolicy.global.configured ? '（全テナント共通の方針と合わせた結果）' : '');
+    + (securityPolicy.global.configured ? '（全テナント共通の方針と合わせた結果）' : '')
+    + ` よく使われる語句と組織名・ドメイン名を含むパスワードは使えません${words ? `（組織で足した禁止語 ${words}語）` : ''}。`;
 }
 function editSecurityPolicy() {
   const p = securityPolicy;
@@ -426,6 +429,10 @@ function editSecurityPolicy() {
       <label class="form-check-label" for="pfRequireMfa">多要素認証を必須にする</label></div>
     <div class="form-text">${p.mfa_available ? '必須にすると、未登録のユーザは次の操作から登録の画面だけになります。'
       : '多要素認証の暗号鍵が未設定のため、今は必須にできません。'}</div>
+    <div class="mb-2 mt-2"><label class="form-label" for="pfBannedWords">パスワードの禁止語（1行に1語）</label>
+      <textarea class="form-control" id="pfBannedWords" name="banned_words" rows="4" placeholder="例: 社名の略称、製品名、所在地"></textarea>
+      <div class="form-text">${p.limits.banned_word_min}〜${p.limits.banned_word_max}文字で${p.limits.banned_words}語まで。大文字と小文字は区別しません。
+        よく使われる語句（password など）、組織名、テナントの識別子、本人のメールのドメインは、ここに書かなくても使えません。受講者のマイページには組織で足した語は当てません。</div></div>
     ${!p.can_edit_global && p.global.configured ? `<div class="small text-muted mt-2">全テナント共通の方針（${esc(securityPolicyText(p.global))}）の方が厳しい項目は、そちらが効きます。</div>` : ''}
   </form>`;
   showModal('パスワードと多要素認証の方針', body, async () => {
@@ -433,6 +440,7 @@ function editSecurityPolicy() {
     const scope = f.scope ? f.scope.value : scopes[0][0];
     await api('api/users.php', { method: 'POST', query: { action: 'security_policy' }, body: {
       scope, min_length: Number(f.min_length.value), min_classes: Number(f.min_classes.value), require_mfa: f.require_mfa.checked,
+      banned_words: f.banned_words.value,
     } });
     toast('方針を保存しました', 'ok');
     // 自分が未登録のまま必須にした時は、すぐに登録の画面へ移す
@@ -446,6 +454,7 @@ function editSecurityPolicy() {
     f.min_length.value = cur.min_length;
     f.min_classes.value = String(cur.min_classes);
     f.require_mfa.checked = !!cur.require_mfa;
+    f.banned_words.value = (cur.banned_words || []).join('\n');
   };
   fill();
   f.scope?.addEventListener('change', fill);

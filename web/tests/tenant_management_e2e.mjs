@@ -82,7 +82,7 @@ try {
   await admin.locator('#tfTargetLimit').fill('50');
   await admin.locator('#tfAdminEmail').fill('first-admin@e2e-new.test');
   await admin.locator('#tfAdminName').fill('最初の管理者');
-  await admin.locator('#tfAdminPassword').fill('FirstAdmin123');
+  await admin.locator('#tfAdminPassword').fill('FirstHeron123');
   await saveModal(admin);
   await row(admin, 'e2e-new').waitFor();
   assert.match(await lastToast(admin).innerText(), /最初の管理者も作りました/);

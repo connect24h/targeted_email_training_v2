@@ -122,9 +122,9 @@ function users_handle_list(array $actor): never
  * パスワードの決まり(A4)。PasswordPolicy(全テナント共通の下限)に、所属テナントと全体の方針(段階1)を重ねる。
  * $tenantId が null はテナントに属さないユーザ(システム管理者)で、全体の方針だけを使う。
  */
-function users_validate_password(string $password, ?int $tenantId): void
+function users_validate_password(string $password, ?int $tenantId, ?string $email): void
 {
-    $violation = AdminSecurityPolicy::violation($password, $tenantId);
+    $violation = AdminSecurityPolicy::violation($password, $tenantId, $email);
     if ($violation !== null) {
         json_error($violation, 400);
     }
@@ -193,7 +193,7 @@ function users_handle_create(array $actor): never
         $tenantId = (int) $actor['tenant_id'];
     }
     if ($password !== null) {
-        users_validate_password($password, $tenantId);
+        users_validate_password($password, $tenantId, $email);
     }
     if ($sendInvite && !TenantStatus::userAllowed($tenantId, $role)) {
         json_error('停止中・削除済みのテナントのユーザには招待を送れません', 409);
@@ -284,7 +284,8 @@ function users_validate_update(array $actor, array $target, ?string $role, ?stri
     }
     if ($password !== null) {
         // 役割を superadmin に変えるとテナントから外れるので、全体の方針だけを使う
-        users_validate_password($password, $role === 'superadmin' || $target['tenant_id'] === null ? null : (int) $target['tenant_id']);
+        users_validate_password($password, $role === 'superadmin' || $target['tenant_id'] === null ? null : (int) $target['tenant_id'],
+            (string) $target['email']);
     }
     if ((int) $actor['id'] === (int) $target['id']) {
         if ($role !== null && users_role_rank($role) < users_role_rank((string) $actor['role'])) {
@@ -644,6 +645,7 @@ function users_policy_payload(array $row): array
         'min_length' => $row['min_length'],
         'min_classes' => $row['min_classes'],
         'require_mfa' => $row['require_mfa'],
+        'banned_words' => $row['banned_words'],
         'configured' => $row['exists'],
         'updated_at' => $row['updated_at'],
     ];
@@ -655,15 +657,23 @@ function users_handle_policy_get(array $actor): never
     $requested = users_query_int('tenant_id');
     $tenantId = $actor['role'] === 'superadmin' && $requested === null && $actor['tenant_id'] === null
         ? null : effective_tenant_id($actor, $requested);
+    // 全体の行の禁止語はシステム管理者が決める。組織管理者には数だけを返し、語そのものは見せない
+    $global = users_policy_payload(AdminSecurityPolicy::row(null));
+    if ($actor['role'] !== 'superadmin') {
+        $global['banned_words_count'] = count($global['banned_words']);
+        $global['banned_words'] = [];
+    }
     json_out([
         'success' => true,
         'tenant_id' => $tenantId,
         'tenant' => $tenantId !== null ? users_policy_payload(AdminSecurityPolicy::row($tenantId)) : null,
-        'global' => users_policy_payload(AdminSecurityPolicy::row(null)),
+        'global' => $global,
         'effective' => AdminSecurityPolicy::effective($tenantId),
         'can_edit_global' => $actor['role'] === 'superadmin',
         'mfa_available' => AdminMfa::keyConfigured(),
-        'limits' => ['min_length' => PasswordPolicy::MIN_LENGTH, 'max_length' => AdminSecurityPolicy::MAX_MIN_LENGTH],
+        'limits' => ['min_length' => PasswordPolicy::MIN_LENGTH, 'max_length' => AdminSecurityPolicy::MAX_MIN_LENGTH,
+            'banned_words' => PasswordDenyList::MAX_WORDS, 'banned_word_min' => PasswordDenyList::MIN_TOKEN_LENGTH,
+            'banned_word_max' => PasswordDenyList::MAX_WORD_LENGTH],
     ]);
 }
 
@@ -684,6 +694,18 @@ function users_handle_policy_set(array $actor): never
     if (!is_bool($body['require_mfa'] ?? null)) {
         json_error('require_mfa が不正です', 400);
     }
+    // 禁止語(改行区切りの文字列)。送られなければ今の値を残す
+    $bannedWords = null;
+    if (array_key_exists('banned_words', $body) && $body['banned_words'] !== null) {
+        if (!is_string($body['banned_words']) || strlen($body['banned_words']) > 8000) {
+            json_error('banned_words が不正です', 400);
+        }
+        try {
+            $bannedWords = PasswordDenyList::parseCustom($body['banned_words']);
+        } catch (InvalidArgumentException $e) {
+            json_error($e->getMessage(), 400);
+        }
+    }
     if ($scope === 'global') {
         if ($actor['role'] !== 'superadmin') {
             json_error('権限がありません', 403);
@@ -697,12 +719,13 @@ function users_handle_policy_set(array $actor): never
         json_error('多要素認証の準備ができていないため（暗号鍵が未設定）、必須にはできません', 409);
     }
     try {
-        AdminSecurityPolicy::save($tenantId, $body['min_length'], $body['min_classes'], $body['require_mfa'], (int) $actor['id']);
+        AdminSecurityPolicy::save($tenantId, $body['min_length'], $body['min_classes'], $body['require_mfa'], (int) $actor['id'], $bannedWords);
     } catch (InvalidArgumentException $e) {
         json_error($e->getMessage(), 400);
     }
     audit('security_policy.update', 'tenant_id=' . ($tenantId ?? 'global') . ',min_length=' . $body['min_length']
-        . ',min_classes=' . $body['min_classes'] . ',require_mfa=' . ($body['require_mfa'] ? 1 : 0));
+        . ',min_classes=' . $body['min_classes'] . ',require_mfa=' . ($body['require_mfa'] ? 1 : 0)
+        . ($bannedWords !== null ? ',banned_words=' . count($bannedWords) : ''));
     json_out(['success' => true, 'policy' => users_policy_payload(AdminSecurityPolicy::row($tenantId)),
         'effective' => AdminSecurityPolicy::effective($tenantId)]);
 }

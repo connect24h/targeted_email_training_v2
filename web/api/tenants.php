@@ -211,8 +211,8 @@ function tenants_handle_create(): never
             json_error('管理者の名前を入力してください', 400);
         }
         $adminPassword = isset($body['admin_password']) && is_string($body['admin_password']) ? $body['admin_password'] : '';
-        // 新しいテナントにはまだ方針の行がないので、全体の方針(と PasswordPolicy)で確かめる
-        $violation = AdminSecurityPolicy::violation($adminPassword, null);
+        // 新しいテナントにはまだ方針の行がないので、全体の方針(と PasswordPolicy)で確かめる。組織の語は作るテナントの名前と slug
+        $violation = AdminSecurityPolicy::violation($adminPassword, null, $adminEmail, ['name' => $name, 'slug' => $slug]);
         if ($violation !== null) {
             json_error('管理者の初期' . $violation, 400);
         }
