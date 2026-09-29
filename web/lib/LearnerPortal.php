@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/EduAttempts.php';
+require_once __DIR__ . '/EduTagReport.php';
 
 final class LearnerPortal
 {
@@ -80,8 +81,8 @@ final class LearnerPortal
 
     /**
      * 自分の成績: 配信ごとの状態、点数、合否、配信の日時、受講の日時、受講回数、回の一覧、最新の提出の正解の数、
-     * 完了した配信の答え合わせ。アウェアネス(小問)の正答率の推移と、自分の受講完了率も返す。
-     * @return array{deliveries: list<array<string,mixed>>, awareness_trend: list<array<string,mixed>>, summary: array<string,mixed>}
+     * 完了した配信の答え合わせ。アウェアネス(小問)の正答率の推移と、自分の受講完了率、自分の分野(親のタグ)ごとの正答率も返す。
+     * @return array{deliveries: list<array<string,mixed>>, awareness_trend: list<array<string,mixed>>, summary: array<string,mixed>, by_tag: list<array<string,mixed>>}
      */
     public static function grades(int $tenantId, int $targetId): array
     {
@@ -179,7 +180,7 @@ final class LearnerPortal
             'assigned' => count($out),
             'completed' => $completed,
             'completion_rate' => $out !== [] ? round($completed / count($out) * 100, 1) : null,
-        ]];
+        ], 'by_tag' => EduTagReport::learnerByParent($tenantId, $targetId, 'd.status NOT IN ' . self::HIDDEN_DELIVERY_STATUSES)];
     }
 
     /**

@@ -2,11 +2,14 @@
 require_once __DIR__ . '/../lib/OfficeDocumentReader.php';
 require_once __DIR__ . '/../lib/SimpleXlsx.php';
 require_once __DIR__ . '/../lib/EduMedia.php';
+require_once __DIR__ . '/../lib/EduTags.php';
 
 /**
  * 設問バンク(edu_questions)管理 API。
  * templates.php と同じ流儀。options/correct_answer は JSON 配列で受け、妥当性を検証する。
  * category_id は同一テナント所有を確認(IDOR 防止)。
+ * 分野のタグ(G09): 設問の編集で tag_ids(配列)を受け、一覧は tag_id で絞れる(親を選べば子のタグの設問も入る)。
+ * Excel の出力と取込は「分野のタグ（改行区切り）」の列を持つ(親は「名前」、子は「親 > 子」。知らない名前の行は拒む)。
  */
 
 const EDU_QUESTION_TYPES = ['single_choice', 'true_false', 'multiple_choice'];
@@ -215,7 +218,11 @@ function edu_q_handle_list(array $actor): never
     if ($categoryId !== null) {
         edu_q_assert_category_visible($categoryId, $tenantId);
     }
-    // 共有カテゴリの設問 + 自テナントの設問(閲覧・出題用)
+    $tagId = edu_q_query_int('tag_id');
+    if ($tagId !== null && EduTags::find($tagId, $tenantId) === null) {
+        json_error('タグが見つかりません', 404);
+    }
+    // 共有カテゴリの設問 + 自テナントの設問(閲覧・出題用)。タグで絞る時は、そのタグか、その子のタグが付いた設問
     $rows = Db::all(
         'SELECT q.id, q.tenant_id, q.category_id, q.title, q.question_type, q.options,
                 q.correct_answer, q.explanation, q.option_explanations, q.image_name, q.difficulty, q.is_active, q.is_shared,
@@ -223,10 +230,13 @@ function edu_q_handle_list(array $actor): never
          FROM edu_questions q
          INNER JOIN edu_categories c ON c.id = q.category_id
          WHERE (q.tenant_id = ? OR q.tenant_id IS NULL) AND (? IS NULL OR q.category_id = ?)
+           AND (? IS NULL OR q.id IN (SELECT qt.question_id FROM edu_question_tags qt
+                                      INNER JOIN edu_tags g ON g.id = qt.tag_id
+                                      WHERE g.id = ? OR g.parent_id = ?))
          ORDER BY c.sort_order, c.id, q.id',
-        [$tenantId, $categoryId, $categoryId]
+        [$tenantId, $categoryId, $categoryId, $tagId, $tagId, $tagId]
     );
-    json_out(['success' => true, 'questions' => $rows]);
+    json_out(['success' => true, 'questions' => edu_q_with_tags($rows, $tenantId)]);
 }
 
 function edu_q_handle_get(array $actor): never
@@ -237,7 +247,33 @@ function edu_q_handle_get(array $actor): never
     if ($id === null) {
         json_error('id が不正です', 400);
     }
-    json_out(['success' => true, 'question' => edu_q_assert_visible($id, $tenantId)]);
+    json_out(['success' => true, 'question' => edu_q_present($id, $tenantId)]);
+}
+
+/** @param list<array<string,mixed>> $rows 設問の行に tags(見えるタグの id、name、path)を足す */
+function edu_q_with_tags(array $rows, int $tenantId): array
+{
+    $tags = EduTags::forQuestions(array_map(static fn(array $r): int => (int) $r['id'], $rows), $tenantId);
+    return array_map(static fn(array $r): array => $r + ['tags' => $tags[(int) $r['id']] ?? []], $rows);
+}
+
+/** 設問1件(タグつき)。 */
+function edu_q_present(int $id, int $tenantId): array
+{
+    return edu_q_with_tags([edu_q_assert_visible($id, $tenantId)], $tenantId)[0];
+}
+
+/** body の tag_ids を確かめる。キーがなければ null(変更なし)。$questionTenant は設問の持ち主(NULL は共有)。 */
+function edu_q_tag_ids(array $body, ?int $questionTenant, int $tenantId): ?array
+{
+    if (!array_key_exists('tag_ids', $body)) {
+        return null;
+    }
+    try {
+        return EduTags::assignable($body['tag_ids'], $questionTenant, $tenantId);
+    } catch (InvalidArgumentException $error) {
+        json_error($error->getMessage(), 400);
+    }
 }
 
 function edu_q_handle_create(array $actor): never
@@ -261,6 +297,7 @@ function edu_q_handle_create(array $actor): never
     $explanation = edu_q_optional_string($body, 'explanation');
     $difficulty = edu_q_difficulty($body);
     $optionExplanations = edu_q_option_explanations($body, count($options));
+    $tagIds = edu_q_tag_ids($body, $qTenant, $tenantId);
 
     $id = Db::insert(
         'INSERT INTO edu_questions (tenant_id, category_id, title, question_type, options, correct_answer, explanation, option_explanations, difficulty, is_active, is_shared)
@@ -277,8 +314,11 @@ function edu_q_handle_create(array $actor): never
             $difficulty,
         ]
     );
+    if ($tagIds !== null) {
+        EduTags::replaceForQuestion($id, $tagIds);
+    }
     audit('edu_question.create', 'question_id=' . $id);
-    json_out(['success' => true, 'question' => edu_q_assert_visible($id, $tenantId)], 201);
+    json_out(['success' => true, 'question' => edu_q_present($id, $tenantId)], 201);
 }
 
 function edu_q_handle_update(array $actor): never
@@ -331,9 +371,11 @@ function edu_q_handle_update(array $actor): never
         ? ($existing['option_explanations'] ?? null)
         : ($optionExplanations === [] ? null : json_encode($optionExplanations, JSON_UNESCAPED_UNICODE));
 
+    $tagIds = edu_q_tag_ids($body, $existing['tenant_id'] !== null ? (int) $existing['tenant_id'] : null, $tenantId);
+
     $nothingChanged = $title === null && $explanation === null && $difficulty === null && $isActive === null
         && !$optionsChanged && !$correctChanged && !array_key_exists('question_type', $body)
-        && !array_key_exists('option_explanations', $body);
+        && !array_key_exists('option_explanations', $body) && $tagIds === null;
     if ($nothingChanged) {
         json_error('更新項目がありません', 400);
     }
@@ -361,8 +403,12 @@ function edu_q_handle_update(array $actor): never
             $id,
         ]
     );
+    if ($tagIds !== null) {
+        // 設問に付くタグは、その設問を編集できる人に必ず見える(共有の設問には共有のタグだけ)ので、丸ごと置き換える
+        EduTags::replaceForQuestion($id, $tagIds);
+    }
     audit('edu_question.update', 'question_id=' . $id);
-    json_out(['success' => true, 'question' => edu_q_assert_visible($id, $tenantId)]);
+    json_out(['success' => true, 'question' => edu_q_present($id, $tenantId)]);
 }
 
 /** 設問の画像を付ける(差し替えたら古い画像を消す)。 */
@@ -447,12 +493,15 @@ function edu_q_handle_delete(array $actor): never
     json_out(['success' => true]);
 }
 
+/** Excel の分野のタグの列(1セルに改行区切り。親は「名前」、子は「親 > 子」)。 */
+const EDU_Q_TAG_HEADER = '分野のタグ（改行区切り）';
+
 /** @return list<list<int|string>> */
 function edu_q_export_rows(int $tenantId): array
 {
     $rows = [[
         'カテゴリ名', 'カテゴリスラッグ', '設問文', '種別', '選択肢（改行区切り）',
-        '正答番号（1始まり）', '難易度', '解説', '有効', '選択肢ごとの解説（改行区切り）', '画像ファイル名',
+        '正答番号（1始まり）', '難易度', '解説', '有効', '選択肢ごとの解説（改行区切り）', '画像ファイル名', EDU_Q_TAG_HEADER,
     ]];
     $questions = Db::all(
         'SELECT q.*, c.name AS category_name, c.slug AS category_slug, c.sort_order AS category_order
@@ -462,6 +511,7 @@ function edu_q_export_rows(int $tenantId): array
          ORDER BY c.sort_order, c.id, q.id',
         [$tenantId]
     );
+    $tags = EduTags::forQuestions(array_map(static fn(array $q): int => (int) $q['id'], $questions), $tenantId);
     foreach ($questions as $question) {
         $options = json_decode((string) $question['options'], true) ?: [];
         $correct = json_decode((string) $question['correct_answer'], true) ?: [];
@@ -477,6 +527,7 @@ function edu_q_export_rows(int $tenantId): array
             (int) $question['is_active'],
             implode("\n", array_map('strval', json_decode((string) ($question['option_explanations'] ?? ''), true) ?: [])),
             (string) ($question['image_name'] ?? ''),
+            implode("\n", array_column($tags[(int) $question['id']] ?? [], 'path')),
         ];
     }
     return $rows;
@@ -486,7 +537,7 @@ function edu_q_handle_export_xlsx(array $actor): never
 {
     $tenantId = edu_effective_tenant_id($actor, edu_q_query_int('tenant_id'));
     $xlsx = new SimpleXlsx();
-    $xlsx->addSheet('設問', edu_q_export_rows($tenantId), [0 => 20, 1 => 24, 2 => 45, 3 => 18, 4 => 35, 5 => 20, 6 => 10, 7 => 40, 8 => 8]);
+    $xlsx->addSheet('設問', edu_q_export_rows($tenantId), [0 => 20, 1 => 24, 2 => 45, 3 => 18, 4 => 35, 5 => 20, 6 => 10, 7 => 40, 8 => 8, 11 => 30]);
     audit('edu_question.export_xlsx', 'tenant_id=' . $tenantId);
     $xlsx->download('edu_questions_' . date('Ymd_His') . '.xlsx');
 }
@@ -496,7 +547,7 @@ function edu_q_handle_template_xlsx(array $actor): never
     $tenantId = edu_effective_tenant_id($actor, edu_q_query_int('tenant_id'));
     $headers = [[
         'カテゴリスラッグ', '設問文', '種別', '選択肢（改行区切り）',
-        '正答番号（1始まり）', '難易度', '解説', '有効',
+        '正答番号（1始まり）', '難易度', '解説', '有効', EDU_Q_TAG_HEADER,
     ]];
     $instructions = [
         ['項目', '入力方法'],
@@ -506,9 +557,10 @@ function edu_q_handle_template_xlsx(array $actor): never
         ['正答番号（1始まり）', '例: 1、複数選択は 1,3'],
         ['難易度', '1〜3'],
         ['有効', '1=有効、0=無効'],
+        [EDU_Q_TAG_HEADER, '任意。「分野のタグ一覧」の表記(親は「名前」、子は「親 > 子」)を1行に1つ。一覧にない名前の行は取り込みません'],
     ];
     $xlsx = new SimpleXlsx();
-    $xlsx->addSheet('設問', $headers, [0 => 24, 1 => 45, 2 => 18, 3 => 35, 4 => 20, 5 => 10, 6 => 40, 7 => 8]);
+    $xlsx->addSheet('設問', $headers, [0 => 24, 1 => 45, 2 => 18, 3 => 35, 4 => 20, 5 => 10, 6 => 40, 7 => 8, 8 => 30]);
     $categoryRows = [['カテゴリ名', 'カテゴリスラッグ', '取込可否']];
     $categories = Db::all(
         'SELECT name, slug, tenant_id FROM edu_categories
@@ -521,6 +573,11 @@ function edu_q_handle_template_xlsx(array $actor): never
         $categoryRows[] = [(string) $category['name'], (string) $category['slug'], $writable ? '追加可能' : '共有（コピー後に追加可能）'];
     }
     $xlsx->addSheet('カテゴリ一覧', $categoryRows, [0 => 28, 1 => 28, 2 => 28]);
+    $tagRows = [['分野のタグの表記', '種類', '説明']];
+    foreach (EduTags::visible($tenantId) as $tag) {
+        $tagRows[] = [(string) $tag['path'], (int) $tag['is_shared'] === 1 ? '共有' : '自組織', (string) ($tag['description'] ?? '')];
+    }
+    $xlsx->addSheet('分野のタグ一覧', $tagRows, [0 => 36, 1 => 10, 2 => 50]);
     $xlsx->addSheet('入力方法', $instructions, [0 => 28, 1 => 60]);
     $xlsx->download('edu_questions_template.xlsx');
 }
@@ -549,6 +606,7 @@ function edu_q_import_records(array $rows, array $actor, int $tenantId): array
     foreach ($categories as $category) {
         $categoryBySlug[(string) $category['slug']] ??= $category;
     }
+    $visibleTags = array_key_exists(EDU_Q_TAG_HEADER, $headerMap) ? EduTags::visible($tenantId) : [];
 
     $records = [];
     foreach (array_slice($rows, 1) as $offset => $row) {
@@ -614,7 +672,14 @@ function edu_q_import_records(array $rows, array $actor, int $tenantId): array
         if ($imageFile !== '' && !preg_match('/^[A-Za-z0-9._-]{1,120}\.(png|jpe?g)$/i', $imageFile)) {
             json_error("Excel {$line}行目: 画像ファイル名は英数字の png か jpg にしてください", 400);
         }
+        $questionTenant = $category['tenant_id'] !== null ? (int) $category['tenant_id'] : null;
+        try {
+            $tagIds = EduTags::resolvePaths(array_key_exists(EDU_Q_TAG_HEADER, $headerMap) ? $cell(EDU_Q_TAG_HEADER) : '', $questionTenant, $visibleTags);
+        } catch (InvalidArgumentException $error) {
+            json_error("Excel {$line}行目: " . $error->getMessage(), 400);
+        }
         $records[] = [
+            'tag_ids' => $tagIds,
             'option_explanations' => $optionExplanations,
             'image_file' => $imageFile,
             'line' => $line,
@@ -730,6 +795,7 @@ function edu_q_handle_import_xlsx(array $actor): never
                         $record['difficulty'], $record['is_active'], $record['is_shared'],
                     ]
                 );
+                EduTags::replaceForQuestion($id, $record['tag_ids']);
                 if ($record['image_file'] !== '') {
                     $name = EduMedia::saveQuestionImage($record['tenant_id'], $id, $images[$record['image_file']]);
                     $saved[] = [$record['tenant_id'], $name];
