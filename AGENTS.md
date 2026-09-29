@@ -5,7 +5,7 @@
 ## 本番資産
 - DB: `/opt/training/tet2-db/tet2.sqlite`（WAL）。調査は読み取りだけにする。変更を伴う確認はコピー（`--db=/絶対パス/copy.sqlite`）で行う
 - Web: `/var/www/html/tet2`、送信: `/opt/training/bin`。v1（`/tet`、`/opt/training/git-repo`）は共存中なので触らない。`bin/send_email.py` は v1 と共用
-- systemd: `tet2-worker.service`（常駐）、timer は campaign-automation / report-ingest（5分）/ maildir-perms / edu-snapshot / tet-backup-cleanup
+- systemd: `tet2-worker.service`（常駐）、timer は campaign-automation / report-ingest（5分）/ maildir-perms / tet-backup-cleanup。edu-snapshot は 2026-09-29 に停止（推移は edu_responses から直接集計するので、積んだ記録を読むところがない。過去の記録と CLI は残す）
 - `tet2-edu-enroll` と `tet2-edu-reminder` はユーザー方針で disabled。有効化すると実在の従業員へ教育メールが届くので、明示の指示なしに有効化しない
 - 送信の緊急停止は data_dir に `stop_sending.flag` を置く
 
