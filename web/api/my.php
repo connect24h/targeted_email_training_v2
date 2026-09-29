@@ -8,7 +8,7 @@
  *   POST my.php?action=change_password  {current_password, new_password} (CSRF)
  *   POST my.php?action=forgot           {email}  登録の有無にかかわらず同じ応答
  *   GET  my.php?action=home             期限つきの ToDo(未受講・受講中の教育、未回答のアンケート)と社内の問い合わせ先
- *   GET  my.php?action=grades           自分の成績(配信ごと、回ごと、答え合わせ、アウェアネスの推移、自分の受講完了率)
+ *   GET  my.php?action=grades           自分の成績(配信ごと、回ごと、答え合わせ、アウェアネスの推移、自分の受講完了率、自分の分野ごとの正答率)
  *   POST my.php?action=retake           {delivery_id} (CSRF) もう一度受講する → 受講の画面の URL
  *   GET  my.php?action=surveys          自分のアンケート(未回答と回答の履歴)
  *

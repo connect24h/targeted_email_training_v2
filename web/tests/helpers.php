@@ -47,6 +47,9 @@ function tet2_test_boot(?string $seedSql = null): string
     // 選択肢の並べ替えと、マイページのアカウントの有無(受講を終えた画面の戻るリンク)も受講の API が使う
     require_once __DIR__ . '/../lib/EduOptionOrder.php';
     require_once __DIR__ . '/../lib/LearnerPortal.php';
+    // 分野のタグ(設問の API とタグの API、教育レポートの分野)
+    require_once __DIR__ . '/../lib/EduTags.php';
+    require_once __DIR__ . '/../lib/EduTagReport.php';
     if ($seedSql !== null) {
         Db::run($seedSql);
     }

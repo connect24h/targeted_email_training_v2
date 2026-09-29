@@ -36,6 +36,7 @@ ASSETS=(
   assets/campaign-editor-steps.js
   assets/surveys.js
   assets/notification-templates.js
+  assets/edu-tags.js
 )
 
 asset_hash() {

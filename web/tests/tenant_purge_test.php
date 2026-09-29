@@ -78,6 +78,12 @@ function seedTenant(int $t, string $tag): void
     $category = $id("INSERT INTO edu_categories (tenant_id, name, slug) VALUES (?, ?, ?)", [$t, "Cat {$tag}", "cat-{$tag}"]);
     $question = $id("INSERT INTO edu_questions (tenant_id, category_id, title, options, correct_answer) VALUES (?, ?, 'Q', '[\"a\",\"b\"]', '[0]')",
         [$t, $category]);
+    // 分野のタグ(C1): 自組織の親と子、共有の親の下の自組織の子。設問には自組織の子と共有の親を付ける
+    Db::run("INSERT OR IGNORE INTO edu_tags (id, tenant_id, name) VALUES (900, NULL, '共有の分野')");
+    $tagParent = $id('INSERT INTO edu_tags (tenant_id, name) VALUES (?, ?)', [$t, "Tag {$tag}"]);
+    $tagChild = $id('INSERT INTO edu_tags (tenant_id, parent_id, name) VALUES (?, ?, ?)', [$t, $tagParent, "Child {$tag}"]);
+    $id('INSERT INTO edu_tags (tenant_id, parent_id, name) VALUES (?, 900, ?)', [$t, "Sub {$tag}"]);
+    Db::run('INSERT INTO edu_question_tags (question_id, tag_id) VALUES (?, ?), (?, 900)', [$question, $tagChild, $question]);
     $material = $id("INSERT INTO edu_materials (tenant_id, title, slides) VALUES (?, ?, '[]')", [$t, "M {$tag}"]);
     Db::run("INSERT INTO edu_material_pages (material_id, page_no, image_name) VALUES (?, 1, 'p1.png')", [$material]);
     Db::run("INSERT INTO edu_material_versions (material_id, version, source_name, page_count) VALUES (?, 1, ?, 1)", [$material, "src-{$tag}.pdf"]);

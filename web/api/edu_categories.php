@@ -153,13 +153,19 @@ function edu_cat_handle_fork(array $actor): never
              VALUES (?, ?, ?, ?, ?, 1, 0)',
             [$tenantId, $src['name'], $slug, $src['color'], $src['sort_order']]
         );
-        // 共有カテゴリ配下の設問もコピー
+        // 共有カテゴリ配下の設問もコピー。分野のタグ(共有のタグだけが付いている)も同じものを付ける
         $qs = Db::all('SELECT * FROM edu_questions WHERE category_id = ?', [(int) $src['id']]);
         foreach ($qs as $q) {
-            Db::run(
+            $newQuestionId = Db::insert(
                 'INSERT INTO edu_questions (tenant_id, category_id, title, question_type, options, correct_answer, explanation, difficulty, is_active, is_shared)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
                 [$tenantId, $catId, $q['title'], $q['question_type'], $q['options'], $q['correct_answer'], $q['explanation'], $q['difficulty'], $q['is_active']]
+            );
+            Db::run(
+                'INSERT INTO edu_question_tags (question_id, tag_id)
+                 SELECT ?, qt.tag_id FROM edu_question_tags qt INNER JOIN edu_tags g ON g.id = qt.tag_id
+                 WHERE qt.question_id = ? AND g.tenant_id IS NULL',
+                [$newQuestionId, (int) $q['id']]
             );
         }
         return $catId;

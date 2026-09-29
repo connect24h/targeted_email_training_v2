@@ -528,3 +528,7 @@ h6, .h6 { font-weight: 600; }
 /* 対象者の一覧のメモ(1行で切り、全文は title で見せる) */
 .target-memo { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .report-toolbar .card-body { padding: .75rem 1rem; }
+/* 分野のタグ(C1): 設問の編集のタグの選択は、タグが多くてもモーダルが伸びすぎないよう枠の中で送る */
+.edu-tag-picker { max-height: 14rem; overflow-y: auto; }
+/* 分野のタブの空欄の「解答なし」(visually-hidden は absolute)が、表の横送りの枠の外へはみ出してページを広げないようにする */
+.edu-tag-report .table-responsive { position: relative; }

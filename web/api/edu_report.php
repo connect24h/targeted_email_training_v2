@@ -1,6 +1,7 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/EduAnswerReport.php';
 require_once __DIR__ . '/../lib/EduAutoEnrollRuns.php';
+require_once __DIR__ . '/../lib/EduTagReport.php';
 
 /**
  * 教育レポート API(集計・閲覧のみ)。report.php と同じ流儀。
@@ -16,6 +17,8 @@ require_once __DIR__ . '/../lib/EduAutoEnrollRuns.php';
  * - action=awareness_people: アウェアネスの受講者ごとの正解、不正解、未回答(配信か配信日の期間で絞る)。format=csv で CSV
  * - action=answers   : 解答の1問1行の CSV。id で配信1件、なければ from と to(提出日)でテナント全体。上限 50000 行
  * - action=auto_runs : 自動の教育配信(訓練の失敗、新入社員)の実行履歴と、当てはまって入った人
+ * - action=tags      : 分野(タグ)ごと(親と子)の正答率、部署×親のタグの正答率、親のタグごとの月の推移(直近12か月)
+ * - action=tag_matrix: 部署×親のタグの正答率。format=csv で CSV
  * すべて viewer 以上。テナント分離を機械付与。
  *
  * 合否と期限の決まり(delivery_people、delivery_depts、deliveries、person で共通):
@@ -898,6 +901,47 @@ function edu_rep_handle_answers(array $user): never
         $result['truncated'] ? ['X-Tet2-Truncated' => (string) EduAnswerReport::ANSWER_ROW_LIMIT] : []);
 }
 
+/** 分野(タグ)の数字(G09)。テスト用と削除済みの対象者を除く(概要と同じ条件)。 */
+function edu_rep_handle_tags(array $user): never
+{
+    $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
+    json_out([
+        'success' => true,
+        'by_tag' => EduTagReport::byTag($tenantId, EDU_REP_REAL_TARGET_SQL),
+        'matrix' => EduTagReport::departmentMatrix($tenantId, EDU_REP_REAL_TARGET_SQL),
+        'trend' => EduTagReport::monthlyTrend($tenantId, EDU_REP_REAL_TARGET_SQL, date('Y-m')),
+    ]);
+}
+
+/** 部署×親のタグの表。CSV は部署ごとに1行、タグごとに正答率と回答数の2列(解答のないマスは空)。 */
+function edu_rep_handle_tag_matrix(array $user): never
+{
+    $tenantId = effective_tenant_id($user, edu_rep_query_int('tenant_id'));
+    $format = edu_rep_query_format();
+    $matrix = EduTagReport::departmentMatrix($tenantId, EDU_REP_REAL_TARGET_SQL);
+    if ($format !== 'csv') {
+        json_out(['success' => true, 'matrix' => $matrix]);
+    }
+    edu_rep_send_csv('edu_tag_matrix_' . date('Ymd') . '.csv', edu_rep_tag_matrix_csv($matrix),
+        'edu_report.tag_matrix_csv', 'rows=' . count($matrix['departments']));
+}
+
+function edu_rep_tag_matrix_csv(array $matrix): string
+{
+    $header = ['部署'];
+    foreach ($matrix['tags'] as $tag) {
+        array_push($header, $tag['name'] . 'の正答率(%)', $tag['name'] . 'の回答数');
+    }
+    $rows = array_map(static function (array $d): array {
+        $cells = [$d['department']];
+        foreach ($d['cells'] as $c) {
+            array_push($cells, $c['correct_rate'] ?? '', $c['answered'] > 0 ? $c['answered'] : '');
+        }
+        return $cells;
+    }, $matrix['departments']);
+    return edu_rep_csv($header, $rows);
+}
+
 /** 自動の教育配信の実行履歴と、当てはまって入った人(G61)。 */
 function edu_rep_handle_auto_runs(array $user): never
 {
@@ -950,6 +994,12 @@ try {
     }
     if ($action === 'auto_runs') {
         edu_rep_handle_auto_runs($user);
+    }
+    if ($action === 'tags') {
+        edu_rep_handle_tags($user);
+    }
+    if ($action === 'tag_matrix') {
+        edu_rep_handle_tag_matrix($user);
     }
     json_error('不正なアクションです', 400);
 } catch (Throwable $e) {

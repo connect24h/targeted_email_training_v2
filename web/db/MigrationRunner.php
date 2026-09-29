@@ -33,6 +33,7 @@ final class MigrationRunner
         '20261025-measurement-b1',
         '20261027-ops-b2a',
         '20261028-ops-b2b',
+        '20261101-edu-tags',
         '20261102-notification-templates',
     ];
 
@@ -292,6 +293,13 @@ final class MigrationRunner
             $this->backfillOpsB2b($pdo);
             return;
         }
+        if ($version === '20261101-edu-tags') {
+            // 分野のタグ(G09)。タグと設問の結び付けの表を作り、既存のカテゴリごとに同じ名前と持ち主の親のタグを作って、
+            // そのカテゴリの設問に付ける。カテゴリと設問の category_id は変えない(カテゴリ別の集計の数字は変わらない)。
+            $pdo->exec($this->readSchema('schema-edu-tags.sql'));
+            $this->backfillEduTags($pdo);
+            return;
+        }
         if ($version === '20261102-notification-templates') {
             // 通知の文面の上書き(C2、G35)。表を足すだけ。行がなければ既定の文面で送るので、既存の送信は変わらない。
             $pdo->exec($this->readSchema('schema-notification-templates.sql'));
@@ -315,6 +323,36 @@ final class MigrationRunner
             return;
         }
         throw new RuntimeException("未知のmigrationです: {$version}");
+    }
+
+    /**
+     * カテゴリ → 親のタグ(同じ名前、同じ持ち主)。同じ持ち主の同じ名前のカテゴリは1つのタグにまとめる。
+     * すでに同じタグがあれば作らずに使うので、何度流しても同じ。
+     */
+    private function backfillEduTags(PDO $pdo): void
+    {
+        $categories = $pdo->query('SELECT id, tenant_id, name, sort_order FROM edu_categories ORDER BY id')->fetchAll();
+        $find = $pdo->prepare('SELECT id FROM edu_tags WHERE tenant_id IS ? AND parent_id IS NULL AND name = ?');
+        $insert = $pdo->prepare('INSERT INTO edu_tags (tenant_id, parent_id, name, sort_order) VALUES (?, NULL, ?, ?)');
+        $link = $pdo->prepare('INSERT OR IGNORE INTO edu_question_tags (question_id, tag_id) SELECT id, ? FROM edu_questions WHERE category_id = ?');
+        foreach ($categories as $category) {
+            $tenantId = $category['tenant_id'] !== null ? (int) $category['tenant_id'] : null;
+            $name = self::eduTagName((string) $category['name']);
+            $find->execute([$tenantId, $name]);
+            $tagId = $find->fetchColumn();
+            if ($tagId === false) {
+                $insert->execute([$tenantId, $name, (int) $category['sort_order']]);
+                $tagId = $pdo->lastInsertId();
+            }
+            $link->execute([(int) $tagId, (int) $category['id']]);
+        }
+    }
+
+    /** タグの名前に使えない文字(改行、Excel の「親 > 子」の区切りの >)を置き換え、100文字までにする。EduTags::normalizeName と同じ。 */
+    private static function eduTagName(string $name): string
+    {
+        $name = trim((string) preg_replace('/\s+/u', ' ', str_replace('>', '＞', $name)));
+        return mb_substr($name === '' ? '(名前なし)' : $name, 0, 100);
     }
 
     /** 回の行がない回答(migration 前の受講)を、1回目の提出済みの回として写す。何度流しても同じ。 */
