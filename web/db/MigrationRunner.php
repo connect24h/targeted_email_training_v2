@@ -34,6 +34,7 @@ final class MigrationRunner
         '20261027-ops-b2a',
         '20261028-ops-b2b',
         '20261102-notification-templates',
+        '20261105-sending-da',
     ];
 
     /**
@@ -290,6 +291,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-reveal-pages.sql'));
             $pdo->exec($this->readSchema('schema-edu-material-versions.sql'));
             $this->backfillOpsB2b($pdo);
+            return;
+        }
+        if ($version === '20261105-sending-da') {
+            // 段D の送信(D-a): 催促の設定(D1)の列、種明かしメール(D2)と報告の通知(D3)の設定の表、送った記録の表を足すだけ。
+            // 既存の配信は設定が NULL と 0(今と同じ催促)、設定の行は作らないので、種明かしメールと報告の通知は1通も送らない。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-sending-da.sql'));
             return;
         }
         if ($version === '20261102-notification-templates') {
@@ -604,8 +612,12 @@ final class MigrationRunner
                 'lock_material_during_test' => 'INTEGER NOT NULL DEFAULT 0',
                 'allow_after_deadline' => 'INTEGER NOT NULL DEFAULT 0',
                 'retake_from_test' => 'INTEGER NOT NULL DEFAULT 0',
+                'remind_start_days' => 'INTEGER',
+                'remind_interval_days' => 'INTEGER',
+                'remind_after_deadline' => 'INTEGER NOT NULL DEFAULT 0',
+                'remind_max_count' => 'INTEGER',
             ],
-            'edu_assignments' => ['last_reminded_at' => 'TEXT'],
+            'edu_assignments' => ['last_reminded_at' => 'TEXT', 'remind_count' => 'INTEGER NOT NULL DEFAULT 0'],
             'edu_attempts' => ['test_started_at' => 'TEXT', 'material_version' => 'INTEGER'],
         ];
         foreach ($columns as $table => $definitions) {

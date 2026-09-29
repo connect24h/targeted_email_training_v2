@@ -43,6 +43,10 @@ function seedTenant(int $t, string $tag): void
     Db::run('INSERT INTO campaign_contents (campaign_id, content_no, subject_template_id) VALUES (?, 1, ?)', [$campaign, $subject]);
     $revealPage = $id("INSERT INTO reveal_pages (tenant_id, name, storage_name) VALUES (?, ?, ?)", [$t, "RP {$tag}", "reveal-{$tag}.html"]);
     Db::run('UPDATE campaigns SET reveal_page_id = ? WHERE id = ?', [$revealPage, $campaign]);
+    Db::run("INSERT INTO campaign_reveal_settings (campaign_id, tenant_id, on_close) VALUES (?, ?, 1)", [$campaign, $t]);
+    Db::run("INSERT INTO tenant_report_notify (tenant_id, emails, since) VALUES (?, ?, '2026-09-01 00:00:00')", [$t, "sec-{$tag}@purge.test"]);
+    Db::run("INSERT INTO notification_sends (tenant_id, kind, dedupe_key, campaign_id, target_id, recipient, token, status)
+        VALUES (?, 'reveal_closed', ?, ?, ?, ?, ?, 'sent')", [$t, "c{$campaign}:t{$target}", $campaign, $target, "t-{$tag}@purge.test", hash('sha256', "rv-{$tag}")]);
     $tracking = substr(str_pad((string) crc32($tag), 10, '0', STR_PAD_LEFT), 0, 10);
     Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, content_no, send_status, sent_at)
         VALUES (?, ?, ?, 1, 'sent', '2026-09-02 10:00:00')", [$campaign, $target, $tracking]);
