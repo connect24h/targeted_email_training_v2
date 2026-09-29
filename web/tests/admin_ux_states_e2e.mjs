@@ -144,7 +144,8 @@ try {
   // 読み込み中の行ではなく、押すと詳細を開く行が出るのを待つ
   await page.locator('#reportsBody tr[onclick]').first().click();
   await page.locator('#reportDetail:not(.d-none)').waitFor();
-  assert.equal(await page.locator('#reportTabs [role="tab"]').count(), 5);
+  // 概要、防衛失敗者、会社・役職別、コンテンツ別、ビーコン明細、利用者ごと、行動履歴(段B1 で2つ足した)
+  assert.equal(await page.locator('#reportTabs [role="tab"]').count(), 7);
   assert.equal(await page.locator('#reportPane-overview').isVisible(), true);
   assert.equal(await page.locator('#reportBeaconsBody').isVisible(), false);
   assert.ok(await page.locator('#reportChart').evaluate((c) => c.getBoundingClientRect().width) > 100, '概要のグラフが描かれる');
@@ -160,7 +161,7 @@ try {
   await page.locator('#reportTab-overview').click();
   await page.locator('#reportPane-overview.show').waitFor();
   assert.ok(await page.locator('#reportTimelineChart').evaluate((c) => c.getBoundingClientRect().width) > 100, '戻った時もグラフが描かれている');
-  ok('訓練レポートの詳細は5つのタブに分かれ、期間と確定の操作はどのタブでも使え、矢印キーでも移れる');
+  ok('訓練レポートの詳細は7つのタブに分かれ、期間と確定の操作はどのタブでも使え、矢印キーでも移れる');
 
   await page.locator('#logoutBtn').click();
   await page.locator('#loginView:not(.d-none)').waitFor();

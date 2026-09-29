@@ -57,8 +57,8 @@ $pdo->exec("INSERT INTO groups (tenant_id, name, kind) VALUES (1, '全職員', '
 $before = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 
 $runner = new MigrationRunner($dbPath);
-check(count($runner->pending()) === 26, '未適用migrationが26件ある');
-check($runner->migrate() === 26, '初回はmigrationを26件適用する');
+check(count($runner->pending()) === 27, '未適用migrationが27件ある');
+check($runner->migrate() === 27, '初回はmigrationを27件適用する');
 check($runner->pending() === [], '適用後にpendingがない');
 check($runner->migrate() === 0, '2回目はno-opになる');
 
@@ -280,10 +280,38 @@ check($runner->migrate() === 1 && $runner->migrate() === 0, '訓練と報告の�
 $pdo->exec("DELETE FROM templates WHERE name = '既存の本文(migration)'");
 $pdo->exec('DELETE FROM tenant_security_policies');
 
+// 測定の正しさ(段B1)。events の判定の列、宛先の送達の列、返信の取込の台帳を足すだけ。
+// 既存の行動は verdict='user'(今と同じく数える)、既存の宛先は delivery_state NULL(率の分母は今のまま)。
+$pdo->exec("INSERT INTO campaign_targets (id, campaign_id, target_id, tracking_id, content_no, send_status) VALUES (903, 2, 2, '9030000001', 1, 'sent')");
+$pdo->exec("INSERT INTO events (tenant_id, campaign_id, tracking_id, event_type, occurred_at, source) VALUES (1, 2, '9030000001', 'click', '2026-09-01 10:00:00', 'apache_access')");
+$pdo->exec('DROP TABLE reply_mails');
+foreach (['verdict', 'verdict_reason', 'verdict_source', 'verdict_by', 'verdict_at'] as $column) {
+    $pdo->exec("ALTER TABLE events DROP COLUMN {$column}");
+}
+$pdo->exec('DROP INDEX IF EXISTS idx_ct_delivery_state');
+foreach (['delivery_state', 'delivery_state_at', 'delivery_detail'] as $column) {
+    $pdo->exec("ALTER TABLE campaign_targets DROP COLUMN {$column}");
+}
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261025-measurement-b1'");
+check($runner->pending() === ['20261025-measurement-b1'], '測定の正しさのmigrationだけがpending');
+check($runner->migrate() === 1, '既存DBへ判定の列、送達の列、返信の台帳を追加できる');
+check($pdo->query("SELECT verdict || '/' || verdict_source FROM events WHERE tracking_id = '9030000001'")->fetchColumn() === 'user/auto',
+    '既存の行動は利用者の行動(user)のまま');
+check($pdo->query('SELECT delivery_state FROM campaign_targets WHERE id = 903')->fetchColumn() === null, '既存の宛先の送達の状態は不明(NULL)のまま');
+check((int) $pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reply_mails'")->fetchColumn() === 1,
+    '既存DBへ返信の取込の台帳を作成する');
+$rejected = false;
+try { $pdo->exec("UPDATE events SET verdict = 'bot' WHERE tracking_id = '9030000001'"); } catch (PDOException) { $rejected = true; }
+check($rejected, '判定は user か scanner だけ(CHECK)');
+$pdo->exec("DELETE FROM schema_migrations WHERE version = '20261025-measurement-b1'");
+check($runner->migrate() === 1 && $runner->migrate() === 0, '測定の正しさのmigrationも冪等');
+$pdo->exec("DELETE FROM events WHERE tracking_id = '9030000001'");
+$pdo->exec('DELETE FROM campaign_targets WHERE id = 903');
+
 $after = (int) $pdo->query('SELECT COUNT(*) FROM targets')->fetchColumn();
 check($after === $before, 'migrationで業務data件数が変わらない');
-check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 26,
-    'schema_migrationsへ26件だけ記録される');
+check((int) $pdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 27,
+    'schema_migrationsへ27件だけ記録される');
 check(in_array('credential_capture_approval_ref', array_column(
     $pdo->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name'
 ), true), 'campaignsへ顧客承認参照を追加する');
@@ -360,8 +388,9 @@ check($currentRunner->pending() === [
     '20261015-admin-mfa',
     '20261020-edu-delivery-options',
     '20261021-training-report-options',
-], '現行DBは25件の後続migrationがpending');
-check($currentRunner->migrate() === 25, '現行DBへ残りのmigrationを適用する');
+    '20261025-measurement-b1',
+], '現行DBは26件の後続migrationがpending');
+check($currentRunner->migrate() === 26, '現行DBへ残りのmigrationを適用する');
 check((int) $currentPdo->query(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'campaign_automation%'"
 )->fetchColumn() === 3, '現行DBへautomation tableを追加する');
@@ -389,7 +418,7 @@ $rotationPdo->exec('CREATE TABLE campaign_automations (id INTEGER PRIMARY KEY AU
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260808-current-schema')");
 $rotationPdo->exec("INSERT INTO schema_migrations (version) VALUES ('20260809-campaign-automations')");
 $rotationRunner = new MigrationRunner($rotationPath);
-check($rotationRunner->migrate() === 24, '既存automation DBへ24件の後続migrationを適用する');
+check($rotationRunner->migrate() === 25, '既存automation DBへ25件の後続migrationを適用する');
 $rotationPdo->exec('INSERT INTO campaign_automations DEFAULT VALUES');
 $assignmentConstraint = false;
 try {
@@ -413,9 +442,9 @@ TestDatabase::create($unversionedPath, false);
 $unversionedPdo = new PDO('sqlite:' . $unversionedPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $unversionedPdo->exec('DROP TABLE schema_migrations');
 $unversionedRunner = new MigrationRunner($unversionedPath);
-check($unversionedRunner->migrate() === 26, 'version tableなしDBへ全migrationを適用する');
-check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 26,
-    'version tableを作成して26件記録する');
+check($unversionedRunner->migrate() === 27, 'version tableなしDBへ全migrationを適用する');
+check((int) $unversionedPdo->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn() === 27,
+    'version tableを作成して27件記録する');
 
 $legacyPath = sys_get_temp_dir() . '/tet2-migration-legacy-' . getmypid() . '.sqlite';
 @unlink($legacyPath);
@@ -428,7 +457,7 @@ $legacyPdo = new PDO('sqlite:' . $legacyPath, null, null, [
 downgradeConstraints($legacyPdo);
 
 $legacyRunner = new MigrationRunner($legacyPath);
-check($legacyRunner->migrate() === 26, '旧constraint DBへ全migrationを適用する');
+check($legacyRunner->migrate() === 27, '旧constraint DBへ全migrationを適用する');
 $legacyPdo->exec("INSERT INTO campaign_targets
     (campaign_id, target_id, tracking_id, content_no) VALUES (2, 1, '0000000011', 1)");
 $legacyPdo->exec("INSERT INTO campaign_targets

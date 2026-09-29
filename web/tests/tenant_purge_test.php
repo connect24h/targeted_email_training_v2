@@ -65,6 +65,8 @@ function seedTenant(int $t, string $tag): void
         VALUES (?, 'upload', ?, '/nonexistent/raw.eml', ?, 10, '2026-09-03 09:00:00', '{}', '[]')", [$t, $reportMail, hash('sha256', $tag)]);
     Db::run("INSERT INTO suspicious_mail_history (suspicious_mail_id, actor_email, field) VALUES (?, 'x@purge.test', 'status')", [$suspicious]);
     Db::run("INSERT INTO suspicious_mail_rules (tenant_id, name, kind, value) VALUES (?, ?, 'sender', 'bad.purge.test')", [$t, "R {$tag}"]);
+    Db::run("INSERT INTO reply_mails (message_id_hash, maildir_file, received_at, tracking_id, tenant_id, campaign_id, status)
+        VALUES (?, ?, '2026-09-03 09:00:00', ?, ?, ?, 'reply')", ["rh-{$tag}", "reply-{$tag}", $tracking, $t, $campaign]);
     Db::run("INSERT INTO human_risk_scores (tenant_id, target_id, score, band, computed_date) VALUES (?, ?, 50, 'medium', '2026-09-01')", [$t, $target]);
     Db::run("INSERT INTO position_masters (tenant_id, title, category) VALUES (?, ?, '管理職')", [$t, "部長 {$tag}"]);
     Db::run("INSERT INTO integration_idempotency_keys (tenant_id, idempotency_key, action, request_hash, expires_at) VALUES (?, ?, 'a', 'h', '2026-12-01')",

@@ -223,12 +223,16 @@
                   </div>
             <button class="btn btn-sm btn-outline-secondary" id="reportExportBtn"><i class="bi bi-file-earmark-spreadsheet"></i> Excel出力</button>
           </div></div>
+          <!-- 誤計上の注意(段B1、G01)。数字の読み方に関わるので、どのタブでも常に出す -->
+          <p class="small text-muted mb-2" id="reportScannerNote"><i class="bi bi-info-circle me-1" aria-hidden="true"></i>メールのセキュリティ装置がリンクを自動で開くとクリックが実際より多く数えられることがあるため、装置と判断したアクセスは集計から外し、「行動履歴」で確かめて判定を直せるようにしています。</p>
           <ul class="nav nav-tabs report-tabs" id="reportTabs" role="tablist">
             <li class="nav-item" role="presentation"><button class="nav-link active" id="reportTab-overview" data-bs-toggle="tab" data-bs-target="#reportPane-overview" type="button" role="tab" aria-controls="reportPane-overview" aria-selected="true"><i class="bi bi-graph-up me-1" aria-hidden="true"></i>概要</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-failures" data-bs-toggle="tab" data-bs-target="#reportPane-failures" type="button" role="tab" aria-controls="reportPane-failures" aria-selected="false"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>防衛失敗者</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-attributes" data-bs-toggle="tab" data-bs-target="#reportPane-attributes" type="button" role="tab" aria-controls="reportPane-attributes" aria-selected="false"><i class="bi bi-building me-1" aria-hidden="true"></i>会社・役職別</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-contents" data-bs-toggle="tab" data-bs-target="#reportPane-contents" type="button" role="tab" aria-controls="reportPane-contents" aria-selected="false"><i class="bi bi-files me-1" aria-hidden="true"></i>コンテンツ別</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-beacons" data-bs-toggle="tab" data-bs-target="#reportPane-beacons" type="button" role="tab" aria-controls="reportPane-beacons" aria-selected="false"><i class="bi bi-upc-scan me-1" aria-hidden="true"></i>ビーコン明細</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-people" data-bs-toggle="tab" data-bs-target="#reportPane-people" type="button" role="tab" aria-controls="reportPane-people" aria-selected="false"><i class="bi bi-people me-1" aria-hidden="true"></i>利用者ごと</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="reportTab-actions" data-bs-toggle="tab" data-bs-target="#reportPane-actions" type="button" role="tab" aria-controls="reportPane-actions" aria-selected="false"><i class="bi bi-clock-history me-1" aria-hidden="true"></i>行動履歴</button></li>
           </ul>
           <div class="tab-content report-tab-content">
             <div class="tab-pane fade show active" id="reportPane-overview" role="tabpanel" aria-labelledby="reportTab-overview" tabindex="0">
@@ -286,6 +290,32 @@
                         <tbody id="reportBeaconsBody"></tbody>
                       </table>
                     </div>
+            </div>
+            <div class="tab-pane fade" id="reportPane-people" role="tabpanel" aria-labelledby="reportTab-people" tabindex="0">
+              <p class="small text-muted mb-2">宛先1件を1行にしています。クリック、報告、返信は利用者の行動だけで、装置と判断したアクセスは「装置」の列の件数に出します。届かない宛先は率の分母から外しています。</p>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                  <thead><tr>
+                    <th>対象者</th><th>部署</th><th>送信</th><th title="送信できなかった、または相手のサーバーから届かないと返された宛先">配信エラー</th>
+                    <th>初回クリック</th><th>認証</th><th>報告</th><th>返信</th><th title="装置と判断したアクセスの件数(集計に入れない)">装置</th>
+                  </tr></thead>
+                  <tbody id="reportPeopleBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="tab-pane fade" id="reportPane-actions" role="tabpanel" aria-labelledby="reportTab-actions" tabindex="0">
+              <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                <span class="small text-muted">1行動1行。判定が「装置」の行は集計に入りません。オペレータ以上は判定を直せ、直した判定は次の集計から効きます（操作は監査ログに残ります）。</span>
+                <span class="small" id="reportActionsSummary" aria-live="polite"></span>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                  <thead><tr>
+                    <th>日時</th><th>対象者</th><th>種類</th><th>判定</th><th>IP</th><th>端末</th><th></th>
+                  </tr></thead>
+                  <tbody id="reportActionsBody"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -932,7 +962,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=562c358e"></script>
+<script src="app.js?v=6e29bb9f"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

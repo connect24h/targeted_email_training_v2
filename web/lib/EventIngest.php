@@ -6,6 +6,10 @@
  *  - クリック(click) : Apache access.log の "link-{10桁}.html" ヒット
  *  - 認証(auth) : training_log_*.txt の "Random: {10桁}" + "Type: {種別}"
  * tracking_id → campaign_targets で campaign/tenant を確定し events に INSERT OR IGNORE。
+ *
+ * User-Agent でメールのセキュリティ装置やリンクの自動展開と判断したクリックも、捨てずに verdict='scanner' で残す
+ * (段B1、G01)。集計はどれも verdict='user' だけを数えるので、数字は捨てていた時と同じ。担当者が画面で判定を
+ * 直した行(verdict_source='manual')は、取込で上書きしない。
  */
 declare(strict_types=1);
 
@@ -28,9 +32,13 @@ final class EventIngest
         }
         // report のMaildir取込を実装。回収IDと対象者のFrom一致で確定し、
         // pending は人が確定する。報告URLへのアクセスでは加点しない。
-        $counts = ['open' => 0, 'click' => 0, 'auth' => 0];
-        $counts['open']  += self::ingestApache($map, 'open',  '/kunren-beacon-(\d{10})\.png/');
-        $counts['click'] += self::ingestApache($map, 'click', '/link-(\d{10})\.html/');
+        // open/click/auth は利用者の行動(user)として入れた件数。scanner は装置と判断して残した件数(数えない)。
+        $counts = ['open' => 0, 'click' => 0, 'auth' => 0, 'scanner' => 0];
+        foreach ([['open', '/kunren-beacon-(\d{10})\.png/'], ['click', '/link-(\d{10})\.html/']] as [$type, $pattern]) {
+            $n = self::ingestApache($map, $type, $pattern);
+            $counts[$type] += $n['user'];
+            $counts['scanner'] += $n['scanner'];
+        }
         $counts['auth']  += self::ingestAuthLogs($map);
         $report = ReportMailIngest::run();
         $counts['report'] = $report['report'];
@@ -58,9 +66,10 @@ final class EventIngest
         return $files;
     }
 
-    private static function ingestApache(array $map, string $eventType, string $pattern): int
+    /** @return array{user:int, scanner:int} 判定ごとの取込件数 */
+    private static function ingestApache(array $map, string $eventType, string $pattern): array
     {
-        $n = 0;
+        $n = ['user' => 0, 'scanner' => 0];
         foreach (self::apacheLogFiles() as $file) {
             $fp = fopen($file, 'r');
             if ($fp === false) {
@@ -90,11 +99,14 @@ final class EventIngest
                 // open(ビーコン)は意図的に除外しない。メールクライアントのプリフェッチで
                 // 踏まれる性質のものであり、運用上の動作確認(PowerShell 等)も開封として
                 // 数える現行の判断を維持する。
-                if (in_array($eventType, ['click', 'report'], true) && self::isBotUserAgent($line)) {
-                    continue;
-                }
+                //
+                // 装置と判断した行は捨てずに verdict='scanner' で残す(集計には入らない)。誤判定を担当者が後から直せ、
+                // 除いた件数も説明できるようにするため(段B1、G01)。
+                $reason = in_array($eventType, ['click', 'report'], true) ? self::botUserAgentReason($line) : null;
+                $verdict = $reason === null ? 'user' : 'scanner';
                 $occurred = self::apacheTimestamp($line);
-                $n += self::insertEvent($map[$tid], $tid, $eventType, null, $occurred, 'apache_access', $line);
+                $n[$verdict] += self::insertEvent($map[$tid], $tid, $eventType, null, $occurred, 'apache_access', $line,
+                    ['verdict' => $verdict, 'reason' => $reason === null ? null : 'User-Agent に「' . $reason . '」']);
             }
             fclose($fp);
         }
@@ -108,13 +120,19 @@ final class EventIngest
      */
     private static function isBotUserAgent(string $logLine): bool
     {
+        return self::botUserAgentReason($logLine) !== null;
+    }
+
+    /** ボットと判断した User-Agent の語(判定の理由として残す)。ボットでなければ null。 */
+    private static function botUserAgentReason(string $logLine): ?string
+    {
         // Apache combined の末尾: ... "referer" "user-agent"
         if (!preg_match('/"([^"]*)"\s*$/', rtrim($logLine), $m)) {
-            return false;
+            return null;
         }
         $ua = $m[1];
         if ($ua === '' || $ua === '-') {
-            return false;
+            return null;
         }
         // SNSリンク展開ボット / HTTPクライアント / メールセキュリティのURLスキャナ。
         $patterns = [
@@ -127,10 +145,10 @@ final class EventIngest
         ];
         foreach ($patterns as $needle) {
             if (stripos($ua, $needle) !== false) {
-                return true;
+                return $needle;
             }
         }
-        return false;
+        return null;
     }
 
     private static function ingestAuthLogs(array $map): int
@@ -190,19 +208,38 @@ final class EventIngest
         return $q === false ? $path : substr($path, 0, $q);
     }
 
-    private static function insertEvent(array $ref, string $tid, string $type, ?string $variant, string $occurred, string $source, string $raw): int
+    /** @param array{verdict:string, reason:?string} $verdict 既定は利用者の行動(user) */
+    private static function insertEvent(array $ref, string $tid, string $type, ?string $variant, string $occurred, string $source, string $raw,
+        array $verdict = ['verdict' => 'user', 'reason' => null]): int
     {
         // UNIQUE(tracking_id, event_type, occurred_at) で冪等。
         // 取込は毎回ログを先頭から読み直すので、取り込み済みの行は読むだけで確かめて書き込まない。
         // INSERT OR IGNORE は無視される行でも書き込みの鍵を取り、数千行の取込の間ずっと鍵が取られ続けて
         // 受講画面の書き込みが busy_timeout を超えて失敗した(2026-09-27)。
-        if (Db::one('SELECT 1 FROM events WHERE tracking_id = ? AND event_type = ? AND occurred_at = ?', [$tid, $type, $occurred]) !== null) {
+        $existing = Db::one('SELECT id, verdict, verdict_source FROM events WHERE tracking_id = ? AND event_type = ? AND occurred_at = ?', [$tid, $type, $occurred]);
+        if ($existing !== null) {
+            return self::promoteToUser($existing, $verdict['verdict'], $raw);
+        }
+        // raw から行動履歴に IP と User-Agent を出すので、長い referer でも User-Agent まで残るよう 1000 字まで持つ
+        return Db::run(
+            'INSERT OR IGNORE INTO events (tenant_id, campaign_id, tracking_id, event_type, auth_variant, occurred_at, source, raw, verdict, verdict_reason)
+             VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [$ref['tenant_id'], $ref['campaign_id'], $tid, $type, $variant, $occurred, $source, substr($raw, 0, 1000),
+             $verdict['verdict'], $verdict['reason']]
+        );
+    }
+
+    /**
+     * 同じ秒に装置と利用者の両方のアクセスがあった時、装置の行が先に入っていても利用者の行動として数える。
+     * 装置の行を捨てていた頃は、利用者の行がそのまま入っていた。数字を捨てていた時と同じにするため、自動の判定の
+     * scanner だけを user に上げる(担当者が直した行は変えない)。
+     */
+    private static function promoteToUser(array $existing, string $verdict, string $raw): int
+    {
+        if ($verdict !== 'user' || $existing['verdict'] !== 'scanner' || $existing['verdict_source'] !== 'auto') {
             return 0;
         }
-        return Db::run(
-            'INSERT OR IGNORE INTO events (tenant_id, campaign_id, tracking_id, event_type, auth_variant, occurred_at, source, raw)
-             VALUES (?,?,?,?,?,?,?,?)',
-            [$ref['tenant_id'], $ref['campaign_id'], $tid, $type, $variant, $occurred, $source, substr($raw, 0, 500)]
-        );
+        return Db::run("UPDATE events SET verdict = 'user', verdict_reason = NULL, raw = ? WHERE id = ? AND verdict = 'scanner' AND verdict_source = 'auto'",
+            [substr($raw, 0, 1000), (int) $existing['id']]);
     }
 }

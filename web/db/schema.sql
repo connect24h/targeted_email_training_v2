@@ -194,6 +194,11 @@ CREATE TABLE IF NOT EXISTS campaign_targets (
   send_status     TEXT NOT NULL DEFAULT 'pending', -- pending/sent/failed/deferred
   sent_at         TEXT,
   content_no      INTEGER,
+  -- 送った後の送達の状態(web/lib/DeliveryStateIngest.php が mail.log と戻りメールから入れる)。
+  -- NULL = 不明(記録なし)、delivered = 相手のサーバーが受け取った、undeliverable = 届かない(率の分母から外す)
+  delivery_state  TEXT DEFAULT NULL CHECK (delivery_state IS NULL OR delivery_state IN ('delivered','undeliverable')),
+  delivery_state_at TEXT,
+  delivery_detail TEXT,                          -- 判定の根拠(dsn=5.1.1 と応答の先頭など)
   UNIQUE (campaign_id, target_id, content_no),
   FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
   FOREIGN KEY (target_id)   REFERENCES targets(id)
@@ -226,8 +231,15 @@ CREATE TABLE IF NOT EXISTS events (
   event_type   TEXT NOT NULL,                    -- open/click/auth/form_submit/reply/report
   auth_variant TEXT,                             -- Box/MS365/DA 等
   occurred_at  TEXT NOT NULL,
-  source       TEXT,                             -- apache_access / text_log / manual
+  source       TEXT,                             -- apache_access / text_log / manual / reply_mail
   raw          TEXT,
+  -- 判定。user = 利用者の行動として数える、scanner = メールのセキュリティ装置やリンクの自動展開(数えない)。
+  -- 集計はどれも verdict='user' だけを数える。担当者が画面で直すと verdict_source='manual' になり、取込で上書きしない。
+  verdict        TEXT NOT NULL DEFAULT 'user' CHECK (verdict IN ('user','scanner')),
+  verdict_reason TEXT,                           -- 判定の理由(自動なら当たった User-Agent の語)
+  verdict_source TEXT NOT NULL DEFAULT 'auto',   -- auto / manual
+  verdict_by     INTEGER,                        -- 直した担当者(users.id)
+  verdict_at     TEXT,
   UNIQUE (tracking_id, event_type, occurred_at)
 );
 CREATE INDEX IF NOT EXISTS idx_events_campaign ON events(campaign_id, event_type);

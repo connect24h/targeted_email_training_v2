@@ -2662,7 +2662,8 @@ function renderReportOverviewKpis(s) {
   el.replaceChildren(
     item('報告率', `${pct(s.report_rate)}（${Number(s.report_count) || 0}人）`, REPORT_RATE_TITLE),
     item('防衛失敗率', `${pct(s.failure_rate)}（${Number(s.failure_count) || 0}人）`, FAILURE_RATE_TITLE),
-    item('配信エラー', `${Number(s.delivery_error_count) || 0}人`, '送信できなかった宛先の人数（送信の失敗・保留の記録がある宛先。送信後のバウンスは含みません）'),
+    item('配信エラー', `${Number(s.delivery_error_count) || 0}人`, '送信できなかった宛先と、送った後に届かないと分かった宛先の人数'),
+    item('届かない宛先', `${Number(s.undeliverable_count) || 0}人`, '相手のサーバーから届かないと返された宛先の人数。率の分母（対象数）から外しています'),
   );
 }
 // P7: v1同等の詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン)
@@ -2739,6 +2740,8 @@ async function renderReportDetail(campaignId) {
   });
   // ビーコン(tracking_id)単位の開封明細。all配信で1人×Nコンテンツを個別に確認する。
   await renderReportBeacons(campaignId);
+  // 利用者ごとの1行と行動履歴(段B1)。どちらも失敗しても他のタブは見られるよう、中で握って表に出す
+  await Promise.all([renderReportPeople(campaignId), renderReportActions(campaignId)]);
 }
 
 // ビーコン別 開封明細の取得・描画(tracking_id 単位。人物単位に潰さず全パターンを出す)。
@@ -2771,6 +2774,90 @@ async function renderReportBeacons(campaignId) {
     const s = d.summary;
     summaryEl.textContent = `全${s.total}件中 サイト表示${s.clicked} / 認証${s.authed}`;
   }
+}
+// 行動の種類の表示名。open は偽サイトの表示(ビーコン)で、メールの開封ではない
+const ACTION_TYPE_LABELS = { open: 'ページの表示', click: 'リンクのクリック', auth: '認証情報の入力', report: '報告', reply: '返信' };
+function verdictBadge(a) {
+  const manual = a.verdict_source === 'manual' ? '（手で修正）' : '';
+  const title = esc(a.verdict_reason || '');
+  return a.verdict === 'scanner'
+    ? `<span class="badge bg-warning text-dark" title="${title}">装置${manual}</span>`
+    : `<span class="badge bg-light text-dark border" title="${title}">利用者${manual}</span>`;
+}
+function dateTimeCell(v) { return v ? `<span class="text-nowrap">${esc(String(v).slice(0, 16))}</span>` : '<span class="text-muted">–</span>'; }
+// 利用者ごとの1行(報告、返信、初回クリック、配信エラー)。
+async function renderReportPeople(campaignId) {
+  const body = $('#reportPeopleBody');
+  if (!body) return;
+  let d;
+  try {
+    d = await api('api/report.php', { query: { action: 'people', campaign_id: campaignId } });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="9" class="text-muted small">利用者ごとの取得に失敗しました: ${esc(e.message)}</td></tr>`;
+    return;
+  }
+  const people = d.people || [];
+  body.innerHTML = people.length ? people.map((p) => {
+    const undeliverable = p.delivery_state === 'undeliverable';
+    const deliveryCell = undeliverable
+      ? `<span class="badge bg-danger" title="${esc(p.delivery_detail || '')}">届かない</span>`
+      : p.delivery_error ? '<span class="badge bg-warning text-dark">送信エラー</span>' : '<span class="text-muted">–</span>';
+    return `<tr data-tracking-id="${esc(p.tracking_id)}">
+      <td>${esc(p.name || p.email)}${p.is_test ? ' <span class="badge bg-secondary">TEST</span>' : ''}<div class="small text-muted">${esc(p.email)}</div></td>
+      <td>${esc(p.department)}</td>
+      <td>${p.send_status === 'sent' ? '済' : esc(p.send_status)}</td>
+      <td>${deliveryCell}</td>
+      <td>${dateTimeCell(p.first_click_at)}</td><td>${dateTimeCell(p.auth_at)}</td>
+      <td>${dateTimeCell(p.report_at)}</td><td>${dateTimeCell(p.reply_at)}</td>
+      <td>${p.scanner_count ? `<span class="badge bg-warning text-dark">${Number(p.scanner_count)}</span>` : '<span class="text-muted">–</span>'}</td>
+    </tr>`;
+  }).join('') : emptyRow(9);
+}
+// 行動履歴(1行動1行)。装置の行も出し、オペレータ以上は判定を直せる。
+async function renderReportActions(campaignId) {
+  const body = $('#reportActionsBody');
+  const summaryEl = $('#reportActionsSummary');
+  if (!body) return;
+  let d;
+  try {
+    d = await api('api/report.php', { query: { action: 'actions', campaign_id: campaignId } });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7" class="text-muted small">行動履歴の取得に失敗しました: ${esc(e.message)}</td></tr>`;
+    return;
+  }
+  const canEdit = roleAtLeast(State.user?.role, 'operator') && !Cache.reports[campaignId]?.closed_at;
+  const actions = d.actions || [];
+  body.innerHTML = actions.length ? actions.map((a) => {
+    const next = a.verdict === 'scanner' ? 'user' : 'scanner';
+    const label = next === 'user' ? '利用者にする' : '装置にする';
+    const button = canEdit && a.editable
+      ? `<button class="btn btn-sm btn-outline-secondary text-nowrap" data-verdict-event="${Number(a.id)}" data-verdict-next="${next}" onclick="setEventVerdict(${Number(a.id)}, '${next}')">${label}</button>` : '';
+    return `<tr data-event-id="${Number(a.id)}" data-verdict="${esc(a.verdict)}">
+      <td>${dateTimeCell(a.occurred_at)}</td>
+      <td>${esc(a.target_name || a.target_email || a.tracking_id)}${a.is_test ? ' <span class="badge bg-secondary">TEST</span>' : ''}</td>
+      <td>${esc(ACTION_TYPE_LABELS[a.event_type] || a.event_type)}</td>
+      <td>${verdictBadge(a)}</td>
+      <td class="small">${esc(a.ip || '–')}</td>
+      <td class="small">${esc(a.device)}</td>
+      <td>${button}</td>
+    </tr>`;
+  }).join('') : emptyRow(7);
+  if (summaryEl) {
+    const c = d.counts || {};
+    summaryEl.textContent = `利用者 ${Number(c.user) || 0}件 / 装置 ${Number(c.scanner) || 0}件${d.truncated ? `（新しい順に${d.limit}件まで表示）` : ''}`;
+  }
+}
+// 行動1件の判定を直す。直した判定は集計にすぐ効くので、一覧と詳細を読み直す
+async function setEventVerdict(eventId, verdict) {
+  const text = verdict === 'user'
+    ? 'この行動を利用者の行動に直しますか？\n集計（クリック数・防衛失敗率など）に入ります。'
+    : 'この行動を装置の行動に直しますか？\n集計から外れます。';
+  if (!confirm(text)) return;
+  try {
+    const r = await api('api/report.php', { method: 'POST', query: { action: 'set_verdict' }, body: { event_id: eventId, verdict } });
+    toast(r.is_committed ? '判定を直しました（確定済みの値は変わりません。確定を解除すると反映されます）' : '判定を直しました', 'ok');
+    await renderReports();
+  } catch (e) { toast(e.message, 'err'); }
 }
 // レポート確定(コミット): 現時点の集計値を固定し、以後変更されないようにする
 /** レポートを Excel (.xlsx) でダウンロードする。 */
@@ -2929,7 +3016,7 @@ async function renderTargets() {
     <tr${archived ? ' class="text-muted table-light"' : ''}>
       ${selectCell}
       <td>${i + 1}</td>
-      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}</td>
+      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}${undeliverableBadge(t)}</td>
       <td>${esc(t.name)}</td>
       <td>${esc(t.company)}</td><td>${esc(t.department)}</td><td>${esc(t.title)}</td>
       <td>${t.position_category ? `<span class="badge bg-light text-dark">${esc(t.position_category)}</span>` : ''}</td>
@@ -2939,6 +3026,15 @@ async function renderTargets() {
       <td class="text-nowrap">${actions}</td>
     </tr>`;
   }).join('') : emptyRow(canInvite ? 12 : 10);
+}
+// 訓練メールが届かなかった記録(段B1)。続けて届かない宛先は警告の色にする。対象者は自動では消さない
+function undeliverableBadge(t) {
+  const n = Number(t.undeliverable_count) || 0;
+  if (!n) return '';
+  const last = t.last_undeliverable_at ? `（最後: ${String(t.last_undeliverable_at).slice(0, 10)}）` : '';
+  return t.delivery_warning
+    ? ` <span class="badge bg-warning text-dark" data-undeliverable="warn" title="訓練メールが続けて届いていません${esc(last)}。アドレスの誤りや退職を確かめてください（自動では消しません）">続けて届かない ${n}回</span>`
+    : ` <span class="badge bg-light text-dark border" data-undeliverable="1" title="訓練メールが届かなかった回数${esc(last)}">届かない ${n}回</span>`;
 }
 // 受講者のマイページの状態(対象者の一覧の列)と、1件の招待・アカウントの削除のボタン
 function myPageStatus(l, t, archived) {

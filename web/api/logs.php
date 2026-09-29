@@ -53,7 +53,7 @@ function logs_handle_events(int $tenantId): never
 {
     [$limit, $offset] = logs_paging();
     $cid = logs_campaign_filter($tenantId);
-    $where = 'e.tenant_id = ?';
+    $where = "e.tenant_id = ? AND e.verdict = 'user'";
     $params = [$tenantId];
     if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
     if (isset($_GET['event_type']) && $_GET['event_type'] !== '') {
@@ -81,7 +81,7 @@ function logs_handle_replies(int $tenantId): never
 {
     [$limit, $offset] = logs_paging();
     $cid = logs_campaign_filter($tenantId);
-    $where = "e.tenant_id = ? AND e.event_type = 'reply'";
+    $where = "e.tenant_id = ? AND e.event_type = 'reply' AND e.verdict = 'user'";
     $params = [$tenantId];
     if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
     // 返信者は対象者情報(氏名/メール)を突き合わせて出す。tracking_id → campaign_targets → targets。
@@ -286,7 +286,7 @@ function logs_handle_training_results(int $tenantId): never
          INNER JOIN targets t   ON t.id = ct.target_id
          LEFT JOIN events e
                 ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
-               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth')
+               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth') AND e.verdict = 'user'
          WHERE {$where}
          GROUP BY ct.id
          ORDER BY ct.campaign_id DESC, ct.koban",
@@ -327,7 +327,7 @@ function logs_handle_training_results_csv(int $tenantId): never
          INNER JOIN campaigns c ON c.id = ct.campaign_id
          INNER JOIN targets t   ON t.id = ct.target_id
          LEFT JOIN events e ON e.tracking_id = ct.tracking_id AND e.campaign_id = ct.campaign_id
-               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth')
+               AND e.tenant_id = ? AND e.event_type IN ('open','click','auth') AND e.verdict = 'user'
          WHERE {$where}
          GROUP BY ct.id
          ORDER BY ct.campaign_id DESC, ct.koban",
@@ -1104,7 +1104,7 @@ function logs_handle_delivery_xlsx(int $tenantId): never
 function logs_handle_events_xlsx(int $tenantId): never
 {
     $cid = logs_campaign_filter($tenantId);
-    $where = 'e.tenant_id = ?';
+    $where = "e.tenant_id = ? AND e.verdict = 'user'";
     $params = [$tenantId];
     if ($cid !== null) { $where .= ' AND e.campaign_id = ?'; $params[] = $cid; }
     $rows = Db::all(

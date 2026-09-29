@@ -30,6 +30,7 @@ final class MigrationRunner
         '20261015-admin-mfa',
         '20261020-edu-delivery-options',
         '20261021-training-report-options',
+        '20261025-measurement-b1',
     ];
 
     /**
@@ -265,6 +266,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-suspicious-mail-rules.sql'));
             return;
         }
+        if ($version === '20261025-measurement-b1') {
+            // 測定の正しさ(段B1)。行動の判定(利用者か装置か)、宛先の送達の状態、返信の取込の記録。列と表を足すだけ。
+            // 既存の events は verdict='user'(今と同じく数える)、宛先は delivery_state NULL(率の分母は今のまま)。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-measurement.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -488,7 +496,19 @@ final class MigrationRunner
             ],
             'templates' => ['scenario_key' => 'TEXT', 'description' => 'TEXT'],
             'tenant_security_policies' => ['banned_words' => 'TEXT DEFAULT NULL'],
-            'campaign_targets' => ['content_no' => 'INTEGER'],
+            'campaign_targets' => [
+                'content_no' => 'INTEGER',
+                'delivery_state' => "TEXT DEFAULT NULL CHECK (delivery_state IS NULL OR delivery_state IN ('delivered','undeliverable'))",
+                'delivery_state_at' => 'TEXT',
+                'delivery_detail' => 'TEXT',
+            ],
+            'events' => [
+                'verdict' => "TEXT NOT NULL DEFAULT 'user' CHECK (verdict IN ('user','scanner'))",
+                'verdict_reason' => 'TEXT',
+                'verdict_source' => "TEXT NOT NULL DEFAULT 'auto'",
+                'verdict_by' => 'INTEGER',
+                'verdict_at' => 'TEXT',
+            ],
             'campaign_contents' => [
                 'suppress_prefill_email' => 'INTEGER NOT NULL DEFAULT 0',
                 'attachment_filename' => 'TEXT',

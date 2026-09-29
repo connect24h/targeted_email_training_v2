@@ -77,6 +77,27 @@ sudo systemctl enable --now tet2-edu-scheduler.timer
 配信ごとの受講の設定（選択肢の並べ替え、テスト中の教材、期限後の受講、テストからの受け直し）と社内の問い合わせ先を含む配備では、`20261020-edu-delivery-options` migrationを**コードより先に**適用する。`edu_deliveries`へ4列（既定0。既存の配信は今と同じ動き）、`edu_attempts.test_started_at`、`tenants.edu_contact`を足すだけ。新しい`edu_take.php`はこれらの列を毎回読むため、migration前にコードを配備すると受講が500になる。教育レポートの概要と推移（段0）はmigrationなしで変わる（テスト用と削除済みの対象者を除き、推移は`edu_responses`から月ごとに集計）。
 - セッションのクッキーは`TET2MYSESID`（path `/`）で、管理画面の`TET2SESID`とは別。
 
+### 測定の正しさ（段B1、G01・G57・G04・G26）
+
+`20261025-measurement-b1` migrationを**コードより先に**適用する。`events`へ判定の列（`verdict`・`verdict_reason`・`verdict_source`・`verdict_by`・`verdict_at`）、`campaign_targets`へ送達の列（`delivery_state`・`delivery_state_at`・`delivery_detail`）を足し、返信の取込の台帳`reply_mails`を作るだけ。既存の行動は`verdict='user'`（今と同じく数える）、既存の宛先は`delivery_state` NULL（率の分母は今のまま）になる。新しいコードはどの集計も`verdict='user'`で絞るので、migration前にコードを配備するとレポートとログのAPIが500になる。
+
+- 装置のクリック: `EventIngest`（report-ingest の5分のtimer）は、User-Agentで装置と判断したクリックを捨てずに`verdict='scanner'`で残す。集計には入らないので数字は変わらない。配備後の最初の取込で、access.log と access.log.1 に残っている過去の装置の行も scanner として入る（集計は変わらない）。
+- 行動履歴のタブと判定の修正: `api/report.php?action=actions|people|set_verdict`。直すのはオペレータ以上で、監査ログ`report.event_verdict`に残る。
+- 届かない宛先と返信の取込: `web/db/delivery_ingest.php`（冪等）。postfix の mail.log（と .1）の`status=bounced|expired|sent`、訓練の送信元の Maildir の返信と戻りメール（DSN）を読み、宛先の`delivery_state`と`events`の`reply`を書く。送信の処理（`bin/send_email.py`、v1と共用）は変えない。宛先は送信の処理が付ける Message-ID `<t{tracking_id}.…>`（2026-09-05 から）で決める。これより前の送信は、宛先・送った時刻（1日以内）・送信元（qmgr の from=）が合う宛先が1件だけの時に限って結ぶ。
+- 届かない宛先は訓練の率の分母（対象数と送信済み）から外し、レポートの概要と利用者ごと、対象者の一覧（2回以上続けて届かない宛先は警告）に出す。対象者は自動では消さない。
+
+timerは既存の report-ingest に相乗りせず、`deploy/systemd/tet2-delivery-ingest.{service,timer}`（5分ごと、`*:2/5`）を別に用意した。理由: 有効化を report-ingest と別に承認・停止できる、失敗しても反応の取込を止めない、読む物（mail.log、送信元の Maildir）が違う。権限は report-ingest と同じく`User=training`と`SupplementaryGroups=adm vmail`で足りる（mail.log は`syslog:adm 640`、送信元の Maildir のメールは maildir-perms の timer が`640`・グループ vmail にそろえる）。配備では有効にならない。**有効化は利用者の承認が要る**（メールは送らないが、本番の DB に書く）。
+
+```bash
+# 本番のコピーで結果を確かめる(mail.log は読むだけ)
+TET2_DB_PATH=/abs/path/tet2-copy.sqlite php web/db/delivery_ingest.php
+# 承認後だけ
+sudo systemctl daemon-reload
+sudo systemctl enable --now tet2-delivery-ingest.timer
+```
+
+限界: Message-ID が tracking を持たない送信（2026-09-05 より前、v1）の返信は突き合わせない。mail.log は週ごとにローテートされ、読むのは今と1つ前のファイルだけなので、それより古い不達は取り込めない。相手のサーバーが一度受け取った後に戻す不達は、戻りメールが送信元の Maildir に届いた時だけ分かる。
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```

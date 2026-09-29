@@ -188,7 +188,7 @@ final class EduAutoEnroll
                 INNER JOIN campaigns c ON c.id = e.campaign_id AND c.tenant_id = e.tenant_id AND c.deleted_at IS NULL
                 INNER JOIN campaign_targets ct ON ct.tracking_id = e.tracking_id
                 INNER JOIN targets t ON t.id = ct.target_id
-                WHERE e.tenant_id = ? AND e.event_type IN ('auth','click')
+                WHERE e.tenant_id = ? AND e.event_type IN ('auth','click') AND e.verdict = 'user'
                   AND t.tenant_id = ? AND t.status = 'active' AND t.is_test = 0
                   AND e.occurred_at >= (SELECT created_at FROM edu_deliveries WHERE id = ?)";
         $params = [$tenantId, $tenantId, $deliveryId];
