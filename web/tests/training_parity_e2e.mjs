@@ -41,6 +41,12 @@ const openView = async (page, view) => {
   await page.locator(`[data-panel="${view}"]:not(.d-none)`).waitFor();
 };
 const closeModal = async (page) => {
+  // 開く途中(フェードイン中)に閉じる操作をすると Bootstrap が無視するので、開き切るのを待ってから閉じる
+  await page.waitForFunction(() => {
+    const el = document.getElementById('appModal');
+    const m = el && window.bootstrap?.Modal.getInstance(el);
+    return !!m && el.classList.contains('show') && !m._isTransitioning;
+  });
   await page.locator('#appModal .modal-footer [data-bs-dismiss="modal"]').click();
   await page.locator('#appModal').waitFor({ state: 'hidden' });
 };
