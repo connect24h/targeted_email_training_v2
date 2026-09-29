@@ -115,6 +115,29 @@ header('Cache-Control: no-store');
     questions.forEach((q, i) => $('q' + i).classList.toggle('d-none', !isVisible(i)));
   }
 
+  // 「その他（自由記述）」: 選択肢の最後に足し(値は選択肢の数)、選んだ時だけ記述の欄を出す
+  const OTHER_LABEL = 'その他（自由記述）';
+  function renderOther(wrap, q, i) {
+    const oi = q.options.length;
+    const row = el('div', { class: 'form-check' });
+    const input = el('input', {
+      class: 'form-check-input', id: 'q' + i + '_' + oi, name: 'q' + i, value: String(oi),
+      type: q.question_type === 'single' ? 'radio' : 'checkbox',
+    });
+    row.appendChild(input);
+    row.appendChild(el('label', { class: 'form-check-label', for: 'q' + i + '_' + oi }, OTHER_LABEL));
+    wrap.appendChild(row);
+    const text = el('input', { type: 'text', id: 'q' + i + '_other', class: 'form-control form-control-sm mt-1 d-none',
+      maxlength: '500', 'aria-label': q.title + '（その他の内容）', placeholder: 'その他の内容' });
+    wrap.appendChild(text);
+    wrap.addEventListener('change', () => text.classList.toggle('d-none', !input.checked));
+    input.addEventListener('change', refreshVisibility);
+  }
+
+  function otherChosen(q, index) {
+    return Boolean(q.allow_other) && currentValue(q, index).includes(q.options.length);
+  }
+
   function render(data) {
     questions = data.questions;
     $('svTitle').textContent = data.survey.title;
@@ -151,6 +174,7 @@ header('Cache-Control: no-store');
           row.appendChild(el('label', { class: 'form-check-label', for: 'q' + i + '_' + oi }, label));
           wrap.appendChild(row);
         });
+        if (q.allow_other) renderOther(wrap, q, i);
       }
       box.appendChild(wrap);
     });
@@ -173,6 +197,7 @@ header('Cache-Control: no-store');
   async function submit(event) {
     event.preventDefault();
     const answers = {};
+    const others = {};
     let firstInvalid = null;
     questions.forEach((q, i) => {
       const node = $('q' + i);
@@ -186,9 +211,18 @@ header('Cache-Control: no-store');
         return;
       }
       if (!empty) answers[q.id] = q.question_type === 'single' ? value[0] : value;
+      if (otherChosen(q, i)) {
+        const text = $('q' + i + '_other').value.trim();
+        if (text === '') {
+          node.classList.add('is-invalid');
+          firstInvalid = firstInvalid || node;
+          return;
+        }
+        others[q.id] = text;
+      }
     });
     if (firstInvalid) {
-      $('svError').textContent = '必須の設問に回答してください。';
+      $('svError').textContent = '必須の設問と、選んだ「その他」の内容を入力してください。';
       $('svError').classList.remove('d-none');
       firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
@@ -199,7 +233,7 @@ header('Cache-Control: no-store');
     try {
       const res = await fetch(API + '?action=submit', {
         method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: TOKEN, answers: answers }),
+        body: JSON.stringify({ token: TOKEN, answers: answers, others: others }),
       });
       const data = await res.json();
       if (!data.success) {

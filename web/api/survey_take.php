@@ -3,7 +3,8 @@
  * アンケート回答者向け 公開 API(認証不要・access_token 方式)。受講の edu_take.php と同じ流儀。
  *
  *   GET  survey_take.php?action=start&token=...   設問を返す
- *   POST survey_take.php?action=submit            {"token":..., "answers":{question_id: 値}} を保存する
+ *   POST survey_take.php?action=submit            {"token":..., "answers":{question_id: 値}, "others":{question_id: 記述}} を保存する
+ *        (others は「その他（自由記述）」を選んだ設問だけ。選択の値は「その他」の index = 選択肢の数)
  *
  * token は survey_assignments.access_token(32桁 hex)。URL に id を出さず、token から配信と対象者を確定する。
  * 回答済み・期限切れ・終了した配信は拒否する。検証と保存は SurveyService に集約する。
@@ -46,11 +47,13 @@ function stake_submit(array $body): array
 {
     $token = isset($body['token']) && is_string($body['token']) ? trim($body['token']) : '';
     $answers = $body['answers'] ?? null;
-    if (!is_array($answers)) {
+    // others: 「その他（自由記述）」を選んだ設問の記述(question_id => 文字列)。なくてもよい
+    $others = $body['others'] ?? [];
+    if (!is_array($answers) || !is_array($others)) {
         return [400, ['success' => false, 'error' => '回答の形式が正しくありません']];
     }
     try {
-        SurveyService::submitByToken($token, $answers);
+        SurveyService::submitByToken($token, $answers, $others);
         return [200, ['success' => true]];
     } catch (SurveyException $e) {
         return [$e->httpCode, ['success' => false, 'error' => $e->getMessage()]];

@@ -124,7 +124,10 @@ function svRenderQuestions(readOnly) {
         <div class="col-12"><label class="form-label small mb-0">設問文</label>
           <textarea class="form-control form-control-sm" rows="2" data-q-field="title" data-q-index="${i}" maxlength="500"${dis}>${esc(q.title)}</textarea></div>
         ${q.question_type === 'text' ? '' : `<div class="col-12"><label class="form-label small mb-0">選択肢（1行に1つ、2〜20個）</label>
-          <textarea class="form-control form-control-sm" rows="3" data-q-field="options" data-q-index="${i}"${dis}>${esc(q.options.join('\n'))}</textarea></div>`}
+          <textarea class="form-control form-control-sm" rows="3" data-q-field="options" data-q-index="${i}"${dis}>${esc(q.options.join('\n'))}</textarea></div>
+        <div class="col-12"><div class="form-check">
+          <input class="form-check-input" type="checkbox" id="svOther${i}" data-q-field="allow_other" data-q-index="${i}"${q.allow_other ? ' checked' : ''}${dis}>
+          <label class="form-check-label small" for="svOther${i}">選択肢の最後に「その他（自由記述）」を足す（選んだ人に内容を書いてもらいます）</label></div></div>`}
         <div class="col-12"><label class="form-label small mb-0">表示条件</label>
           <select class="form-select form-select-sm" data-q-field="show_if" data-q-index="${i}"${dis}>${conditionOptions.join('')}</select></div>
       </div></div>`;
@@ -159,9 +162,10 @@ function svBindEditor() {
     if (!field) return;
     const q = SvEditor.questions[Number(e.target.dataset.qIndex)];
     if (field === 'is_required') q.is_required = e.target.checked;
+    if (field === 'allow_other') q.allow_other = e.target.checked;
     if (field === 'question_type') {
       q.question_type = e.target.value;
-      if (q.question_type === 'text') q.options = [];
+      if (q.question_type === 'text') { q.options = []; q.allow_other = false; }
       else if (q.options.length < 2) q.options = ['選択肢1', '選択肢2'];
     }
     if (field === 'options') q.options = e.target.value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -206,7 +210,7 @@ function svOpenEditor(survey, readOnly = false) {
   SvEditor.questions = (survey?.questions || []).map((q) => ({
     section: q.section || '', question_type: q.question_type, title: q.title,
     options: [...(q.options || [])], is_required: Boolean(q.is_required),
-    show_if: q.show_if ? { ...q.show_if } : null,
+    show_if: q.show_if ? { ...q.show_if } : null, allow_other: Boolean(q.allow_other),
   }));
   const dis = readOnly ? ' disabled' : '';
   const body = `
@@ -238,7 +242,7 @@ function svOpenEditor(survey, readOnly = false) {
   if (!readOnly) {
     svBindEditor();
     $('#svAddQuestion').addEventListener('click', () => {
-      SvEditor.questions.push({ section: '', question_type: 'single', title: '', options: ['選択肢1', '選択肢2'], is_required: false, show_if: null });
+      SvEditor.questions.push({ section: '', question_type: 'single', title: '', options: ['選択肢1', '選択肢2'], is_required: false, show_if: null, allow_other: false });
       svRenderQuestions(false);
     });
   }
@@ -300,6 +304,10 @@ async function svResults(deliveryId) {
         return `<div class="small d-flex justify-content-between"><span>${esc(label)}</span><span>${n}件（${pct}%）</span></div>
           <div class="progress mb-1" style="height:8px" role="img" aria-label="${esc(label)} ${pct}%"><div class="progress-bar" style="width:${pct}%"></div></div>`;
       }).join('');
+      // 「その他（自由記述）」の内容
+      if (q.allow_other && (q.other_texts || []).length) {
+        inner += `<div class="small text-muted mt-1">その他の内容</div><ul class="small mb-0">${q.other_texts.map((t) => `<li style="white-space:pre-wrap">${esc(t)}</li>`).join('')}</ul>`;
+      }
     }
     return `<div class="mb-3"><div class="fw-bold small mb-1">${i + 1}. ${esc(q.title)}
       <span class="text-muted fw-normal">（${SV_TYPE_LABEL[q.question_type]}、回答 ${Number(q.answered)}件）</span></div>${inner}</div>`;
