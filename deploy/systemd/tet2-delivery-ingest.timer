@@ -1,0 +1,12 @@
+[Unit]
+Description=TET v2 Delivery Ingest timer (every 5 minutes)
+# 配備だけでは有効にならない。有効化(systemctl enable --now)は利用者の承認を得てから別に行う。
+
+[Timer]
+# 5分毎。report-ingest と maildir-perms(0 分起点)と重ならないよう 2 分ずらす。
+# OnBootSec/OnUnitActiveSec ではなく OnCalendar を使う(稼働中に enable すると NEXT が出ないことがあるため)。
+OnCalendar=*:2/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
