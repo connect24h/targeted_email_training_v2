@@ -51,6 +51,7 @@ final class TenantPurge
         ['edu_delivery_questions', 'delivery_id IN (SELECT id FROM edu_deliveries WHERE tenant_id = ?)'],
         ['edu_delivery_targets', 'delivery_id IN (SELECT id FROM edu_deliveries WHERE tenant_id = ?)'],
         ['edu_score_snapshots', 'tenant_id = ?'],
+        ['edu_auto_enroll_runs', 'tenant_id = ?'],
         ['edu_deliveries', 'tenant_id = ?'],
         ['edu_delivery_series', 'tenant_id = ?'],
         ['edu_questions', 'tenant_id = ?'],
