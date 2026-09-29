@@ -34,6 +34,7 @@ final class MigrationRunner
         '20261027-ops-b2a',
         '20261028-ops-b2b',
         '20261102-notification-templates',
+        '20261106-sending-db',
     ];
 
     /**
@@ -297,6 +298,13 @@ final class MigrationRunner
             $pdo->exec($this->readSchema('schema-notification-templates.sql'));
             return;
         }
+        if ($version === '20261106-sending-db') {
+            // 段D の D4〜D6(報告者への返信、受講期間の終了時の集計通知、訓練後のアンケートの自動配信)と、
+            // アンケートの「その他（自由記述）」。列と表を足すだけ。設定の行は作らないので、どの送信も既定で切のまま。
+            $this->ensureAdditiveColumns($pdo);
+            $pdo->exec($this->readSchema('schema-sending-db.sql'));
+            return;
+        }
         if ($version === '20260819-attachment-filename-prefix') {
             // campaigns / campaign_contents に添付ファイル名の接頭辞列を冪等追加。
             $this->ensureAdditiveColumns($pdo);
@@ -558,6 +566,8 @@ final class MigrationRunner
                 'memo' => 'TEXT DEFAULT NULL',
             ],
             'templates' => ['scenario_key' => 'TEXT', 'description' => 'TEXT'],
+            'survey_questions' => ['allow_other' => 'INTEGER NOT NULL DEFAULT 0'],
+            'survey_answers' => ['other_text' => 'TEXT'],
             'tenant_security_policies' => ['banned_words' => 'TEXT DEFAULT NULL'],
             'campaign_targets' => [
                 'content_no' => 'INTEGER',
