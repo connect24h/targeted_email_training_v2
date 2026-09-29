@@ -207,6 +207,42 @@ function targets_attach_groups(array $targets, int $tenantId): array
     return $targets;
 }
 
+/**
+ * 届かない宛先の記録(段B1、G04)を対象者の一覧に付ける。
+ * undeliverable_count = 訓練メールが届かなかった回数。delivery_warning = 2回以上届かず、その後に届いた記録がない
+ * (続けて届かない。アドレスの誤りや退職の見落としの疑い)。対象者は自動では消さない。
+ * テストの訓練は宛先をテスト用に振り替えて送るので、対象者のアドレスの記録には数えない。
+ */
+function targets_attach_delivery(array $targets, int $tenantId): array
+{
+    $stats = [];
+    foreach (Db::all(
+        "SELECT ct.target_id,
+                SUM(CASE WHEN ct.delivery_state = 'undeliverable' THEN 1 ELSE 0 END) AS undeliverable_count,
+                MAX(CASE WHEN ct.delivery_state = 'undeliverable' THEN COALESCE(ct.sent_at, ct.delivery_state_at) END) AS last_undeliverable_at,
+                MAX(CASE WHEN ct.delivery_state = 'delivered' THEN COALESCE(ct.sent_at, ct.delivery_state_at) END) AS last_delivered_at
+         FROM campaign_targets ct
+         INNER JOIN campaigns c ON c.id = ct.campaign_id AND c.tenant_id = ?
+         INNER JOIN targets t ON t.id = ct.target_id AND t.tenant_id = c.tenant_id
+         WHERE ct.delivery_state IS NOT NULL AND c.deleted_at IS NULL
+           AND c.is_test = 0
+         GROUP BY ct.target_id",
+        [$tenantId]
+    ) as $row) {
+        $stats[(int) $row['target_id']] = $row;
+    }
+    foreach ($targets as &$target) {
+        $row = $stats[(int) $target['id']] ?? null;
+        $count = (int) ($row['undeliverable_count'] ?? 0);
+        $target['undeliverable_count'] = $count;
+        $target['last_undeliverable_at'] = $row['last_undeliverable_at'] ?? null;
+        $target['delivery_warning'] = $count >= 2
+            && ($row['last_delivered_at'] === null || $row['last_delivered_at'] < $row['last_undeliverable_at']);
+    }
+    unset($target);
+    return $targets;
+}
+
 function targets_handle_list(array $actor): never
 {
     $tenantId = effective_tenant_id($actor, targets_query_int('tenant_id'));
@@ -226,7 +262,7 @@ function targets_handle_list(array $actor): never
              ORDER BY t.tenant_no',
             [$tenantId, $tenantId, $groupId, $q, $q, $q]
         );
-        json_out(['success' => true, 'targets' => targets_attach_groups($targets, $tenantId)]);
+        json_out(['success' => true, 'targets' => targets_attach_delivery(targets_attach_groups($targets, $tenantId), $tenantId)]);
     }
 
     // 非グループ経路は別名 t を使わないので status 条件を素の列名で組む。
@@ -238,7 +274,7 @@ function targets_handle_list(array $actor): never
          ORDER BY tenant_no',
         [$tenantId, $q, $q, $q]
     );
-    json_out(['success' => true, 'targets' => targets_attach_groups($targets, $tenantId)]);
+    json_out(['success' => true, 'targets' => targets_attach_delivery(targets_attach_groups($targets, $tenantId), $tenantId)]);
 }
 
 function targets_handle_get(array $actor): never

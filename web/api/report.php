@@ -46,10 +46,15 @@ function report_rate(int $count, int $targetCount): float
  * (click と auth の両方がある人も1)。防衛失敗率と報告率の分母は対象数(target_count、テストの対象者を除く)。
  *
  * 配信エラー = 送信できなかった宛先。campaign_targets.send_status が failed か deferred、
- * または送信済みになっていない宛先に delivery_log の failed か deferred の記録があるもの。
- * いまのワーカーは成功(sent)だけを DB に書くので、多くの訓練では 0 になる(送信後のバウンスは取り込んでいない)。
+ * または送信済みになっていない宛先に delivery_log の failed か deferred の記録があるもの、
+ * または送った後に届かないと分かった宛先(delivery_state='undeliverable'。mail.log と戻りメールから取り込む、段B1)。
+ *
+ * 届かない宛先は訓練メールを受け取っていないので、対象数(率の分母)と送信済みの数から外す(対象者は自動では消さない)。
+ * 外した人数は undeliverable_count で出す。
  */
 const REPORT_FAILURE_EVENTS_SQL = "('click', 'auth')";
+/** 率の分母に入れる宛先か(campaign_targets の別名 ct に対する条件)。届かない宛先を外す。 */
+const REPORT_DELIVERABLE_SQL = "COALESCE(ct.delivery_state, '') <> 'undeliverable'";
 
 function report_summary_from_counts(array $row): array
 {
@@ -75,13 +80,14 @@ function report_summary_from_counts(array $row): array
         'failure_count' => $failureCount,
         'failure_rate' => report_rate($failureCount, $targetCount),
         'delivery_error_count' => (int) ($row['delivery_error_count'] ?? 0),
+        'undeliverable_count' => (int) ($row['undeliverable_count'] ?? 0),
     ];
 }
 
 /** 配信エラーの宛先か(campaign_targets の別名 ct に対する条件)。定義は report_summary_from_counts の注記。 */
 function report_delivery_error_sql(): string
 {
-    return "(ct.send_status IN ('failed', 'deferred')
+    return "(ct.send_status IN ('failed', 'deferred') OR ct.delivery_state = 'undeliverable'
              OR (ct.send_status <> 'sent' AND EXISTS (SELECT 1 FROM delivery_log dl
                  WHERE dl.campaign_id = ct.campaign_id AND dl.tracking_id = ct.tracking_id AND dl.result IN ('failed', 'deferred'))))";
 }
@@ -109,12 +115,12 @@ function report_summary_row(int $campaignId, int $tenantId): array
              FROM campaign_targets ct
              INNER JOIN campaigns c ON c.id = ct.campaign_id
              INNER JOIN targets t ON t.id = ct.target_id
-             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0) AS target_count,
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0 AND " . REPORT_DELIVERABLE_SQL . ") AS target_count,
             (SELECT COUNT(*)
              FROM campaign_targets ct
              INNER JOIN campaigns c ON c.id = ct.campaign_id
              INNER JOIN targets t ON t.id = ct.target_id
-             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND ct.send_status = 'sent' AND t.is_test = 0) AS sent_count,
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND ct.send_status = 'sent' AND t.is_test = 0 AND " . REPORT_DELIVERABLE_SQL . ") AS sent_count,
             (SELECT COUNT(DISTINCT e.tracking_id)
              FROM events e
              WHERE e.tenant_id = ? AND e.campaign_id = ? AND e.verdict = 'user' AND e.event_type = 'open'
@@ -149,9 +155,14 @@ function report_summary_row(int $campaignId, int $tenantId): array
              FROM campaign_targets ct
              INNER JOIN campaigns c ON c.id = ct.campaign_id
              INNER JOIN targets t ON t.id = ct.target_id
-             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0 AND " . report_delivery_error_sql() . ") AS delivery_error_count",
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0 AND " . report_delivery_error_sql() . ") AS delivery_error_count,
+            (SELECT COUNT(*)
+             FROM campaign_targets ct
+             INNER JOIN campaigns c ON c.id = ct.campaign_id
+             INNER JOIN targets t ON t.id = ct.target_id
+             WHERE c.tenant_id = ? AND ct.campaign_id = ? AND t.is_test = 0 AND ct.delivery_state = 'undeliverable') AS undeliverable_count",
         [$tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId,
-         $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId]
+         $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId, $tenantId, $campaignId]
     ) ?? [];
 }
 
@@ -227,14 +238,16 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
                 COALESCE(ev.auth_count, 0) AS auth_count,
                 COALESCE(ev.report_count, 0) AS report_count,
                 COALESCE(ev.failure_count, 0) AS failure_count,
-                COALESCE(ct.delivery_error_count, 0) AS delivery_error_count
+                COALESCE(ct.delivery_error_count, 0) AS delivery_error_count,
+                COALESCE(ct.undeliverable_count, 0) AS undeliverable_count
          FROM campaigns c
          LEFT JOIN campaign_report_snapshots rs ON rs.campaign_id=c.id AND rs.tenant_id=c.tenant_id AND c.closed_at IS NOT NULL
          LEFT JOIN (
              SELECT ct.campaign_id,
-                    COUNT(*) AS target_count,
-                    SUM(CASE WHEN ct.send_status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
-                    SUM(CASE WHEN " . report_delivery_error_sql() . " THEN 1 ELSE 0 END) AS delivery_error_count
+                    SUM(CASE WHEN " . REPORT_DELIVERABLE_SQL . " THEN 1 ELSE 0 END) AS target_count,
+                    SUM(CASE WHEN ct.send_status = 'sent' AND " . REPORT_DELIVERABLE_SQL . " THEN 1 ELSE 0 END) AS sent_count,
+                    SUM(CASE WHEN " . report_delivery_error_sql() . " THEN 1 ELSE 0 END) AS delivery_error_count,
+                    SUM(CASE WHEN ct.delivery_state = 'undeliverable' THEN 1 ELSE 0 END) AS undeliverable_count
              FROM campaign_targets ct
              INNER JOIN campaigns c2 ON c2.id = ct.campaign_id
              INNER JOIN targets t2 ON t2.id = ct.target_id
@@ -349,7 +362,7 @@ function report_detail_axis(int $campaignId, int $tenantId, string $axisSelect, 
     // campaign_targets を左、events を tracking_id で結合。event_type ごとに DISTINCT 集計。
     $sql =
         "SELECT {$axisSelect} AS axis_key,
-                COUNT(DISTINCT ct.id) AS cnt,
+                COUNT(DISTINCT CASE WHEN " . REPORT_DELIVERABLE_SQL . " THEN ct.id END) AS cnt,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.tracking_id END) AS link_clicked,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'open'  THEN e.tracking_id END) AS beacon_opened,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'auth'  THEN e.tracking_id END) AS auth_count,
@@ -667,7 +680,7 @@ function report_handle_individuals(): never
 
     $rows = Db::all(
         "SELECT t.id, t.email, t.name, t.company, t.department, t.position_category, t.status, t.is_test,
-                COUNT(DISTINCT ct.campaign_id) AS campaigns,
+                COUNT(DISTINCT CASE WHEN " . REPORT_DELIVERABLE_SQL . " THEN ct.campaign_id END) AS campaigns,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'open'  THEN e.campaign_id END) AS opens,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'click' THEN e.campaign_id END) AS clicks,
                 COUNT(DISTINCT CASE WHEN e.event_type = 'auth'  THEN e.campaign_id END) AS auths

@@ -2662,7 +2662,8 @@ function renderReportOverviewKpis(s) {
   el.replaceChildren(
     item('報告率', `${pct(s.report_rate)}（${Number(s.report_count) || 0}人）`, REPORT_RATE_TITLE),
     item('防衛失敗率', `${pct(s.failure_rate)}（${Number(s.failure_count) || 0}人）`, FAILURE_RATE_TITLE),
-    item('配信エラー', `${Number(s.delivery_error_count) || 0}人`, '送信できなかった宛先の人数（送信の失敗・保留の記録がある宛先。送信後のバウンスは含みません）'),
+    item('配信エラー', `${Number(s.delivery_error_count) || 0}人`, '送信できなかった宛先と、送った後に届かないと分かった宛先の人数'),
+    item('届かない宛先', `${Number(s.undeliverable_count) || 0}人`, '相手のサーバーから届かないと返された宛先の人数。率の分母（対象数）から外しています'),
   );
 }
 // P7: v1同等の詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン)
@@ -3015,7 +3016,7 @@ async function renderTargets() {
     <tr${archived ? ' class="text-muted table-light"' : ''}>
       ${selectCell}
       <td>${i + 1}</td>
-      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}</td>
+      <td>${esc(t.email)}${Number(t.is_test) ? ' <span class="badge bg-info">TEST</span>' : ''}${archived ? ' <span class="badge bg-secondary">削除済</span>' : ''}${undeliverableBadge(t)}</td>
       <td>${esc(t.name)}</td>
       <td>${esc(t.company)}</td><td>${esc(t.department)}</td><td>${esc(t.title)}</td>
       <td>${t.position_category ? `<span class="badge bg-light text-dark">${esc(t.position_category)}</span>` : ''}</td>
@@ -3025,6 +3026,15 @@ async function renderTargets() {
       <td class="text-nowrap">${actions}</td>
     </tr>`;
   }).join('') : emptyRow(canInvite ? 12 : 10);
+}
+// 訓練メールが届かなかった記録(段B1)。続けて届かない宛先は警告の色にする。対象者は自動では消さない
+function undeliverableBadge(t) {
+  const n = Number(t.undeliverable_count) || 0;
+  if (!n) return '';
+  const last = t.last_undeliverable_at ? `（最後: ${String(t.last_undeliverable_at).slice(0, 10)}）` : '';
+  return t.delivery_warning
+    ? ` <span class="badge bg-warning text-dark" data-undeliverable="warn" title="訓練メールが続けて届いていません${esc(last)}。アドレスの誤りや退職を確かめてください（自動では消しません）">続けて届かない ${n}回</span>`
+    : ` <span class="badge bg-light text-dark border" data-undeliverable="1" title="訓練メールが届かなかった回数${esc(last)}">届かない ${n}回</span>`;
 }
 // 受講者のマイページの状態(対象者の一覧の列)と、1件の招待・アカウントの削除のボタン
 function myPageStatus(l, t, archived) {
