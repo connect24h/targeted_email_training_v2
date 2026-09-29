@@ -132,6 +132,13 @@ header('Cache-Control: no-store');
           <thead><tr><th>提出日時</th><th>配信</th><th>正答率</th></tr></thead><tbody id="trendBody"></tbody>
         </table></div>
       </div>
+      <div class="card-t p-3 mb-3 d-none" id="tagCard">
+        <h2 class="h6 mb-2">分野ごとの正答率</h2>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+          <thead><tr><th>分野</th><th>解答</th><th>正答率</th></tr></thead><tbody id="tagBody"></tbody>
+        </table></div>
+        <p class="small text-muted mt-2 mb-0">自分の解答（配信ごとの最新の提出）のうち、正解の割合です。</p>
+      </div>
       <div id="gradeList"></div>
     </section>
 
@@ -309,6 +316,10 @@ header('Cache-Control: no-store');
     $('trendBody').innerHTML = trend.map((p) => `<tr><td class="text-nowrap small">${esc(dt(p.completed_at))}</td>
       <td class="small">${esc(p.title)}${p.attempt_no > 1 ? `（${p.attempt_no}回目）` : ''}</td>
       <td style="min-width:140px"><div class="d-flex align-items-center gap-2"><div class="trend-bar flex-grow-1" role="img" aria-label="正答率 ${p.percentage}%"><div style="width:${Math.max(0, Math.min(100, p.percentage))}%"></div></div><span class="small">${p.percentage}%</span></div></td></tr>`).join('');
+    const tags = data.by_tag || [];
+    $('tagCard').classList.toggle('d-none', !tags.length);
+    $('tagBody').innerHTML = tags.map((t) => `<tr><td class="small">${esc(t.name)}</td><td class="small text-nowrap">${Number(t.correct)}/${Number(t.answered)}</td>
+      <td style="min-width:140px"><div class="d-flex align-items-center gap-2"><div class="trend-bar flex-grow-1" role="img" aria-label="正答率 ${Number(t.correct_rate)}%"><div style="width:${Math.max(0, Math.min(100, Number(t.correct_rate)))}%"></div></div><span class="small">${Number(t.correct_rate)}%</span></div></td></tr>`).join('');
     if (!data.deliveries.length) { box.innerHTML = `<div class="card-t">${empty('まだ教育の配信はありません。')}</div>`; return; }
     box.innerHTML = data.deliveries.map((g) => {
       const typeLabel = g.delivery_type === 'awareness_quiz' ? 'アウェアネス' : '教育';

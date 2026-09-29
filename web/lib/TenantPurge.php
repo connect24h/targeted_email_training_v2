@@ -56,7 +56,11 @@ final class TenantPurge
         ['edu_auto_enroll_runs', 'tenant_id = ?'],
         ['edu_deliveries', 'tenant_id = ?'],
         ['edu_delivery_series', 'tenant_id = ?'],
+        // 分野のタグ(C1)。設問とタグの結び付けは、このテナントの設問か、このテナントのタグの分を消す。
+        // 共有のタグの下のこのテナントの子のタグも tenant_id で消える(共有のタグ自体は残す)
+        ['edu_question_tags', 'question_id IN (SELECT id FROM edu_questions WHERE tenant_id = ?) OR tag_id IN (SELECT id FROM edu_tags WHERE tenant_id = ?)'],
         ['edu_questions', 'tenant_id = ?'],
+        ['edu_tags', 'tenant_id = ?'],
         ['edu_categories', 'tenant_id = ?'],
         ['edu_material_pages', 'material_id IN (SELECT id FROM edu_materials WHERE tenant_id = ?)'],
         ['edu_material_versions', 'material_id IN (SELECT id FROM edu_materials WHERE tenant_id = ?)'],

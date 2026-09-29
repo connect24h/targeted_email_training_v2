@@ -8,7 +8,7 @@
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="assets/vendor/bootstrap-icons.css" rel="stylesheet">
-  <link href="assets/app.css?v=0fc800a0" rel="stylesheet">
+  <link href="assets/app.css?v=18d1bd13" rel="stylesheet">
 </head>
 <body>
 
@@ -656,6 +656,7 @@
         <ul class="nav nav-tabs report-tabs" id="eduBankTabs" role="tablist">
           <li class="nav-item" role="presentation"><button class="nav-link active" id="eduBankTab-materials" data-bs-toggle="tab" data-bs-target="#eduBankPane-materials" type="button" role="tab" aria-controls="eduBankPane-materials" aria-selected="true"><i class="bi bi-easel me-1" aria-hidden="true"></i>教材</button></li>
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduBankTab-questions" data-bs-toggle="tab" data-bs-target="#eduBankPane-questions" type="button" role="tab" aria-controls="eduBankPane-questions" aria-selected="false"><i class="bi bi-patch-question me-1" aria-hidden="true"></i>確認テストの設問</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="eduBankTab-tags" data-bs-toggle="tab" data-bs-target="#eduBankPane-tags" type="button" role="tab" aria-controls="eduBankPane-tags" aria-selected="false"><i class="bi bi-tags me-1" aria-hidden="true"></i>分野のタグ</button></li>
         </ul>
         <div class="tab-content report-tab-content">
         <div class="tab-pane fade show active" id="eduBankPane-materials" role="tabpanel" aria-labelledby="eduBankTab-materials" tabindex="0">
@@ -701,9 +702,25 @@
         </div>
         <ul class="nav nav-pills mb-2 flex-wrap" id="eduCatTabs"></ul>
         <div class="mb-3" id="eduCatToolbar"></div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <label class="small text-muted mb-0" for="eduQTagFilter">分野のタグで絞る</label>
+          <select class="form-select form-select-sm w-auto mw-100" id="eduQTagFilter"><option value="">すべての分野</option></select>
+        </div>
         <div class="table-responsive"><table class="table table-hover align-middle">
           <thead><tr><th>#</th><th>カテゴリ</th><th>設問</th><th>種別</th><th>難易度</th><th>操作</th></tr></thead>
           <tbody id="eduQuestionsBody"></tbody>
+        </table></div>
+        </div>
+        <!-- 分野のタグ(G09): 2階層。共有のタグの変更はシステム管理者だけ -->
+        <div class="tab-pane fade" id="eduBankPane-tags" role="tabpanel" aria-labelledby="eduBankTab-tags" tabindex="0">
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+          <h6 class="mb-0"><i class="bi bi-tags me-1"></i>分野のタグ</h6>
+          <button class="btn btn-primary btn-sm" data-perm="operator" id="eduTagNewBtn"><i class="bi bi-plus-lg me-1"></i>新規タグ</button>
+        </div>
+        <p class="small text-muted">設問に付ける分野です。親のタグの下に子のタグを1段だけ作れます。1つの設問に複数のタグを付けられ、教育レポートの「分野」とマイページの成績で、タグごとの正答率を見られます。共有のタグはシステム管理者だけが変更できます。</p>
+        <div class="table-responsive"><table class="table table-sm table-hover align-middle">
+          <thead><tr><th>分野のタグ</th><th>説明</th><th>種類</th><th title="このタグが付いた設問の数(自組織と共有)">設問</th><th>操作</th></tr></thead>
+          <tbody id="eduTagsBody"></tbody>
         </table></div>
         </div>
         </div>
@@ -721,6 +738,7 @@
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-people" data-edu-rep-tab="people" data-bs-toggle="tab" data-bs-target="#eduRepPane-people" type="button" role="tab" aria-controls="eduRepPane-people" aria-selected="false"><i class="bi bi-person-lines-fill me-1" aria-hidden="true"></i>受講者ごと</button></li>
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-awareness" data-edu-rep-tab="awareness" data-bs-toggle="tab" data-bs-target="#eduRepPane-awareness" type="button" role="tab" aria-controls="eduRepPane-awareness" aria-selected="false"><i class="bi bi-lightbulb me-1" aria-hidden="true"></i>アウェアネスの成績</button></li>
           <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-cross" data-edu-rep-tab="cross" data-bs-toggle="tab" data-bs-target="#eduRepPane-cross" type="button" role="tab" aria-controls="eduRepPane-cross" aria-selected="false"><i class="bi bi-arrow-left-right me-1" aria-hidden="true"></i>訓練と教育</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="eduRepTab-tags" data-edu-rep-tab="tags" data-bs-toggle="tab" data-bs-target="#eduRepPane-tags" type="button" role="tab" aria-controls="eduRepPane-tags" aria-selected="false"><i class="bi bi-tags me-1" aria-hidden="true"></i>分野</button></li>
         </ul>
         <div class="tab-content report-tab-content">
         <div class="tab-pane fade show active" id="eduRepPane-overview" role="tabpanel" aria-labelledby="eduRepTab-overview" tabindex="0">
@@ -884,6 +902,27 @@
           </table></div>
           <p class="small text-muted">「失敗」は、そのキャンペーンでリンクを開いたか入力した人です。教育は、そのキャンペーンの後に限らず、その人に割り当てたすべての配信を数えます。</p>
         </div>
+        <!-- 分野: タグごとの正答率、部署×分野、分野ごとの月の推移(API の action=tags、tag_matrix) -->
+        <div class="tab-pane fade" id="eduRepPane-tags" role="tabpanel" aria-labelledby="eduRepTab-tags" tabindex="0">
+          <p class="small text-muted">設問に付けた分野のタグごとの正答率です。親のタグは、その子のタグが付いた設問も含めて数えます。解答は受講ごとの最新の提出で、テスト用と削除済みの対象者は数えません。解答のないところは空欄です。</p>
+          <div class="card mb-3"><div class="card-header py-2 small fw-bold">分野ごとの正答率</div>
+            <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+              <thead><tr><th>分野</th><th>回答数</th><th>正答率</th></tr></thead>
+              <tbody id="eduRepTagsBody"></tbody>
+            </table></div></div>
+          <div class="card mb-3"><div class="card-header py-2 small fw-bold d-flex justify-content-between align-items-center">
+              <span>部署 × 分野（親のタグ）の正答率</span>
+              <a class="btn btn-sm btn-outline-secondary" id="eduRepTagMatrixCsv" href="#" download><i class="bi bi-filetype-csv" aria-hidden="true"></i> CSV</a></div>
+            <div class="table-responsive"><table class="table table-sm align-middle mb-0" id="eduRepTagMatrix">
+              <thead id="eduRepTagMatrixHead"><tr><th>部署</th></tr></thead>
+              <tbody id="eduRepTagMatrixBody"></tbody>
+            </table></div></div>
+          <div class="card"><div class="card-header py-2 small fw-bold">分野（親のタグ）ごとの正答率の推移（直近12か月、提出の月）</div>
+            <div class="table-responsive"><table class="table table-sm align-middle mb-0" id="eduRepTagTrend">
+              <thead id="eduRepTagTrendHead"><tr><th>分野</th></tr></thead>
+              <tbody id="eduRepTagTrendBody"></tbody>
+            </table></div></div>
+        </div>
         </div>
       </section>
 
@@ -1017,7 +1056,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=b4a9ed97"></script>
+<script src="app.js?v=4ef5ac8d"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>
@@ -1026,5 +1065,6 @@
 <script src="assets/suspicious-mails.js?v=69293ad2"></script>
 <script src="assets/surveys.js?v=80becb08"></script>
 <script src="assets/risk-dashboard.js?v=48617cb6"></script>
+<script src="assets/edu-tags.js?v=8832aed9"></script>
 </body>
 </html>

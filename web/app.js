@@ -4472,8 +4472,10 @@ async function renderEduQuestions() {
   $('#eduCatTabs').innerHTML = `<li class="nav-item"><a class="nav-link${eduCatFilter===0?' active':''}" href="#" onclick="setEduCat(0);return false">全カテゴリ</a></li>` + (categories || []).map((c) =>
     `<li class="nav-item"><a class="nav-link${c.id===eduCatFilter?' active':''}" href="#" onclick="setEduCat(${c.id});return false">${esc(c.name)} <span class="badge bg-secondary">${c.question_count}</span></a></li>`).join('');
   renderEduCatToolbar();
+  await refreshEduTags();   // 分野のタグ(assets/edu-tags.js): タグのタブ、絞り込みの選択肢、設問の編集の選択肢
   const query = { action: 'list' };
   if (eduCatFilter > 0) query.category_id = eduCatFilter;
+  if (eduTagFilterId()) query.tag_id = eduTagFilterId();
   const { questions } = await api('api/edu_questions.php', { query });
   cacheRows('eduQuestions', questions || []);
   // #列は表示上の通し番号(古い順に1,2,3…)。削除しても詰まる。
@@ -4482,7 +4484,7 @@ async function renderEduQuestions() {
   const canEdit = (q) => roleAtLeast(State.user.role, 'operator')
     && (Number(q.is_shared) !== 1 || State.user.role === 'superadmin');
   $('#eduQuestionsBody').innerHTML = questionsAsc.length ? questionsAsc.map((q, i) => `
-    <tr><td>${i + 1}</td><td>${esc(q.category_name || '')}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}${q.image_name ? `<img class="edu-question-thumb ms-2" src="${esc(eduMediaUrl('api/edu_questions.php', { action: 'image', id: q.id }))}" alt="設問画像">` : ''}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
+    <tr><td>${i + 1}</td><td>${esc(q.category_name || '')}</td><td>${esc(q.title)}${Number(q.is_shared)===1?' <span class="badge bg-info">共有</span>':''}${Number(q.is_active)!==1?' <span class="badge bg-secondary">無効</span>':''}${q.image_name ? `<img class="edu-question-thumb ms-2" src="${esc(eduMediaUrl('api/edu_questions.php', { action: 'image', id: q.id }))}" alt="設問画像">` : ''}${eduTagBadges(q.tags)}</td><td>${typeName[q.question_type]||esc(q.question_type)}</td><td>難${q.difficulty}</td>
       <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" onclick="previewEduQuestion(${q.id})"><i class="bi bi-play-circle"></i> 試行</button>
         ${canEdit(q) ? `
         <button class="btn btn-sm btn-outline-secondary" onclick="editEduQuestion(${q.id})" title="設問を編集"><i class="bi bi-pencil"></i> 編集</button>
@@ -4682,9 +4684,11 @@ function eduQuestionForm(q = {}) {
   const typeOpts = [['single_choice','単一選択'],['true_false','正誤'],['multiple_choice','複数選択']]
     .map(([v,l]) => `<option value="${v}"${type===v?' selected':''}>${l}</option>`).join('');
   const explanations = eduPreviewArray(q.option_explanations);
+  const selectedCat = cats.find((c) => c.id === Number(q.category_id)) || cats[0];
   return `<form id="eduQForm">
     <div class="mb-2"><label class="form-label">カテゴリ</label><select class="form-select" name="category_id" required>${catOpts}</select></div>
     <div class="mb-2"><label class="form-label">設問文</label><input class="form-control" name="title" value="${esc(q.title)}" required></div>
+    ${eduTagPickerHtml((q.tags || []).map((t) => Number(t.id)), Number(selectedCat?.is_shared) === 1)}
     <div class="mb-2"><label class="form-label">種別</label><select class="form-select" name="question_type">${typeOpts}</select></div>
     <div class="mb-2"><label class="form-label">選択肢（1行に1つ）</label><textarea class="form-control" name="options" rows="4">${esc(opts.join('\n'))}</textarea></div>
     <div class="mb-2"><label class="form-label">選択肢ごとの解説（任意）</label><div id="eduQOptionExplanations">${eduQExplanationRows(opts, explanations)}</div></div>
@@ -4704,6 +4708,11 @@ function eduQExplanationRows(options, explanations = []) {
 }
 function bindEduQuestionForm() {
   const form = $('#eduQForm');
+  // 共有カテゴリの設問には共有のタグだけを付けられるので、カテゴリを変えたらタグの選択肢を選び直す
+  form.category_id.addEventListener('change', () => {
+    const cat = (Cache.eduCats || []).find((c) => c.id === Number(form.category_id.value));
+    eduTagPickerRefresh(Number(cat?.is_shared) === 1);
+  });
   form.options.addEventListener('input', () => {
     const explanations = Array.from(form.querySelectorAll('.edu-option-explanation-input')).map((field) => field.value);
     const options = form.options.value.split('\n').map((value) => value.trim()).filter(Boolean);
@@ -4746,6 +4755,7 @@ function eduQFormBody(f) {
     difficulty: parseInt(f.difficulty.value, 10) || 1,
     explanation: f.explanation.value.trim(),
     is_active: f.is_active.checked ? 1 : 0,
+    tag_ids: eduTagPickerSelected(),
   };
 }
 async function saveEduQuestionImage(id) {
@@ -4889,6 +4899,7 @@ function eduRepRenderTab(tab) {
   if (tab === 'people') return renderEduRepLearners();
   if (tab === 'awareness') return renderEduRepAwareness();
   if (tab === 'cross') return renderEduRepCross();
+  if (tab === 'tags') return renderEduRepTags();   // assets/edu-tags.js
   return Promise.resolve();
 }
 

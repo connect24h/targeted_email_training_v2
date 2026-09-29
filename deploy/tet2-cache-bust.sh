@@ -35,6 +35,7 @@ ASSETS=(
   assets/campaign-workspace.js
   assets/campaign-editor-steps.js
   assets/surveys.js
+  assets/edu-tags.js
 )
 
 asset_hash() {
