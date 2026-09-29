@@ -89,8 +89,14 @@ try {
   await page.locator('#appModalSave').click();
   await page.waitForFunction(() => document.body.textContent.includes('script タグは使用できません'), null, { timeout: 5000 });
   ok('B2-6: script タグの HTML は拒否される(sanitization reuse)');
-  await page.locator('#appModal .btn-close, #appModal [data-bs-dismiss="modal"]').first().click().catch(() => {});
-  await page.waitForTimeout(300);
+  // 開く途中(フェードイン中)に閉じる操作をすると Bootstrap が無視するので、開き切るのを待ってから閉じ、閉じたことも待つ
+  await page.waitForFunction(() => {
+    const el = document.getElementById('appModal');
+    const m = el && window.bootstrap?.Modal.getInstance(el);
+    return !!m && el.classList.contains('show') && !m._isTransitioning;
+  });
+  await page.locator('#appModal .btn-close, #appModal [data-bs-dismiss="modal"]').first().click();
+  await page.locator('#appModal').waitFor({ state: 'hidden' });
 
   // キャンペーンの編集で種明かしページを選べる
   await go(page, 'campaigns');
@@ -101,8 +107,14 @@ try {
   assert.match(revealOpts, /既定/, '既定の選択肢がある');
   assert.match(revealOpts, /営業部向けの種明かし/, 'キャンペーン編集で種明かしページを選べる');
   ok('B2-6: キャンペーンの編集で、種明かしページを選べる');
-  await page.locator('#appModal .btn-close, #appModal [data-bs-dismiss="modal"]').first().click().catch(() => {});
-  await page.waitForTimeout(300);
+  // 開く途中(フェードイン中)に閉じる操作をすると Bootstrap が無視するので、開き切るのを待ってから閉じ、閉じたことも待つ
+  await page.waitForFunction(() => {
+    const el = document.getElementById('appModal');
+    const m = el && window.bootstrap?.Modal.getInstance(el);
+    return !!m && el.classList.contains('show') && !m._isTransitioning;
+  });
+  await page.locator('#appModal .btn-close, #appModal [data-bs-dismiss="modal"]').first().click();
+  await page.locator('#appModal').waitFor({ state: 'hidden' });
 
   // ===== B2-7 (G20): 教材の版が受講者ごとの行に出る =====
   await go(page, 'eduReport');
