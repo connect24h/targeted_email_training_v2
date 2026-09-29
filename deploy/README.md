@@ -77,6 +77,11 @@ sudo systemctl enable --now tet2-edu-scheduler.timer
 配信ごとの受講の設定（選択肢の並べ替え、テスト中の教材、期限後の受講、テストからの受け直し）と社内の問い合わせ先を含む配備では、`20261020-edu-delivery-options` migrationを**コードより先に**適用する。`edu_deliveries`へ4列（既定0。既存の配信は今と同じ動き）、`edu_attempts.test_started_at`、`tenants.edu_contact`を足すだけ。新しい`edu_take.php`はこれらの列を毎回読むため、migration前にコードを配備すると受講が500になる。教育レポートの概要と推移（段0）はmigrationなしで変わる（テスト用と削除済みの対象者を除き、推移は`edu_responses`から月ごとに集計）。
 - セッションのクッキーは`TET2MYSESID`（path `/`）で、管理画面の`TET2SESID`とは別。
 
+段B2 の運用（対象者の従業員番号とメモ、アウェアネスの成績、解答の1問1行の CSV、自動の教育配信の実行履歴）を含む配備では、`20261027-ops-b2a` migrationを**コードより先に**適用する。`targets`へ`employee_no`と`memo`の列、従業員番号のテナント内の一意の索引（空の人はかからない）、`edu_auto_enroll_runs`表を足すだけで、既存の対象者は番号もメモも空のまま。新しい`targets.php`の一覧と`EduAutoEnroll`/`EduScheduler`はこれらを毎回読み書きするため、migration前にコードを配備すると対象者の一覧と自動の投入（報告の取込の後の自動連携を含む）が500になる。
+- 対象者の CSV の取込は、従業員番号の列に値がある行を**番号で先に**照合し、当たった人のメールアドレスを CSV の値に変える。番号で当たらなければ従来どおりメールアドレスで照合する。番号とメモの列がないか空の行は今の値を残す。
+- 解答の1問1行の CSV は 50000 行で打ち切り、`X-Tet2-Truncated`ヘッダーで知らせる（画面は警告を出す）。
+- 実行履歴は自動の投入が配信を処理するたびに1行増える（消す仕組みはまだない）。timer（`tet2-edu-enroll`、`tet2-edu-scheduler`）は今も無効のままで、この配備で有効にはしない。
+
 ```bash
 sudo deploy/tet2-deploy.sh --apply
 ```
