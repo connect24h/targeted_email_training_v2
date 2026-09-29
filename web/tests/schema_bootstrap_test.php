@@ -28,7 +28,7 @@ $businessTables = array_values(array_filter(
     $tables,
     static fn(string $table): bool => $table !== 'schema_migrations'
 ));
-check(count($businessTables) === 50, 'fresh DBに50個の業務tableがある');
+check(count($businessTables) === 51, 'fresh DBに51個の業務tableがある');
 
 $expectedTables = [
     'campaign_contents',
@@ -62,6 +62,7 @@ $expectedTables = [
     'edu_attempts',
     'user_mfa_recovery_codes',
     'tenant_security_policies',
+    'suspicious_mail_rules',
 ];
 foreach ($expectedTables as $table) {
     check(in_array($table, $businessTables, true), "{$table}が作成される");
@@ -74,7 +75,8 @@ $expectedColumns = [
     'campaign_targets' => ['content_no'],
     'targets' => ['position_category', 'tenant_no', 'archived_at', 'is_test'],
     'groups' => ['status', 'archived_at'],
-    'templates' => ['scenario_key'],
+    'templates' => ['scenario_key', 'description'],
+    'tenant_security_policies' => ['banned_words'],
     'edu_categories' => ['is_shared'],
     'edu_questions' => ['is_shared'],
     'edu_assignments' => ['last_reminded_at'],
