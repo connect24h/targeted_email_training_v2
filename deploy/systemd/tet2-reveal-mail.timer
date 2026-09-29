@@ -1,0 +1,11 @@
+[Unit]
+Description=TET v2 Reveal Mail timer (every 5 minutes)
+# 配備だけでは有効にならない。有効化(systemctl enable --now)は利用者の承認を得てから別に行う(実在の従業員へメールが届く)。
+
+[Timer]
+# 5分毎。report-ingest(0 分起点)の取込の後に動くよう、delivery-ingest(2 分)とも重ならない 4 分にずらす。
+OnCalendar=*:4/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

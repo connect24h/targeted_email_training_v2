@@ -1,0 +1,16 @@
+[Unit]
+Description=TET v2 Reveal Mail and Report Notify (training reveal mails / suspicious-mail report notices)
+After=network.target
+
+# 有効化は利用者の承認が要る(deploy/README.md の「段D の送信(D-a)」)。migration 20261105-sending-da を先に適用する。
+# 訓練ごとの種明かしメールの設定と、テナントの報告の通知先がなければ1通も送らない(既定はすべて切)。
+
+[Service]
+Type=oneshot
+User=training
+Group=www-data
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/bin/php /var/www/html/tet2/db/reveal_mail.php
+StandardOutput=append:/opt/training/tet2-data/reveal-mail.log
+StandardError=append:/opt/training/tet2-data/reveal-mail.log

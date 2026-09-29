@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/../lib/RevealMail.php';
 tet2_test_boot();
 load_api('report');
 
