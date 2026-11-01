@@ -968,8 +968,8 @@ function campaigns_handle_update(array $actor): never
                     'INSERT INTO campaign_contents
                      (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
                       link_mode, attachment_ext, attachment_filename, attachment_zip, suppress_body_url, suppress_prefill_email,
-                      from_address, beacon_base)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                      from_address, beacon_base, beacon_bases, from_addresses)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     [
                         $id,
                         $contentNo,

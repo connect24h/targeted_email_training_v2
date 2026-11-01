@@ -385,6 +385,40 @@ $cid_u10 = create_draft(['name' => 'CU-10用']);
 $res = update(['id' => $cid_u10, 'link_mode' => 'invalid_mode']);
 check($res['code'] === 400, 'CU-10 不正 link_mode → 400');
 
+// CU-11: contents[] を差し替えて更新(マルチエンドポイント含む) → 200
+// 回帰: 更新側の campaign_contents INSERT が beacon_bases/from_addresses 列を
+// 取りこぼし、プレースホルダ数<値数で PDO エラー25(column index out of range)に
+// なっていた(作成側のみ2列追加されていた取りこぼし)。
+$cid_u11 = create_draft(['name' => 'CU-11用']);
+$res = update([
+    'id'       => $cid_u11,
+    'contents' => [
+        [
+            'subject_template_id' => 9001,
+            'body_template_id'    => 9002,
+            'phish_template_id'   => 9003,
+            'link_mode'           => 'link',
+            'beacon_bases'        => ['https://a.example.test/', 'https://b.example.test/'],
+        ],
+        [
+            'subject_template_id' => 9011,
+            'body_template_id'    => 9012,
+            'phish_template_id'   => 9013,
+            'link_mode'           => 'link',
+        ],
+    ],
+]);
+check($res['code'] === 200, 'CU-11 contents 差し替え(beacon_bases付き) → 200');
+check((int) Db::one(
+    'SELECT COUNT(*) AS n FROM campaign_contents WHERE campaign_id=?',
+    [$cid_u11]
+)['n'] === 2, 'CU-11 差し替え後 content を2件保存する');
+check(Db::one(
+    'SELECT beacon_bases FROM campaign_contents WHERE campaign_id=? AND content_no=1',
+    [$cid_u11]
+)['beacon_bases'] === json_encode(['https://a.example.test/', 'https://b.example.test/'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+    'CU-11 content_no=1 の beacon_bases を保存する');
+
 // ============================================================
 // Delete / Cancel アクション
 // ============================================================
