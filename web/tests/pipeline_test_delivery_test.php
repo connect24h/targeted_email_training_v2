@@ -59,18 +59,37 @@ $recipients = array_column($rows, $toIndex);
 $trackingIds = array_column($rows, $trackingIndex);
 
 // TESTでも本番対象の全行(5人×4content=20行)を生成する。差し込みデータと
-// tracking_id は本番同等のまま、実際の送信先(To)だけをテスト宛先へ均等分配する。
+// tracking_id は本番同等のまま、実際の送信先(To)だけをテスト宛先へ振り替える。
 // これが元の仕様であり、件数を絞ると「全職員分のデータを送るテスト」ができない。
 check(count($rows) === 20, 'TESTでも本番対象の全行を生成する(5人×4content)');
 
-// 20行を3宛先へ i % 3 で分配するので 7 / 7 / 6 になる
-$expected = ['tester1@example.test' => 7, 'tester2@example.test' => 7, 'tester3@example.test' => 6];
+// 宛先の振り替えは content_no ごとに独立したカウンタで回す。これにより各テスト宛先が
+// 全 content(種類) を受け取る。各 content は 5 行あり 3 宛先へ i%3 で 2/2/1 に分配され、
+// 4 content 分の合計で 8 / 8 / 4 になる。
+$expected = ['tester1@example.test' => 8, 'tester2@example.test' => 8, 'tester3@example.test' => 4];
 foreach ($expected as $recipient => $count) {
     check(
         count(array_keys($recipients, $recipient, true)) === $count,
-        "{$recipient}へ均等分配される({$count}通)"
+        "{$recipient}へ content 単位で分配される({$count}通)"
     );
 }
 check(count(array_unique($trackingIds)) === 20, 'TEST行もtracking IDを重複させない');
+
+// 核心の退行防止: 各テスト宛先が content 1〜4 をすべて受け取る(1種類に固着しない)。
+$contentIndex = array_search('件名定型文No', $header, true);
+$byRecipientContents = [];
+foreach ($rows as $row) {
+    $to = $row[$toIndex];
+    $cno = (int) $row[$contentIndex];
+    $byRecipientContents[$to][$cno] = true;
+}
+foreach (['tester1@example.test', 'tester2@example.test', 'tester3@example.test'] as $recipient) {
+    $got = array_keys($byRecipientContents[$recipient] ?? []);
+    sort($got);
+    check(
+        $got === [1, 2, 3, 4],
+        "{$recipient} が全 content(1,2,3,4) を受け取る(1種類固着でない): 実際=[" . implode(',', $got) . ']'
+    );
+}
 
 echo "ALL TESTS PASSED\n";

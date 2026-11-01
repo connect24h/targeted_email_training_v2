@@ -312,9 +312,12 @@ final class PipelineRunner
 
         $rows = [self::LIST_HEADER];
         $fromAddr = (string) ($c['from_address'] ?? '');
-        // テストモードの宛先リダイレクト: あれば実To(送信先情報)を均等分配で差し替える。
+        // テストモードの宛先リダイレクト: あれば実To(送信先情報)をテスト宛先へ差し替える。
+        // 割り当ては content_no ごとに独立したカウンタで回す。content_delivery='all' では
+        // 1人が全 content 分の行に複製されるため、全行通しの i%N だと同じ content が同じ宛先に
+        // 固着し「1アカウント=1種類」に偏る。content 単位で回すと各テスト宛先が全 content を受け取る。
         $redirect = self::resolveTestRedirect($c);
-        $ri = 0;
+        $riByContent = [];
 
         foreach ($targets as $t) {
             $targetContentNo = (int) ($t['content_no'] ?? 1); // デフォルトは1
@@ -363,9 +366,15 @@ final class PipelineRunner
                 $bodyUrl = '';
             }
 
-            // 実際の送信先。リダイレクトありなら emails[i % N]、無ければ本番の宛先。
-            $sendTo = $redirect ? $redirect[$ri % count($redirect)] : (string) $t['to_email'];
-            $ri++;
+            // 実際の送信先。リダイレクトありなら content_no ごとのカウンタで emails[k % N]、
+            // 無ければ本番の宛先。content 単位に回すことで各テスト宛先が全 content を受け取る。
+            if ($redirect) {
+                $k = $riByContent[$targetContentNo] ?? 0;
+                $sendTo = $redirect[$k % count($redirect)];
+                $riByContent[$targetContentNo] = $k + 1;
+            } else {
+                $sendTo = (string) $t['to_email'];
+            }
 
             $rows[] = [
                 (int) $t['koban'],                 // 項番
