@@ -94,8 +94,18 @@ $pdo->exec("INSERT INTO campaigns (id, tenant_id, data_dir) VALUES (888, 4, '" .
 $pdo = null;
 $startWatcher($okStub);
 [$ok4, $err4] = $invoke(888, '');
-check($ok4 === false && str_contains($err4, 'symlink'), '経路の symlink を拒否する: ' . $err4);
+check($ok4 === false && (str_contains($err4, 'symlink') || str_contains($err4, '正規パス')), '経路の symlink を拒否する: ' . $err4);
 check(!is_file($realElsewhere . '/beacon_done'), 'symlink 先に生成物を作らない');
+$stopWatchers();
+
+// 4b. 不正な slug(DB 由来でも形が規約外)は拒否する
+$pdo = new PDO('sqlite:' . $db);
+$pdo->exec("INSERT INTO tenants (id, slug) VALUES (5, '../escape')");
+$pdo->exec("INSERT INTO campaigns (id, tenant_id, data_dir) VALUES (555, 5, '/tmp/whatever')");
+$pdo = null;
+$startWatcher($okStub);
+[$okS, $errS] = $invoke(555, '');
+check($okS === false && str_contains($errS, 'slug'), '不正な slug を拒否する: ' . $errS);
 $stopWatchers();
 
 // 5. ランナー不在ならタイムアウトする(短縮して確認)

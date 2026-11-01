@@ -21,6 +21,7 @@
 import glob
 import json
 import os
+import re
 import sqlite3
 import stat
 import subprocess
@@ -73,10 +74,20 @@ def _resolve_data_dir(campaign_id):
         conn.close()
     if row is None:
         raise ValueError("campaign_id が見つかりません: %r" % campaign_id)
-    expected = os.path.join(DATA_ROOT, str(row["slug"]), "campaign_%d" % campaign_id)
+    slug = str(row["slug"])
+    # slug は DB 由来だが、万一の不正値(.. や / を含む等)で経路が外れないよう形を固定する。
+    if not re.fullmatch(r"[a-z0-9-]+", slug):
+        raise ValueError("tenant slug が不正です: %r" % slug)
+    expected = os.path.join(DATA_ROOT, slug, "campaign_%d" % campaign_id)
     if str(row["data_dir"]) != expected:
         raise ValueError("DB の data_dir が規約と一致しません: %s" % row["data_dir"])
+    # realpath 封じ込め: 正規化しても expected 自身で、かつ DATA_ROOT 配下であること。
+    real_root = os.path.realpath(DATA_ROOT)
+    if os.path.realpath(expected) != expected or not expected.startswith(real_root + os.sep):
+        raise ValueError("data_dir が DATA_ROOT 配下の正規パスではありません: %s" % expected)
     # DATA_ROOT 配下の各階層が symlink でないこと(途中のすり替えを拒否)。
+    # 残る TOCTOU は「生成直前に www-data が正規 campaign_<id> を一瞬すり替える」狭い競合のみ。
+    # create_beacon_files.py は v1 共用でパス引数前提のため fd 受け渡しは採らない。
     rel = os.path.relpath(expected, DATA_ROOT)
     cur = DATA_ROOT
     for part in rel.split(os.sep):
