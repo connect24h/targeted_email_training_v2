@@ -15,6 +15,7 @@ TET2_BIN_FILES=(
   fix-maildir-perms.sh
   tet2-purge-campaigns.py
   tet2-worker.py
+  tet2-beacon-runner.py
   training_config.py
 )
 
@@ -58,7 +59,8 @@ tet2_scope_includes() {
         web/api/campaign_launch.php|web/db/migrate.php|web/db/MigrationRunner.php|\
         web/db/schema-template-snapshots.sql|web/lib/CampaignLauncher.php|web/lib/CampaignPreflight.php|\
         web/lib/CampaignLaunchService.php|web/lib/PipelineRunner.php|web/lib/Scheduler.php|\
-        bin/__BeaconMst.png|bin/create_beacon_files.py|bin/send_email.py|bin/tet2-worker.py) return 0 ;;
+        bin/__BeaconMst.png|bin/create_beacon_files.py|bin/send_email.py|bin/tet2-worker.py|\
+        bin/tet2-beacon-runner.py|systemd/tet2-beacon.service|systemd/tet2-beacon.path) return 0 ;;
         *) return 1 ;;
       esac
       ;;

@@ -65,4 +65,17 @@ check(Db::one("SELECT content FROM campaign_template_snapshots WHERE campaign_id
     && Db::one("SELECT content FROM campaign_template_snapshots WHERE campaign_id=2 AND launch_sequence=2 AND role='body'")['content'] === 'edited after launch',
     '再予約した版を旧版と区別する');
 
+// 生成段が派生列 resolved_* を書き換えても、設定変更ではないので launch を拒否しない（初回launch 409 バグの回帰）
+Db::run('DELETE FROM send_schedule WHERE campaign_id=2');
+Db::run('DELETE FROM campaign_template_snapshots WHERE campaign_id=2');
+Db::run("UPDATE campaigns SET status='draft' WHERE id=2");
+Db::run('UPDATE campaign_targets SET resolved_beacon_base=NULL, resolved_from_address=NULL WHERE campaign_id=2');
+$revResolved = CampaignPreflight::inspect(2, 1)['revision'];
+$resolvedLaunch = CampaignLaunchService::launch(2, 1, $revResolved, static function (): array {
+    // PipelineRunner が生成中に行うのと同じ派生列の確定を模す
+    Db::run("UPDATE campaign_targets SET resolved_beacon_base='https://beacon.example.test/', resolved_from_address='sender@example.test' WHERE campaign_id=2");
+    return [true, ''];
+});
+check($resolvedLaunch['ok'] === true, '生成中の resolved_* 確定を設定変更とみなさず予約できる');
+
 echo "ALL TESTS PASSED\n";

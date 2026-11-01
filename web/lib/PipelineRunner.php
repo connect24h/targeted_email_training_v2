@@ -536,16 +536,40 @@ final class PipelineRunner
         return $resolved;
     }
 
-    private static function ensureDir(string $dir): void
+    /**
+     * 送信データの保存先を setgid(2775) で用意する。Web(www-data)と送信worker(training)の双方が書き込み、
+     * setgid により配下のファイルを www-data group へ継承する。
+     * apache2.service の RestrictSUIDSGID=yes 下では setgid を指定した mkdir/chmod が EPERM になるため、
+     * mode には setgid を含めず親(tet2-data 配下は 2775)から継承させ、グループ書込は umask 0002 で残す。
+     */
+    public static function ensureDir(string $dir): void
     {
-        if (!is_dir($dir) && !mkdir($dir, 02775, true) && !is_dir($dir)) {
-            throw new RuntimeException("ディレクトリ作成に失敗: {$dir}");
+        if (!is_dir($dir)) {
+            $oldUmask = umask(0002);
+            try {
+                $made = @mkdir($dir, 0775, true);
+            } finally {
+                umask($oldUmask);
+            }
+            if (!$made && !is_dir($dir)) {
+                throw new RuntimeException('ディレクトリ作成に失敗: ' . $dir . ' (' . (error_get_last()['message'] ?? '') . ')');
+            }
         }
-        // mkdirのmodeはプロセスumaskで削られるため、作成済みの場合も毎回正規化する。
-        // setgidにより配下をwww-data groupへ継承し、Webと送信workerの双方が書き込める。
-        if (!chmod($dir, 02775)) {
-            throw new RuntimeException("ディレクトリ権限の設定に失敗: {$dir}");
+        if (self::isSharedDir($dir)) {
+            return;
         }
+        // 既存の権限不足は直せる環境(CLI・所有者)でだけ直す。Apache 下の chmod(02775) は EPERM になる。
+        @chmod($dir, 02775);
+        if (!self::isSharedDir($dir)) {
+            clearstatcache(true, $dir);
+            throw new RuntimeException(sprintf('ディレクトリ権限が不足しています(%o、必要 2775): %s', fileperms($dir) & 07777, $dir));
+        }
+    }
+
+    private static function isSharedDir(string $dir): bool
+    {
+        clearstatcache(true, $dir);
+        return (fileperms($dir) & 02070) === 02070;
     }
 
     /**

@@ -62,7 +62,14 @@ final class CampaignPreflight
             $distribution[] = ['email' => $email, 'count' => intdiv($sendCount, count($redirect)) + ($index < $sendCount % count($redirect) ? 1 : 0)];
         }
         $uniqueTargets = array_unique(array_map(static fn(array $row): int => (int) $row['target_id'], $targets));
-        $revision = hash('sha256', json_encode([$campaign, $contents, $targets, $templates], JSON_THROW_ON_ERROR));
+        // resolved_beacon_base/resolved_from_address は生成段(PipelineRunner)が
+        // launch 中に確定させる派生列。設定変更の検出用 revision に含めると、
+        // 生成前後で値が変わり初回 launch が 409 で弾かれるため除外する。
+        $revisionTargets = array_map(static function (array $row): array {
+            unset($row['resolved_beacon_base'], $row['resolved_from_address']);
+            return $row;
+        }, $targets);
+        $revision = hash('sha256', json_encode([$campaign, $contents, $revisionTargets, $templates], JSON_THROW_ON_ERROR));
         $visibleContents = [];
         foreach ($contents as $content) {
             $visibleContents[] = [

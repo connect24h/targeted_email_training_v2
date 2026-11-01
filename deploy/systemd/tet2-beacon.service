@@ -1,0 +1,15 @@
+[Unit]
+Description=TET v2 Beacon/QR/attachment generator (training-owned, replaces Web sudo)
+After=network.target
+
+[Service]
+Type=oneshot
+# training として実行し、send_email.py と operation.log の所有(training)を共有する。
+# Web(www-data)はキューに依頼を置くだけで sudo を使わない(2026-10-21 の apache2 更新で
+# Apache から sudo 不可になった事故の恒久対策)。
+User=training
+Group=www-data
+UMask=0002
+ExecStart=/usr/bin/python3 /opt/training/bin/tet2-beacon-runner.py
+StandardOutput=append:/opt/training/tet2-data/beacon-runner.log
+StandardError=append:/opt/training/tet2-data/beacon-runner.log

@@ -31,8 +31,11 @@ final class CampaignLaunchService
         $campaign = Db::one('SELECT data_dir FROM campaigns WHERE id=? AND tenant_id=?', [$campaignId, $tenantId]);
         $dataDir = (string) ($campaign['data_dir'] ?? '');
         if ($dataDir === '') return self::failure(409, '送信データの保存先が未設定です');
-        if (!is_dir($dataDir) && !@mkdir($dataDir, 02775, true) && !is_dir($dataDir)) {
-            return self::failure(500, '送信データの保存先を準備できません');
+        try {
+            PipelineRunner::ensureDir($dataDir);
+        } catch (RuntimeException $error) {
+            error_log('campaign launch: ' . $error->getMessage());
+            return self::failure(500, '送信データの保存先を準備できません: ' . $error->getMessage());
         }
         $handle = @fopen(rtrim($dataDir, '/') . '/.launch.lock', 'c');
         if ($handle === false) return self::failure(500, '配信準備の排他ロックを開けません');

@@ -153,21 +153,60 @@ final class CampaignLauncher
         $campaign = Db::one('SELECT beacon_base FROM campaigns WHERE id = ?', [$campaignId]);
         $beaconBase = PipelineRunner::beaconUrlBase($campaign ?: null);
 
-        // create_beacon_files.py は training ユーザーで実行する。
-        // send_email.py(worker=training)と共有する operation.log の所有者を training に
-        // 一本化し、www-data 実行時に training が書けなくなる権限競合を根絶するため。
-        // (2026-08 に operation.log が www-data:644 で作られ、直後の send_email(training)が
-        //  PermissionError で全滅した事故の恒久対策。sudoers に (training) NOPASSWD 定義済み。)
-        $command = '/usr/bin/sudo -n -u training '
-            . escapeshellcmd('/usr/bin/python3') . ' '
-            . escapeshellarg('/opt/training/bin/create_beacon_files.py')
-            . ' --data-dir ' . escapeshellarg($dataDir)
-            . ' --beacon-base ' . escapeshellarg($beaconBase) . ' 2>&1';
-        exec($command, $output, $returnCode);
-        if ($returnCode !== 0) {
-            $details = implode(' / ', array_slice($output, -3));
-            return [false, "ビーコン生成(rc={$returnCode}): {$details}"];
+        // ビーコン/QR/添付の生成は training ユーザーで走らせる(send_email.py と operation.log の
+        // 所有を training に一本化するため)。Web(www-data)はキューに依頼を置くだけにし、
+        // systemd(tet2-beacon.path/.service)が training として生成する。Web は sudo を使わない
+        // (2026-10-21 の apache2 更新で apache2.service から /etc/sudoers が見えなくなり、
+        //  従来の `sudo -u training` が失敗したため。tet2-beacon-runner.py がキューを処理する)。
+        return self::generateBeaconFiles($dataDir, $beaconBase);
+    }
+
+    /**
+     * ビーコン生成をキュー経由で training サービスに依頼し、結果を待つ。
+     * @return array{0:bool,1:string}
+     */
+    private static function generateBeaconFiles(string $dataDir, string $beaconBase): array
+    {
+        // 既定は本番の固定パス。テストだけ TET2_BEACON_QUEUE_DIR で隔離する。
+        $queueDir = getenv('TET2_BEACON_QUEUE_DIR') ?: '/opt/training/tet2-data/_beacon_queue';
+        try {
+            PipelineRunner::ensureDir($queueDir);
+        } catch (Throwable $e) {
+            return [false, 'ビーコン生成キューを準備できません: ' . $e->getMessage()];
         }
-        return [true, ''];
+        $reqId = date('Ymd-His') . '-' . bin2hex(random_bytes(6));
+        $reqPath = $queueDir . '/' . $reqId . '.req';
+        $resPath = $queueDir . '/' . $reqId . '.res';
+        $tmpPath = $queueDir . '/' . $reqId . '.tmp';
+        $payload = json_encode(['data_dir' => $dataDir, 'beacon_base' => $beaconBase],
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (file_put_contents($tmpPath, $payload) === false || !@rename($tmpPath, $reqPath)) {
+            @unlink($tmpPath);
+            return [false, 'ビーコン生成の依頼を書き込めません'];
+        }
+
+        // tet2-beacon.path が .req を検知して tet2-beacon.service を起動する。結果(.res)を待つ。
+        // UI の launch timeout は 180 秒。その手前(170 秒)で見切り、生成中であることを伝える。
+        // (TET2_BEACON_TIMEOUT はテストで待ち時間を縮めるための seam。本番は未設定=170 秒。)
+        $timeout = (float) (getenv('TET2_BEACON_TIMEOUT') ?: 170.0);
+        $deadline = microtime(true) + $timeout;
+        while (microtime(true) < $deadline) {
+            if (is_file($resPath)) {
+                $raw = (string) file_get_contents($resPath);
+                @unlink($resPath);
+                $result = json_decode($raw, true);
+                if (!is_array($result) || !isset($result['rc'])) {
+                    return [false, 'ビーコン生成の結果を解釈できません'];
+                }
+                if ((int) $result['rc'] !== 0) {
+                    $details = implode(' / ', array_slice((array) ($result['output'] ?? []), -3));
+                    return [false, "ビーコン生成(rc={$result['rc']}): {$details}"];
+                }
+                return [true, ''];
+            }
+            usleep(200000); // 0.2 秒
+        }
+        @unlink($reqPath);
+        return [false, 'ビーコン生成がタイムアウトしました(生成サービス tet2-beacon が動作しているか確認してください)'];
     }
 }

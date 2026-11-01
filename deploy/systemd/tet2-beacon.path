@@ -1,0 +1,11 @@
+[Unit]
+Description=TET v2 Beacon generator queue watch
+
+[Path]
+# Web が置く依頼ファイル(*.req)を検知して tet2-beacon.service を起動する。
+# ランナーが処理後に .req を消すので、残っていれば再度起動される。
+PathExistsGlob=/opt/training/tet2-data/_beacon_queue/*.req
+Unit=tet2-beacon.service
+
+[Install]
+WantedBy=multi-user.target
