@@ -364,10 +364,18 @@
           <input class="form-control" id="tplSearch" type="search" autocomplete="off" aria-controls="templatesBody" placeholder="シナリオ名・テンプレート名で検索">
         </div>
         <ul class="nav nav-pills mb-3" id="tplKindTabs"></ul>
-        <div class="table-responsive"><table class="table table-hover align-middle">
-          <thead id="templatesHead"></thead>
-          <tbody id="templatesBody"></tbody>
-        </table></div>
+        <div class="row g-3">
+          <div class="col-12" id="tplListCol">
+            <div class="table-responsive"><table class="table table-hover align-middle">
+              <thead id="templatesHead"></thead>
+              <tbody id="templatesBody"></tbody>
+            </table></div>
+          </div>
+          <!-- 「件名＋本文」タブで選んだシナリオのプレビュー。幅の広い画面では一覧の右、狭い画面では一覧の下 -->
+          <div class="col-lg-5 d-none" id="tplPreviewCol">
+            <div class="border rounded p-3 sticky-lg-top" style="top:1rem" id="tplPreviewPane" aria-live="polite"></div>
+          </div>
+        </div>
       </section>
 
       <!-- 役職マスタ: 役職名→役職カテゴリの対応表。未登録の役職をここから登録する -->
@@ -1127,7 +1135,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=a6f63975"></script>
+<script src="app.js?v=bdf2e697"></script>
 <script src="assets/campaign-workspace.js?v=5a18190c"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

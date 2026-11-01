@@ -250,16 +250,13 @@ function templates_handle_create_scenario(array $actor): never
     ], 201);
 }
 
-function templates_handle_update(array $actor): never
+/**
+ * 編集してよい行かを確かめ、共有の行なら true を返す。
+ * 共有プリセット(tenant_id NULL または is_preset=1)は全テナント共通で、ほかのテナントの訓練にも効く。編集は superadmin だけ。
+ * 自テナントの非プリセットは operator 以上(従来どおり所有者のみ)。
+ */
+function templates_assert_updatable(array $template, array $actor, int $tenantId): bool
 {
-    tet2_require_csrf();
-    $body = json_body();
-    $tenantId = effective_tenant_id($actor, templates_body_optional_int($body, 'tenant_id'));
-    $id = templates_int($body, 'id');
-    $template = templates_assert_visible($id, $tenantId);
-
-    // 共有プリセット(tenant_id NULL または is_preset=1)は全テナント共通で、ほかのテナントの訓練にも効く。編集は superadmin だけ。
-    // 自テナントの非プリセットは operator 以上(従来どおり所有者のみ)。
     $isShared = ($template['tenant_id'] === null || (int) $template['is_preset'] === 1);
     if ($isShared) {
         if (($actor['role'] ?? '') !== 'superadmin') {
@@ -268,6 +265,17 @@ function templates_handle_update(array $actor): never
     } elseif ((int) $template['tenant_id'] !== $tenantId) {
         json_error('他組織のデータにはアクセスできません', 403);
     }
+    return $isShared;
+}
+
+function templates_handle_update(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, templates_body_optional_int($body, 'tenant_id'));
+    $id = templates_int($body, 'id');
+    $template = templates_assert_visible($id, $tenantId);
+    $isShared = templates_assert_updatable($template, $actor, $tenantId);
 
     $name = templates_optional_string($body, 'name');
     $content = templates_optional_string($body, 'content');
@@ -306,6 +314,65 @@ function templates_handle_update(array $actor): never
     }
     audit('template.update', 'template_id=' . $id . ($isShared ? ',shared' : '') . ($descriptionSet ? ',description=1' : ''));
     json_out(['success' => true, 'template' => templates_assert_visible($id, $tenantId)]);
+}
+
+/**
+ * シナリオ(件名+本文の対)を一括で更新する。新規作成で入力する全項目(シナリオ名、件名、本文の形式、本文、概要)を直せる。
+ * 件名と本文を別々に update すると、2回目が失敗した時に片方だけ変わるので、1トランザクションで両方を変える。
+ * 入力の検証と権限の確認はすべて書き込みの前に済ませる。
+ */
+function templates_handle_update_scenario(array $actor): never
+{
+    tet2_require_csrf();
+    $body = json_body();
+    $tenantId = effective_tenant_id($actor, templates_body_optional_int($body, 'tenant_id'));
+    $subject = templates_assert_visible(templates_int($body, 'subject_id'), $tenantId);
+    $bodyRow = templates_assert_visible(templates_int($body, 'body_id'), $tenantId);
+    if ($subject['kind'] !== 'subject' || $bodyRow['kind'] !== 'body'
+        || $subject['scenario_key'] === null || $subject['scenario_key'] !== $bodyRow['scenario_key']) {
+        json_error('件名と本文が同じシナリオの組ではありません', 400);
+    }
+    $subjectShared = templates_assert_updatable($subject, $actor, $tenantId);
+    $bodyShared = templates_assert_updatable($bodyRow, $actor, $tenantId);
+
+    $name = templates_string($body, 'name');
+    $subjectContent = templates_string($body, 'subject_content');
+    $bodyContent = templates_string($body, 'body_content');
+    $format = templates_string($body, 'format');
+    templates_validate_format($format);
+    // 概要は送られた時だけ変える(空文字は消す)。null は「変えない」。
+    $description = templates_description($body);
+    $descriptionSet = $description === null ? 0 : 1;
+    $descriptionValue = $description === '' ? null : $description;
+
+    Db::tx(function () use ($subject, $bodyRow, $subjectShared, $bodyShared, $tenantId, $name, $subjectContent, $bodyContent, $format, $descriptionSet, $descriptionValue): void {
+        // 共有は tenant_id 条件を外して更新(NULL にはマッチしないため)。自テナント分は所有条件つき。
+        // 件名は装飾が不要なので作成時と同じく text のまま変えない。
+        $subjectSql = 'UPDATE templates SET name = ?, content = ? WHERE id = ?';
+        $subjectArgs = [$name, $subjectContent, (int) $subject['id']];
+        if (!$subjectShared) {
+            $subjectSql .= ' AND tenant_id = ?';
+            $subjectArgs[] = $tenantId;
+        }
+        Db::run($subjectSql, $subjectArgs);
+
+        $bodySql = 'UPDATE templates SET name = ?, content = ?, format = ?,
+                    description = CASE WHEN CAST(? AS INTEGER) = 1 THEN ? ELSE description END WHERE id = ?';
+        $bodyArgs = [$name, $bodyContent, $format, $descriptionSet, $descriptionValue, (int) $bodyRow['id']];
+        if (!$bodyShared) {
+            $bodySql .= ' AND tenant_id = ?';
+            $bodyArgs[] = $tenantId;
+        }
+        Db::run($bodySql, $bodyArgs);
+    });
+
+    audit('template.update_scenario', 'key=' . $subject['scenario_key'] . ' subject_id=' . $subject['id'] . ' body_id=' . $bodyRow['id']
+        . (($subjectShared || $bodyShared) ? ',shared' : '') . ($descriptionSet ? ',description=1' : ''));
+    json_out([
+        'success' => true,
+        'subject' => templates_assert_visible((int) $subject['id'], $tenantId),
+        'body' => templates_assert_visible((int) $bodyRow['id'], $tenantId),
+    ]);
 }
 
 function templates_handle_delete(array $actor): never
@@ -500,6 +567,9 @@ try {
     }
     if ($action === 'update' && $method === 'POST') {
         templates_handle_update($actor);
+    }
+    if ($action === 'update_scenario' && $method === 'POST') {
+        templates_handle_update_scenario($actor);
     }
     if ($action === 'delete' && $method === 'POST') {
         templates_handle_delete($actor);

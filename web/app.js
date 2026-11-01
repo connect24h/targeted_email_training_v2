@@ -3669,6 +3669,8 @@ let tplKindFilter = 'scenario';
 let tplTemplates = [];
 let tplTemplatesTenantId = null;
 let tplTemplatesRequest = 0;
+// 「件名＋本文」タブで選んだシナリオ(scenario_key)。右のプレビュー欄に出す。
+let tplSelectedScenarioKey = null;
 function templatesMatchingSearch(templates, query) {
   const needle = String(query || '').trim().toLowerCase();
   if (!needle) return templates;
@@ -3693,13 +3695,23 @@ async function renderTemplates() {
 function renderTemplateRows() {
   $('#tplKindTabs').innerHTML = TPL_KINDS.map(([k, l]) =>
     `<li class="nav-item"><a class="nav-link${k===tplKindFilter?' active':''}" href="#" onclick="setTplKind('${k}');return false">${l}</a></li>`).join('');
+  // プレビュー欄は「件名＋本文」タブだけ。ほかのタブは一覧を全幅で出す。
+  const isScenario = tplKindFilter === 'scenario';
+  $('#tplPreviewCol').classList.toggle('d-none', !isScenario);
+  $('#tplListCol').classList.toggle('col-lg-7', isScenario);
   if (tplTemplatesTenantId !== State.activeTenantId) return;
   const all = templatesMatchingSearch(tplTemplates, $('#tplSearch').value);
-  if (tplKindFilter === 'scenario') return renderTemplatesScenario(all);
+  if (isScenario) {
+    renderTemplatesScenario(all);
+    renderScenarioPreview(all);
+    return;
+  }
   if (tplKindFilter === 'phish_login') return renderTemplatesPhish(all);
   return renderTemplatesSimple(all, tplKindFilter);
 }
-// 件名+本文をシナリオ連番で統合表示。行クリックで件名・本文を1画面プレビュー/編集。
+// 件名+本文をシナリオ連番で統合表示。行を選ぶと右の欄に件名と本文のプレビューを出し、そこから修正する。
+// (2026-11-01) 以前は件名列・本文列とも各行の name(=シナリオ名)を出していて、本文列にもシナリオ名が並んでいた。
+// 件名列には件名の文面を出し、長い本文は列にせずプレビュー欄で見せる。
 function renderTemplatesScenario(all) {
   const subjects = all.filter((t) => t.kind === 'subject');
   const bodies = all.filter((t) => t.kind === 'body');
@@ -3713,8 +3725,12 @@ function renderTemplatesScenario(all) {
     if (!s || !b) return '';
     pairedIds.add(s.id);
     pairedIds.add(b.id);
-    return `<tr style="cursor:pointer" data-scenario-key="${esc(key)}" onclick="scenarioViewer(this.dataset.scenarioKey)">
-      <td>${++rowNumber}</td><td>${esc(s.name)}${tplDescriptionHtml(b.description || s.description)}</td><td class="text-muted small">${esc(b.name)}</td>
+    const selected = key === tplSelectedScenarioKey;
+    const subjectText = String(s.content || '').replace(/\s+/g, ' ').trim();
+    return `<tr style="cursor:pointer" class="${selected ? 'table-active' : ''}" aria-selected="${selected}" tabindex="0" data-scenario-key="${esc(key)}"
+      onclick="selectScenario(this.dataset.scenarioKey)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectScenario(this.dataset.scenarioKey)}">
+      <td>${++rowNumber}</td><td>${esc(s.name)}${tplDescriptionHtml(b.description || s.description)}</td>
+      <td class="small"><div class="text-truncate" style="max-width:24rem" title="${esc(subjectText)}">${esc(subjectText)}</div></td>
       <td>${Number(s.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
       <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`;
   }).join('');
@@ -3724,7 +3740,7 @@ function renderTemplatesScenario(all) {
     <td>${++rowNumber}</td><td>${esc(t.name)}${tplDescriptionHtml(t.description)}</td><td class="text-muted small">${KIND_LABELS[t.kind]}（単独）</td>
     <td>${Number(t.is_preset) ? '<span class="badge bg-secondary">共有</span>' : ''}</td>
     <td class="text-end"><i class="bi bi-chevron-right"></i></td></tr>`).join('');
-  $('#templatesHead').innerHTML = '<tr><th>連番</th><th>件名</th><th>本文</th><th></th><th></th></tr>';
+  $('#templatesHead').innerHTML = '<tr><th>連番</th><th>シナリオ名</th><th>件名</th><th></th><th></th></tr>';
   $('#templatesBody').innerHTML = (scenRows + orphanRows) || emptyRow(5);
 }
 // 一覧の名称の下に出す概要(元の事例、手口、見分けるポイント)。長い概要は1行で切り、全文は title で見せる。
@@ -3842,21 +3858,21 @@ function bindTemplateForm() {
 }
 // 件名と本文は 1 つの訓練シナリオを構成する対なので、1 画面でまとめて登録する。
 // scenario_key はサーバ側で自動採番されるため利用者には見せない。
-function scenarioForm() {
+function scenarioForm(v = {}) {
   const phButtons = TPL_PLACEHOLDERS.map((p) =>
     `<button type="button" class="btn btn-sm btn-outline-secondary me-1 mb-1 tpl-ph-btn" data-ph="${esc(p.ph)}">${esc(p.label)} <code>${esc(p.ph)}</code></button>`).join('');
   return `<form id="scenForm">
     <div class="mb-2"><label class="form-label">シナリオ名</label>
-      <input class="form-control" name="name" placeholder="例: 人事部からのマイナンバー確認" required>
+      <input class="form-control" name="name" value="${esc(v.name || '')}" placeholder="例: 人事部からのマイナンバー確認" required>
       <div class="form-text">件名・本文の管理名として使われます。</div></div>
     <div class="mb-2"><label class="form-label">件名</label>
-      <textarea class="form-control" name="subject_content" id="scenSubject" rows="2" required></textarea></div>
+      <textarea class="form-control" name="subject_content" id="scenSubject" rows="2" required>${esc(v.subject_content || '')}</textarea></div>
     <div class="mb-2"><label class="form-label">本文の形式</label>
-      <select class="form-select" name="format"><option value="html">HTML</option><option value="text">テキスト</option></select></div>
+      <select class="form-select" name="format"><option value="html">HTML</option><option value="text"${v.format === 'text' ? ' selected' : ''}>テキスト</option></select></div>
     <div class="mb-1"><label class="form-label mb-1">差し込み支援（カーソル位置に挿入）</label><div>${phButtons}</div></div>
     <div class="mb-2"><label class="form-label">本文</label>
-      <textarea class="form-control" name="body_content" id="tplContent" rows="10" required></textarea></div>
-    ${tplDescriptionField('scenDescription', '')}
+      <textarea class="form-control" name="body_content" id="tplContent" rows="10" required>${esc(v.body_content || '')}</textarea></div>
+    ${tplDescriptionField('scenDescription', v.description || '')}
   </form>`;
 }
 // 概要の入力欄(テンプレートとシナリオの作成・編集で共通)。受講者には見せない、管理者向けの説明。
@@ -3869,7 +3885,7 @@ function tplDescriptionField(id, value) {
 function newScenario() {
   showModal('新規シナリオ（件名＋本文）', scenarioForm(), async () => {
     const f = $('#scenForm');
-    await api('api/templates.php', { method: 'POST', query: { action: 'create_scenario' },
+    const created = await api('api/templates.php', { method: 'POST', query: { action: 'create_scenario' },
       body: {
         name: f.name.value.trim(),
         subject_content: f.subject_content.value.trim(),
@@ -3879,6 +3895,7 @@ function newScenario() {
       } });
     toast('シナリオを作成しました', 'ok');
     tplKindFilter = 'scenario';
+    tplSelectedScenarioKey = created.scenario_key || null;
     renderTemplates();
   });
   // 差し込みボタンは本文(#tplContent)に挿す。既存フォームと同じ id を使うため流用できる。
@@ -4051,62 +4068,102 @@ async function deleteTemplateAndClose(ids, shared) {
   } catch (e) { toast(e.message, 'err'); } // 使用中(409)等はここで表示
 }
 
-// シナリオ(件名+本文)を1画面で見るビューア。件名・本文を並べてプレビュー/HTML/編集。
-async function scenarioViewer(scenarioKey) {
+// scenario_key から件名と本文の対を引く。どちらかが欠けたら null。
+function findScenarioPair(templates, key) {
+  if (!key) return null;
+  const subject = templates.find((t) => t.kind === 'subject' && t.scenario_key === key);
+  const body = templates.find((t) => t.kind === 'body' && t.scenario_key === key);
+  return subject && body ? { subject, body } : null;
+}
+// プレビュー欄の HTML。件名と本文は差込をサンプル値に置き換えて出す(HTML 本文は sandbox iframe)。修正と削除は編集できる人だけ。
+function scenarioPreviewHtml(subject, body, editable) {
+  const shared = Number(subject.is_preset) || Number(body.is_preset);
+  const isHtml = body.format === 'html';
+  return `<div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+      <div><div class="small text-muted">シナリオ</div>
+        <div class="fw-bold">${esc(subject.name)}${shared ? ' <span class="badge bg-secondary">共有</span>' : ''}</div></div>
+      ${editable ? '<button type="button" class="btn btn-sm btn-primary text-nowrap" id="tplPaneEdit"><i class="bi bi-pencil"></i> 修正</button>' : ''}
+    </div>
+    ${tplDescriptionView(body.description || subject.description)}
+    <div class="small text-muted mb-1">件名</div>
+    <div class="border rounded p-2 mb-2 bg-light" style="white-space:pre-wrap">${esc(tplApplyPlaceholders(subject.content))}</div>
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <span class="small text-muted">本文（${isHtml ? 'HTML' : 'テキスト'}）</span>
+      <button type="button" class="btn btn-link btn-sm p-0" id="tplPaneSource" aria-pressed="false">${isHtml ? 'HTMLソース' : '原文'}</button>
+    </div>
+    <div id="tplPaneRendered">${tplPreviewHtml(body.content, body.format, '55vh')}</div>
+    <pre id="tplPaneSourceView" class="d-none border rounded p-2 bg-light" style="max-height:55vh;overflow:auto;white-space:pre-wrap"><code>${esc(body.content || '')}</code></pre>
+    ${editable ? '<div class="mt-2 text-end"><button type="button" class="btn btn-sm btn-outline-danger" id="tplPaneDelete"><i class="bi bi-trash"></i> このシナリオ（件名＋本文）を削除</button></div>' : ''}`;
+}
+// 選んだシナリオのプレビューを右の欄に描く。検索やテナントの切替で一覧から消えたら選択を外す。
+function renderScenarioPreview(all) {
+  const pane = $('#tplPreviewPane');
+  const pair = findScenarioPair(all, tplSelectedScenarioKey);
+  if (!pair) {
+    tplSelectedScenarioKey = null;
+    pane.innerHTML = '<div class="text-muted small py-4 text-center"><i class="bi bi-hand-index me-1"></i>シナリオの行を選ぶと、件名と本文のプレビューがここに出ます。</div>';
+    return;
+  }
+  const { subject, body } = pair;
+  const preset = Number(subject.is_preset) || Number(body.is_preset);
+  pane.innerHTML = scenarioPreviewHtml(subject, body, canEditTemplate(preset));
+  const key = tplSelectedScenarioKey;
+  const editBtn = document.getElementById('tplPaneEdit');
+  if (editBtn) editBtn.addEventListener('click', () => editScenario(key));
+  const delBtn = document.getElementById('tplPaneDelete');
+  if (delBtn) delBtn.addEventListener('click', () => deleteTemplateAndClose([subject.id, body.id], preset));
+  const srcBtn = document.getElementById('tplPaneSource');
+  srcBtn.addEventListener('click', () => {
+    const showSource = srcBtn.getAttribute('aria-pressed') !== 'true';
+    srcBtn.setAttribute('aria-pressed', String(showSource));
+    srcBtn.textContent = showSource ? 'プレビュー' : (body.format === 'html' ? 'HTMLソース' : '原文');
+    document.getElementById('tplPaneRendered').classList.toggle('d-none', showSource);
+    document.getElementById('tplPaneSourceView').classList.toggle('d-none', !showSource);
+  });
+}
+// 行を選ぶ。一覧は描き直さず強調だけ付け替え、プレビュー欄を描く。幅の狭い画面では欄が一覧の下にあるのでそこへ送る。
+function selectScenario(key) {
+  tplSelectedScenarioKey = key;
+  document.querySelectorAll('#templatesBody tr[data-scenario-key]').forEach((tr) => {
+    const on = tr.dataset.scenarioKey === key;
+    tr.classList.toggle('table-active', on);
+    tr.setAttribute('aria-selected', String(on));
+  });
+  renderScenarioPreview(templatesMatchingSearch(tplTemplates, $('#tplSearch').value));
+  if (window.matchMedia('(max-width: 991.98px)').matches) $('#tplPreviewCol').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+// シナリオの修正。新規作成と同じ項目(シナリオ名、件名、本文の形式、本文、概要)を直し、件名と本文を1回の API でまとめて保存する。
+async function editScenario(scenarioKey) {
   let list;
   try { list = (await api('api/templates.php', { query: { action: 'list' } })).templates || []; }
   catch (e) { toast(e.message, 'err'); return; }
-  const subj = list.find((t) => t.scenario_key === scenarioKey && t.kind === 'subject');
-  const bodyT = list.find((t) => t.scenario_key === scenarioKey && t.kind === 'body');
-  if (!subj || !bodyT) { toast('シナリオの件名/本文が見つかりません', 'err'); return; }
-  const preset = Number(subj.is_preset) || Number(bodyT.is_preset);
-  const editable = canEditTemplate(preset);
-  const section = (t, editId) => `
-    <div class="mb-3">
-      <div class="fw-bold small mb-1">${esc(labelKind(t.kind))}：${esc(t.name)}</div>
-      <ul class="nav nav-pills nav-sm mb-1" data-sv="${t.kind}">
-        <li class="nav-item"><a class="nav-link active py-0 px-2" href="#" data-svt="preview">プレビュー</a></li>
-        <li class="nav-item"><a class="nav-link py-0 px-2" href="#" data-svt="html">HTML</a></li>
-        ${editable ? `<li class="nav-item"><a class="nav-link py-0 px-2" href="#" data-svt="edit">修正</a></li>` : ''}
-      </ul>
-      <div data-svpanel="${t.kind}-preview">${tplPreviewHtml(t.content, t.format, '22vh')}</div>
-      <div class="d-none" data-svpanel="${t.kind}-html"><pre class="border rounded p-2 bg-light" style="max-height:22vh;overflow:auto"><code>${esc(t.content || '')}</code></pre></div>
-      ${editable ? `<div class="d-none" data-svpanel="${t.kind}-edit"><textarea class="form-control" id="${editId}" rows="6">${esc(t.content || '')}</textarea></div>` : ''}
-    </div>`;
-  const sharedBanner = preset
-    ? (editable
-        ? '<div class="alert alert-warning py-2 small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>この件名・本文は<strong>全テナント共通</strong>です。変更はすべてのテナントに反映されます。</div>'
-        : '<div class="alert alert-secondary py-2 small mb-2">共有テンプレート（編集にはテナント管理者以上の権限が必要です）。</div>')
+  const pair = findScenarioPair(list, scenarioKey);
+  if (!pair) { toast('シナリオの件名/本文が見つかりません', 'err'); return; }
+  const { subject, body } = pair;
+  const preset = Number(subject.is_preset) || Number(body.is_preset);
+  if (!canEditTemplate(preset)) { toast('このシナリオを修正する権限がありません', 'err'); return; }
+  const banner = preset
+    ? '<div class="alert alert-warning py-2 small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>この件名・本文は<strong>全テナント共通</strong>です。変更はすべてのテナントに反映されます。</div>'
     : '';
-  const scenarioDescription = bodyT.description || subj.description || '';
-  const body = `${sharedBanner}<div class="small text-muted mb-2">シナリオ「${esc(subj.name)}」の件名と本文</div>
-    ${editable ? tplDescriptionField('svDescription', scenarioDescription) : tplDescriptionView(scenarioDescription)}
-    ${section(subj, 'svSubject')}${section(bodyT, 'svBody')}
-    ${editable ? `<div class="mt-2 text-end"><button type="button" class="btn btn-sm btn-outline-danger" id="svDeleteBtn"><i class="bi bi-trash"></i> このシナリオ（件名＋本文）を削除</button></div>` : ''}`;
-  if (editable) {
-    showModal('シナリオ内容', body, async () => {
-      if (preset && !confirm('全テナント共通の件名・本文です。すべてのテナントに反映されます。保存しますか？')) return;
-      await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: subj.id, name: subj.name, kind: 'subject', format: subj.format, content: $('#svSubject').value } });
-      await api('api/templates.php', { method: 'POST', query: { action: 'update' }, body: { id: bodyT.id, name: bodyT.name, kind: 'body', format: bodyT.format, content: $('#svBody').value, description: $('#svDescription').value.trim() } });
-      toast('保存しました', 'ok'); renderTemplates();
-    });
-  } else {
-    showInfoModal('シナリオ内容', body);
-  }
-  // 各セクションのタブ切替
-  document.querySelectorAll('[data-sv]').forEach((navEl) => {
-    navEl.addEventListener('click', (e) => {
-      const a = e.target.closest('.nav-link'); if (!a) return;
-      e.preventDefault();
-      const kind = navEl.dataset.sv;
-      navEl.querySelectorAll('.nav-link').forEach((x) => x.classList.toggle('active', x === a));
-      ['preview', 'html', 'edit'].forEach((k) => {
-        const p = document.querySelector(`[data-svpanel="${kind}-${k}"]`); if (p) p.classList.toggle('d-none', a.dataset.svt !== k);
-      });
-    });
-  });
-  const svDel = document.getElementById('svDeleteBtn');
-  if (svDel) svDel.addEventListener('click', () => deleteTemplateAndClose([subj.id, bodyT.id], preset));
+  const form = scenarioForm({ name: subject.name, subject_content: subject.content, format: body.format,
+    body_content: body.content, description: body.description || subject.description });
+  showModal('シナリオの修正', banner + form, async () => {
+    if (preset && !confirm('全テナント共通の件名・本文です。すべてのテナントに反映されます。保存しますか？')) return;
+    const f = $('#scenForm');
+    await api('api/templates.php', { method: 'POST', query: { action: 'update_scenario' },
+      body: {
+        subject_id: subject.id,
+        body_id: body.id,
+        name: f.name.value.trim(),
+        subject_content: f.subject_content.value.trim(),
+        format: f.format.value,
+        body_content: f.body_content.value,
+        description: f.description.value.trim(),
+      } });
+    toast('保存しました', 'ok');
+    renderTemplates();
+  }, { size: 'lg' });
+  bindTemplateForm();
 }
 
 /* ========== セキュリティ教育: 配信 ========== */
@@ -6372,7 +6429,7 @@ $('#newTemplateBtn').addEventListener('click', newTemplate);
 // インライン onclick から呼ぶためグローバル公開
 Object.assign(window, {
   launchCampaign, stopCampaign, resumeCampaign, showCampaignProgress, showCampaignData, loadCampaignFile, viewMaster, editMaster, downloadMaster, deleteCampaign, editTarget, deleteTarget, restoreTarget,
-  editGroup, deleteGroup, setTplKind, editTemplate, deleteTemplate, tplViewer, scenarioViewer,
+  editGroup, deleteGroup, setTplKind, editTemplate, deleteTemplate, tplViewer, selectScenario, editScenario,
   editUser, deleteUser, sendUserPasswordMail, editTenant, showReportDetail, generateCampaign,
   openTenantDetail, closeTenantDetail, switchToTenant, setTenantStatusFilter, deleteTenant, restoreTenant, purgeTenant,
 });
