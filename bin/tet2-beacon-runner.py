@@ -10,15 +10,18 @@
   path 起動でこのスクリプトを training として動かす。Web は sudo も systemctl も呼ばない。
 
 プロトコル(キュー: /opt/training/tet2-data/_beacon_queue):
-  Web が <reqid>.req(JSON: data_dir, beacon_base) を atomic rename で置く。
+  Web が <reqid>.req(JSON: campaign_id, beacon_base) を atomic rename で置く。
   このスクリプトが *.req を順に処理し、create_beacon_files.py を実行して
   <reqid>.res(JSON: rc, output, finished_at) を atomic rename で書き、.req を消す。
   Web は <reqid>.res を待って rc/output を読み、.res を消す。
+  data_dir は www-data が書いたパスを信用せず、training がこの campaign_id で DB を引いて
+  /opt/training/tet2-data/<slug>/campaign_<id> を自分で決める(パス詐称を不可能にする)。
   実体は data_dir 配下にしか作らないため、1件ずつ逐次処理で十分(launch は .launch.lock で直列)。
 """
 import glob
 import json
 import os
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -31,6 +34,7 @@ STALE_SECONDS = 3600  # 1時間以上前の取り残しは掃除する
 # 生成物の書き込み先はこの配下だけを許す。依頼(www-data作成)に細工された data_dir で
 # training 権限が別の場所へ書くのを防ぐ。
 DATA_ROOT = os.environ.get("TET2_BEACON_DATA_ROOT", "/opt/training/tet2-data")
+DB_PATH = os.environ.get("TET2_BEACON_DB", os.environ.get("TET2_DB_PATH", "/opt/training/tet2-db/tet2.sqlite"))
 
 
 def _atomic_write(path, payload):
@@ -50,6 +54,38 @@ def _atomic_write(path, payload):
     os.replace(tmp, path)
 
 
+def _resolve_data_dir(campaign_id):
+    """campaign_id から DB の正規パスを引き、構成要素に symlink が無いことを確かめて返す。
+
+    www-data が書いた文字列は一切使わない。DB の data_dir が規約どおりの
+    /opt/training/tet2-data/<slug>/campaign_<id> であること、DATA_ROOT から
+    campaign_<id> までの各階層が symlink でない(通常ディレクトリ)ことを検証する。
+    """
+    conn = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True, timeout=5)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT c.data_dir AS data_dir, t.slug AS slug "
+            "FROM campaigns c JOIN tenants t ON t.id = c.tenant_id WHERE c.id = ?",
+            (campaign_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise ValueError("campaign_id が見つかりません: %r" % campaign_id)
+    expected = os.path.join(DATA_ROOT, str(row["slug"]), "campaign_%d" % campaign_id)
+    if str(row["data_dir"]) != expected:
+        raise ValueError("DB の data_dir が規約と一致しません: %s" % row["data_dir"])
+    # DATA_ROOT 配下の各階層が symlink でないこと(途中のすり替えを拒否)。
+    rel = os.path.relpath(expected, DATA_ROOT)
+    cur = DATA_ROOT
+    for part in rel.split(os.sep):
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            raise ValueError("経路に symlink が含まれます: %s" % cur)
+    return expected
+
+
 def _process(req_path):
     reqid = os.path.basename(req_path)[:-4]  # strip .req
     res_path = os.path.join(QUEUE_DIR, reqid + ".res")
@@ -64,12 +100,9 @@ def _process(req_path):
         except BaseException:
             os.close(fd)
             raise
-        data_dir = str(req["data_dir"])
+        campaign_id = int(req["campaign_id"])
         beacon_base = str(req.get("beacon_base") or "")
-        resolved = os.path.realpath(data_dir)
-        root = os.path.realpath(DATA_ROOT)
-        if resolved != root and not resolved.startswith(root + os.sep):
-            raise ValueError("data_dir が許可範囲外です: " + data_dir)
+        resolved = _resolve_data_dir(campaign_id)  # www-data のパスは使わず DB から決める
         cmd = [PYTHON, BEACON_SCRIPT, "--data-dir", resolved]
         if beacon_base != "":
             cmd += ["--beacon-base", beacon_base]

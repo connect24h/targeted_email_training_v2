@@ -38,7 +38,10 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "root で実行してください" >&2; exit 2; }
 
 RUN_ID=_runtime_check_$(date +%Y%m%d%H%M%S)_$$
-STAGE="$DATA_ROOT/$RUN_ID"
+# STAGE は root 専用で atomic に作る(www-data が先回りで symlink を置けないように)。
+# DATA_ROOT は www-data 書込可のため、install -d で www-data 所有にしてから root が
+# 書き込むと symlink 追従の恐れがある。mktemp -d は 0700/root で原子的に作られる。
+STAGE=$(mktemp -d "$DATA_ROOT/.rtcheck.XXXXXXXX")
 PROBES=()
 cleanup() {
   rm -rf -- "$STAGE"
@@ -71,10 +74,11 @@ echo "apache2 の制限: $(systemctl show apache2 -p RestrictSUIDSGID -p MemoryD
 echo "検査するコード: $LIB_DIR"
 echo
 
-# 検査対象のコードを www-data が読める場所へ写す(/root は Apache から見えない)
-install -d -m 02775 -o www-data -g www-data "$STAGE"
+# 検査対象のコードを www-data が読める場所へ写す(/root は Apache から見えない)。
+# root 所有の STAGE に root がコピーし、その後 www-data に読み取り(traverse+read)だけ許す。
 cp -r "$LIB_DIR" "$STAGE/lib"
 chmod -R a+rX "$STAGE/lib"
+chmod 0711 "$STAGE"
 cat > "$STAGE/ensure_dir.php" <<'PHP'
 <?php
 require __DIR__ . '/lib/PipelineRunner.php';
@@ -87,6 +91,7 @@ try {
     echo 'ERR ' . $e->getMessage();
 }
 PHP
+chmod 0644 "$STAGE/ensure_dir.php"
 
 # 1-2. テナントごとの保存先: Web が作成・書込でき、training が中に書けるか
 mapfile -t tenants < <(find "$DATA_ROOT" -mindepth 2 -maxdepth 2 -type d -name 'campaign_*' -printf '%h\n' | sort -u)
@@ -113,12 +118,12 @@ PROBES+=("$qreq" "$qres")
 # Web(www-data, Apache 制限下)が依頼を書けるか
 install -d -m 02775 -o www-data -g www-data "$BEACON_QUEUE" 2>/dev/null || true
 chmod 2775 "$BEACON_QUEUE" 2>/dev/null || true
-wrote=$(as_apache /bin/sh -c 'echo "{\"data_dir\":\"/tmp/none\",\"beacon_base\":\"\"}" > '"$qreq"'.tmp && mv '"$qreq"'.tmp '"$qreq"' && echo ok' 2>&1)
+wrote=$(as_apache /bin/sh -c 'echo "{\"campaign_id\":0,\"beacon_base\":\"\"}" > '"$qreq"'.tmp && mv '"$qreq"'.tmp '"$qreq"' && echo ok' 2>&1)
 if [ "$wrote" = ok ]; then report OK "Web が生成依頼を書ける" "$BEACON_QUEUE"; else report NG "Web が生成依頼を書ける" "$wrote"; fi
 if [ -r "$BEACON_RUNNER" ]; then
   # systemd(training) の代わりにランナーを training として1回起動し、.res が返るか
   as_training /usr/bin/python3 "$BEACON_RUNNER" >/dev/null 2>&1 || true
-  if [ -f "$qres" ]; then report OK "training サービスが結果を返す" "$(head -c 60 "$qres")"; else report NG "training サービスが結果を返す" ".res が出ない"; fi
+  if [ -f "$qres" ] && [ ! -L "$qres" ]; then report OK "training サービスが結果を返す" "$(head -c 60 "$qres")"; elif [ -L "$qres" ]; then report NG "training サービスが結果を返す" ".res が symlink"; else report NG "training サービスが結果を返す" ".res が出ない"; fi
 else
   report NG "ビーコン生成ランナー" "未配備: $BEACON_RUNNER"
 fi

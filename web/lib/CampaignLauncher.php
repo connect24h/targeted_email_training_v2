@@ -158,14 +158,16 @@ final class CampaignLauncher
         // systemd(tet2-beacon.path/.service)が training として生成する。Web は sudo を使わない
         // (2026-10-21 の apache2 更新で apache2.service から /etc/sudoers が見えなくなり、
         //  従来の `sudo -u training` が失敗したため。tet2-beacon-runner.py がキューを処理する)。
-        return self::generateBeaconFiles($dataDir, $beaconBase);
+        return self::generateBeaconFiles($campaignId, $beaconBase);
     }
 
     /**
      * ビーコン生成をキュー経由で training サービスに依頼し、結果を待つ。
+     * data_dir(パス)は送らない。training 側が campaign_id で DB から正規パスを引くため
+     * (www-data が書くパスを training が信用しない=パス詐称を不可能にする)。
      * @return array{0:bool,1:string}
      */
-    private static function generateBeaconFiles(string $dataDir, string $beaconBase): array
+    private static function generateBeaconFiles(int $campaignId, string $beaconBase): array
     {
         // 既定は本番の固定パス。テストだけ TET2_BEACON_QUEUE_DIR で隔離する。
         $queueDir = getenv('TET2_BEACON_QUEUE_DIR') ?: '/opt/training/tet2-data/_beacon_queue';
@@ -178,7 +180,7 @@ final class CampaignLauncher
         $reqPath = $queueDir . '/' . $reqId . '.req';
         $resPath = $queueDir . '/' . $reqId . '.res';
         $tmpPath = $queueDir . '/' . $reqId . '.tmp';
-        $payload = json_encode(['data_dir' => $dataDir, 'beacon_base' => $beaconBase],
+        $payload = json_encode(['campaign_id' => $campaignId, 'beacon_base' => $beaconBase],
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (file_put_contents($tmpPath, $payload) === false || !@rename($tmpPath, $reqPath)) {
             @unlink($tmpPath);
