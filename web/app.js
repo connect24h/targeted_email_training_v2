@@ -766,8 +766,6 @@ async function renderCampaigns() {
           ? `<button class="btn btn-sm btn-danger" onclick="stopCampaign(${c.id})" title="緊急停止"><i class="bi bi-stop-circle"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator') && c.status === 'paused'
           ? `<button class="btn btn-sm btn-outline-primary" onclick="resumeCampaign(${c.id})" title="停止点から再開"><i class="bi bi-play-circle"></i></button>` : ''}
-        ${roleAtLeast(State.user.role, 'operator') && ['done','paused','cancelled'].includes(c.status)
-          ? `<button class="btn btn-sm btn-outline-secondary" onclick="relaunchCampaign(${c.id})" title="複製して再送信（新しい下書きを作成）"><i class="bi bi-arrow-repeat"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="renameCampaign(${c.id})" title="名称変更（送信データには影響しません）"><i class="bi bi-input-cursor-text"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
@@ -777,7 +775,7 @@ async function renderCampaigns() {
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-secondary" onclick="openCampaignSurveyFollowup(${c.id})" title="訓練後のアンケート（クローズした時に配る設定）" aria-label="訓練後のアンケート"><i class="bi bi-ui-checks" aria-hidden="true"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
-          ? `<button class="btn btn-sm btn-outline-secondary" onclick="duplicateCampaign(${c.id})" title="複製（設定・対象者を引き継いで下書き作成）"><i class="bi bi-files"></i></button>` : ''}
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="duplicateCampaign(${c.id})" title="複製（シナリオ・送信環境などの設定を引き継いで下書き作成。対象者とテスト宛先は引き継ぎません）"><i class="bi bi-files"></i></button>` : ''}
         ${roleAtLeast(State.user.role, 'operator')
           ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteCampaign(${c.id})" title="削除（90日間はデータ保持、その後自動削除）"><i class="bi bi-trash"></i></button>` : ''}
       </div></td>
@@ -1056,14 +1054,9 @@ async function toggleTestCampaign(id, currentIsTest) {
   } catch (e) { toast(e.message, 'err'); }
 }
 async function duplicateCampaign(id) {
-  if (!confirm('このキャンペーンを複製して新しい下書きを作成します。\n設定・対象者を引き継ぎます（送信履歴は引き継ぎません）。よろしいですか？')) return;
+  if (!confirm('このキャンペーンを複製して新しい下書きを作成します。\nシナリオ・送信環境などの設定を引き継ぎます（対象者・テスト宛先・送信履歴は引き継ぎません）。\n複製後、対象者と日時を設定して開始してください。よろしいですか？')) return;
   try { const r = await api('api/campaigns.php', { method: 'POST', query: { action: 'duplicate' }, body: { id } });
     toast(`複製しました（下書き #${r.campaign.id}）`, 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
-}
-async function relaunchCampaign(id) {
-  if (!confirm('このキャンペーンを複製して再送信の下書きを作成します。\n同じ対象者に新しい tracking_id で再送できます。\n複製後、送信日時を設定して開始してください。よろしいですか？')) return;
-  try { const r = await api('api/campaigns.php', { method: 'POST', query: { action: 'duplicate' }, body: { id } });
-    toast(`再送信用の下書き #${r.campaign.id} を作成しました。日時を設定して開始してください`, 'ok'); renderCampaigns(); } catch (e) { toast(e.message, 'err'); }
 }
 async function generateCampaign(id) {
   toast('生成中…', 'info');

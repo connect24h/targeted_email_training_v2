@@ -59,4 +59,34 @@ try {
     check(true, '他tenantを404相当で拒否');
 }
 
+// --- デフォルト値の注意(2026-11-03追加) ---
+// 状態を正常な draft に戻し、対象者を1名用意する。
+Db::run("UPDATE campaigns SET status='draft', start_at=?, end_at=?, beacon_base=NULL, beacon_bases=NULL, attachment_filename=NULL WHERE id=2", [$start, $end]);
+Db::run("UPDATE campaign_contents SET link_mode='link', beacon_base=NULL, beacon_bases=NULL, attachment_filename=NULL WHERE campaign_id=2");
+$exists = Db::one('SELECT COUNT(*) AS n FROM campaign_targets WHERE campaign_id=2')['n'];
+if ((int) $exists === 0) {
+    Db::run("INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, koban, send_status, content_no) VALUES (2, 1, 'pfbeacon01', 1, 'pending', 1)");
+}
+$hasDefaultWarn = static fn(array $r): bool => count(array_filter($r['warnings'], static fn(string $w): bool => str_contains($w, '既定のIP'))) > 0;
+$hasKunrenWarn = static fn(array $r): bool => count(array_filter($r['warnings'], static fn(string $w): bool => str_contains($w, 'kunren'))) > 0;
+
+// beacon 未設定 → 既定IPフォールバックの注意が出る
+check($hasDefaultWarn(CampaignPreflight::inspect(2, 1)), 'ビーコン未設定(既定IPフォールバック)で注意を出す');
+// 既定IPを明示 → 注意が出る
+Db::run("UPDATE campaigns SET beacon_base='http://85.131.251.224/' WHERE id=2");
+check($hasDefaultWarn(CampaignPreflight::inspect(2, 1)), '既定IPを明示しても注意を出す');
+// 正式ドメイン → 注意は出ない
+Db::run("UPDATE campaigns SET beacon_base='https://filesend.cojp.online/' WHERE id=2");
+check(!$hasDefaultWarn(CampaignPreflight::inspect(2, 1)), '正式ドメインなら注意を出さない');
+
+// 添付名の注意: link_mode=attachment かつ attachment_filename 未設定 → kunren 注意
+Db::run("UPDATE campaign_contents SET link_mode='attachment', attachment_ext='html', attachment_filename=NULL WHERE campaign_id=2");
+check($hasKunrenWarn(CampaignPreflight::inspect(2, 1)), '添付名未設定(既定kunren)で注意を出す');
+// 添付名を設定 → kunren 注意は出ない
+Db::run("UPDATE campaign_contents SET attachment_filename='案内状' WHERE campaign_id=2");
+check(!$hasKunrenWarn(CampaignPreflight::inspect(2, 1)), '添付名を設定すれば注意を出さない');
+// link 形式なら添付名未設定でも kunren 注意は出ない(添付を作らないため)
+Db::run("UPDATE campaign_contents SET link_mode='link', attachment_ext=NULL, attachment_filename=NULL WHERE campaign_id=2");
+check(!$hasKunrenWarn(CampaignPreflight::inspect(2, 1)), 'link形式は添付名未設定でもkunren注意を出さない');
+
 echo "ALL TESTS PASSED\n";

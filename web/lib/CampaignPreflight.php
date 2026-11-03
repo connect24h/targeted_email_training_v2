@@ -54,6 +54,7 @@ final class CampaignPreflight
         }
         self::checkPeriod($campaign, $blockers, $warnings);
         self::checkContents($contents, $templates, $tenantId, $blockers, $warnings);
+        self::checkDefaultBeacon($campaign, $contents, $warnings);
         self::checkTargets($campaign, $contents, $targets, $tenantId, $blockers);
         $redirect = self::checkTestRecipients($campaign, $blockers, $warnings);
         $sendCount = count($targets);
@@ -168,6 +169,45 @@ final class CampaignPreflight
         }
         if ($generatedAttachmentCount > 0) {
             $warnings[] = "添付/QR形式のコンテンツが{$generatedAttachmentCount}件あります。生成物は配信予約時に作成・全行検証し、失敗した場合は予約しません";
+        }
+        // 添付/QR形式で添付ファイル名が未設定のコンテンツは、生成時に既定の接頭辞 'kunren' になる。
+        // 受信者に訓練だと気づかれやすいので注意として出す。
+        $defaultNameCount = 0;
+        foreach ($contents as $content) {
+            if (!in_array((string) ($content['link_mode'] ?? ''), ['attachment', 'qr'], true)) continue;
+            if (trim((string) ($content['attachment_filename'] ?? '')) === '') $defaultNameCount++;
+        }
+        if ($defaultNameCount > 0) {
+            $warnings[] = "添付ファイル名が未設定のコンテンツが{$defaultNameCount}件あります。既定の接頭辞「kunren」で生成されるため、訓練だと気づかれやすくなります";
+        }
+    }
+
+    /** 既定のビーコンベースURL(未設定時のフォールバック先)。PipelineRunner と揃える。 */
+    private const DEFAULT_BEACON_BASE = 'http://85.131.251.224/';
+
+    /**
+     * キャンペーン本体・各コンテンツの実効ビーコンに既定IP(DEFAULT_BEACON_BASE)が使われるか見る。
+     * beacon_bases(複数) か beacon_base(単数) のいずれにも値が無ければ生成時に既定IPへフォールバックする。
+     */
+    private static function checkDefaultBeacon(array $campaign, array $contents, array &$warnings): void
+    {
+        $usesDefault = static function (array $src): bool {
+            $multi = trim((string) ($src['beacon_bases'] ?? ''));
+            $single = trim((string) ($src['beacon_base'] ?? ''));
+            // 明示値が既定IPそのものなら該当。両方空なら生成時に既定IPへフォールバックするので該当。
+            if ($multi !== '') return str_contains($multi, self::DEFAULT_BEACON_BASE);
+            if ($single !== '') return $single === self::DEFAULT_BEACON_BASE;
+            return true;
+        };
+        // コンテンツに個別指定があればそれを優先、無ければキャンペーン既定を使う(生成と同じ優先順)。
+        $hit = false;
+        foreach ($contents as $content) {
+            $hasOwn = trim((string) ($content['beacon_bases'] ?? '')) !== ''
+                || trim((string) ($content['beacon_base'] ?? '')) !== '';
+            if ($usesDefault($hasOwn ? $content : $campaign)) { $hit = true; break; }
+        }
+        if ($hit) {
+            $warnings[] = 'ビーコンベースURLが既定のIP(' . self::DEFAULT_BEACON_BASE . ')のままです。本番の正式ドメインを選んでいるか確認してください';
         }
     }
 

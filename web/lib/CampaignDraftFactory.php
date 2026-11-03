@@ -30,15 +30,13 @@ final class CampaignDraftFactory
     public function duplicate(int $sourceCampaignId, int $tenantId, int $createdBy): int
     {
         $source = $this->findSource($sourceCampaignId, $tenantId);
-        $rows = Db::all(
-            'SELECT target_id, MIN(koban) AS first_koban
-             FROM campaign_targets WHERE campaign_id = ?
-             GROUP BY target_id ORDER BY first_koban, target_id',
-            [$sourceCampaignId]
-        );
+        // コピーは設定(シナリオ・送信環境・添付ファイル名など)だけ引き継ぎ、対象者とテスト宛先は
+        // 引き継がない(毎回選び直す運用のため)。対象者は空の下書きを作る。
         return $this->createFromSource($sourceCampaignId, $tenantId, [
             'created_by' => $createdBy,
-            'target_ids' => array_map(static fn(array $row): int => (int) $row['target_id'], $rows),
+            'target_ids' => [],
+            'allow_empty_targets' => true,
+            'clear_test_redirect' => true,
             'name' => mb_substr((string) $source['name'] . ' のコピー', 0, 200),
         ]);
     }
@@ -52,7 +50,11 @@ final class CampaignDraftFactory
         $operation = function () use ($sourceCampaignId, $tenantId, $options): int {
             $source = $this->findSource($sourceCampaignId, $tenantId);
             $createdBy = $this->validateCreatedBy($options['created_by'] ?? null, $tenantId);
-            $targetIds = $this->normalizeTargetIds($options['target_ids'] ?? null);
+            // コピー(duplicate)は対象者ゼロの下書きを許す。automation など他の呼び出し元は従来どおり1名以上必須。
+            $allowEmptyTargets = ($options['allow_empty_targets'] ?? false) === true;
+            $targetIds = $allowEmptyTargets
+                ? $this->normalizeOptionalTargetIds($options['target_ids'] ?? null)
+                : $this->normalizeTargetIds($options['target_ids'] ?? null);
             $this->validateTargets($targetIds, $tenantId);
             $contents = $this->loadContents(
                 $sourceCampaignId,
@@ -67,10 +69,14 @@ final class CampaignDraftFactory
             );
             $name = $this->draftName($options['name'] ?? null, (string) $source['name']);
 
-            $draftId = $this->insertCampaign($source, $createdBy, $name);
+            $clearTestRedirect = ($options['clear_test_redirect'] ?? false) === true;
+            $draftId = $this->insertCampaign($source, $createdBy, $name, $clearTestRedirect);
             $this->setDataDir($draftId, $tenantId);
             $this->copyContents($draftId, $contents);
-            if ((string) $source['content_delivery'] === 'all') {
+            // 対象者が無ければ割り当てはしない(空の下書き)。
+            if ($targetIds === []) {
+                // 何もしない
+            } elseif ((string) $source['content_delivery'] === 'all') {
                 $this->assignAllTargets($draftId, $targetIds, $contents);
             } else {
                 $this->assignDistributedTargets($draftId, $targetIds, $contents, $assignments);
@@ -118,6 +124,18 @@ final class CampaignDraftFactory
     {
         if (!is_array($targetIds) || $targetIds === []) {
             throw new CampaignDraftValidationException('対象者を1名以上指定してください');
+        }
+        return $this->normalizeOptionalTargetIds($targetIds);
+    }
+
+    /** 対象者ゼロを許す版(コピーの空下書き用)。未指定(null)は空、要素があれば型と値を検証する。 */
+    private function normalizeOptionalTargetIds(mixed $targetIds): array
+    {
+        if ($targetIds === null) {
+            return [];
+        }
+        if (!is_array($targetIds)) {
+            throw new CampaignDraftValidationException('対象者IDが不正です');
         }
         $normalized = [];
         foreach ($targetIds as $targetId) {
@@ -222,8 +240,10 @@ final class CampaignDraftFactory
         return mb_substr(trim($requestedName), 0, 200);
     }
 
-    private function insertCampaign(array $source, ?int $createdBy, string $name): int
+    private function insertCampaign(array $source, ?int $createdBy, string $name, bool $clearTestRedirect = false): int
     {
+        // コピーはテスト宛先を引き継がない(毎回選び直す運用のため)。automation など他の呼び出し元は従来どおり引き継ぐ。
+        $testRedirect = $clearTestRedirect ? null : ($source['test_redirect_emails'] ?? null);
         return Db::insert(
             'INSERT INTO campaigns
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
@@ -238,7 +258,7 @@ final class CampaignDraftFactory
                 $source['link_mode'], $source['attachment_ext'], $source['attachment_zip'], $source['send_mode'],
                 $source['split_count'], $source['split_interval_min'], $source['weekdays_only'],
                 $source['business_start'], $source['business_end'], null, null, $source['is_test'],
-                $source['content_delivery'], $source['test_redirect_emails'] ?? null, $source['reveal_page_id'] ?? null, $createdBy,
+                $source['content_delivery'], $testRedirect, $source['reveal_page_id'] ?? null, $createdBy,
             ]
         );
     }
@@ -259,12 +279,13 @@ final class CampaignDraftFactory
             Db::run(
                 'INSERT INTO campaign_contents
                  (campaign_id, content_no, subject_template_id, body_template_id, phish_template_id,
-                  link_mode, attachment_ext, attachment_zip, from_address, beacon_base, beacon_bases, from_addresses, suppress_body_url,
+                  link_mode, attachment_ext, attachment_filename, attachment_zip, from_address, beacon_base, beacon_bases, from_addresses, suppress_body_url,
                   suppress_prefill_email)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $draftId, $content['content_no'], $content['subject_template_id'], $content['body_template_id'],
                     $content['phish_template_id'], $content['link_mode'], $content['attachment_ext'],
+                    $content['attachment_filename'] ?? null,
                     $content['attachment_zip'], $content['from_address'], $content['beacon_base'],
                     $content['beacon_bases'] ?? null, $content['from_addresses'] ?? null,
                     $content['suppress_body_url'] ?? 0,
