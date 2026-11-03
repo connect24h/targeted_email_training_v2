@@ -1168,7 +1168,9 @@ async function loadSendEndpointsList() {
       <td class="text-end text-nowrap">${canEdit
         ? `<button class="btn btn-sm btn-outline-primary" onclick="editSendEndpoint(${Number(r.id)})"><i class="bi bi-pencil"></i></button>
            <button class="btn btn-sm btn-outline-danger" onclick="deleteSendEndpoint(${Number(r.id)})" aria-label="削除"><i class="bi bi-trash"></i></button>`
-        : '<span class="small text-muted">閲覧のみ</span>'}</td>
+        : (r.shared
+            ? '<span class="small text-muted" title="共有（全テナント共通）はシステム管理者だけが削除できます">共有のため削除不可</span>'
+            : '<span class="small text-muted">閲覧のみ</span>')}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="5" class="small text-muted">まだ登録がありません。</td></tr>';
 }
@@ -2287,6 +2289,10 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
         <div class="col-md-6 mb-2"><label class="form-label">開始日時</label><input class="form-control" name="start_at" type="datetime-local" required></div>
         <div class="col-md-6 mb-2"><label class="form-label">終了日時</label><input class="form-control" name="end_at" type="datetime-local" required></div>
       </div>
+      <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="immediateScheduleBtn"><i class="bi bi-lightning-charge"></i> 即時送付（5分後開始・1時間後終了）</button>
+        <span class="form-text ms-2">開始を今から5分後、終了をその1時間後に設定します。</span>
+      </div>
       <div class="row g-2">
         <div class="col-md-4 mb-2"><label class="form-label">営業開始</label><input class="form-control" name="business_start" placeholder="09:00"></div>
         <div class="col-md-4 mb-2"><label class="form-label">営業終了</label><input class="form-control" name="business_end" placeholder="18:00"></div>
@@ -2303,9 +2309,16 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
         <div class="form-text">「全員に全コンテンツ」は各対象者へ登録した全コンテンツを送ります。コンテンツごとに個別追跡されます。</div></div>
       <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_test" id="cbTest"><label class="form-check-label" for="cbTest">テスト送信（is_test）</label></div>
       <div class="mb-2" id="testRedirectWrap" style="display:none">
-        <label class="form-label">テスト宛先（リダイレクト先メール・カンマ区切り）</label>
+        <label class="form-label">テスト宛先（対象者・グループから選択、または直接入力）</label>
+        <div class="row g-2 mb-2">
+          <div class="col-md-6"><label class="form-label small mb-1">対象者から選ぶ</label>
+            <select class="form-select" id="testRedirectTargets" multiple size="4">${(tgts.targets||[]).map((t)=>`<option value="${esc(t.email)}">${esc(t.email)}（${esc(t.name||'')}）</option>`).join('')}</select></div>
+          <div class="col-md-6"><label class="form-label small mb-1">グループから選ぶ</label>
+            <select class="form-select" id="testRedirectGroups" multiple size="4">${(grps.groups||[]).map((g)=>`<option value="${esc(g.name)}">${esc(g.name)}（${Number(g.target_count || 0)}名）</option>`).join('')}</select></div>
+        </div>
+        <label class="form-label small mb-1">直接入力（カンマ区切り・任意）</label>
         <textarea class="form-control" name="test_redirect_emails" rows="2" placeholder="test1@example.com, test2@example.com"></textarea>
-        <div class="form-text">全件転送テストです。対象者・コンテンツの全送信行を、指定したアドレスへ<strong>均等分配</strong>します（例: 1000通を4アドレスに各250通）。差し込みデータ・追跡は元の対象者のままです。テスト宛先は必須で、空の場合は配信できません。</div>
+        <div class="form-text">全件転送テストです。選んだ対象者・グループ所属者のメールと、直接入力したアドレスをまとめ、全送信行をそれらへ<strong>均等分配</strong>します。差し込みデータ・追跡は元の対象者のままです。テスト宛先は必須で、空の場合は配信できません。</div>
       </div>
       </section>
       <section class="campaign-editor-section" data-campaign-step="targets"><h3 tabindex="-1">対象者</h3>
@@ -2436,7 +2449,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       is_test: f.is_test.checked,
       content_delivery: f.content_delivery ? f.content_delivery.value : 'distribute',
       reveal_page_id: (f.reveal_page_id && f.reveal_page_id.value) ? Number(f.reveal_page_id.value) : null,
-      test_redirect_emails: (f.test_redirect_emails && f.test_redirect_emails.value.trim()) || null,
+      test_redirect_emails: collectTestRedirectEmails(f, tgts.targets || []),
       start_at: f.start_at.value.replace('T', ' '),
       end_at: f.end_at.value.replace('T', ' '),
       target_ids: multiVals(f.target_ids),
@@ -2766,10 +2779,45 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
   // 対象日プレビュー(平日限定の可視化)
   const wpBtn = document.getElementById('weekdayPreviewBtn');
   if (wpBtn) wpBtn.addEventListener('click', showWeekdayPreview);
+  // 即時送付: 開始=今から5分後、終了=その1時間後を入れる。
+  const immBtn = document.getElementById('immediateScheduleBtn');
+  if (immBtn) immBtn.addEventListener('click', () => setImmediateSchedule(campaignForm));
   // テスト送信チェックに応じてテスト宛先(リダイレクト先)欄の表示を切り替える。
   const cbTest = document.getElementById('cbTest');
   if (cbTest) cbTest.addEventListener('change', toggleTestRedirect);
   toggleTestRedirect();  // 初期表示
+}
+// datetime-local 用にローカル時刻を "YYYY-MM-DDTHH:MM" へ整形する(UTC変換しない)。
+function toLocalDatetimeValue(date) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+// 即時送付: 開始=今から5分後、終了=その1時間後を start_at/end_at に入れる。
+function setImmediateSchedule(form) {
+  const start = new Date(Date.now() + 5 * 60 * 1000);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  form.start_at.value = toLocalDatetimeValue(start);
+  form.end_at.value = toLocalDatetimeValue(end);
+  toast('即時送付の日時を入れました（5分後開始・1時間後終了）', 'ok');
+}
+// テスト宛先を「対象者選択＋グループ選択＋直接入力」からまとめ、重複を除いたカンマ区切り文字列にする。
+// グループ所属は targets 一覧の各対象者の groups(グループ名の配列)で突合する。空なら null。
+function collectTestRedirectEmails(form, targets) {
+  const emails = [];
+  const push = (e) => { e = (e || '').trim(); if (e && !emails.includes(e)) emails.push(e); };
+  const selTargets = document.getElementById('testRedirectTargets');
+  if (selTargets) Array.from(selTargets.selectedOptions).forEach((o) => push(o.value));
+  const selGroups = document.getElementById('testRedirectGroups');
+  const groupNames = selGroups ? Array.from(selGroups.selectedOptions).map((o) => o.value) : [];
+  if (groupNames.length) {
+    for (const t of targets) {
+      const names = (t.groups || []).map((g) => (typeof g === 'string' ? g : g.name));
+      if (names.some((n) => groupNames.includes(n))) push(t.email);
+    }
+  }
+  const ta = form.test_redirect_emails;
+  if (ta && ta.value.trim()) ta.value.split(/[,\s]+/).forEach(push);
+  return emails.length ? emails.join(', ') : null;
 }
 // is_test チェック時のみテスト宛先(リダイレクト先メール)入力欄を表示する。
 function toggleTestRedirect() {
