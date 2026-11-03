@@ -148,14 +148,67 @@ def generate_qr_document(fmt: str, body_text: str, tracking_url: str, out_path: 
     return out_path
 
 
+def generate_url_document(fmt: str, body_text: str, tracking_url: str, out_path: str) -> str:
+    """本文 body_text に、クリック可能な追跡URLリンクを埋め込んだ PDF を out_path に書き出す。
+
+    QR型(generate_qr_document)が QR 画像を置くのに対し、本関数は tracking_url への
+    クリック可能なハイパーリンク(下線付きの可視URL)を本文末に置く。受信者がPDFを開いて
+    リンクを踏む→link-{tid}.html(偽ログイン)へ、という導線を作る(add_url型)。
+
+    fmt: 'pdf' のみ対応(本文URL型の添付は常にPDF)。他は ValueError。
+    tracking_url: 埋め込むリンク先(通常 {base}/link-{tracking_id}.html)。
+    """
+    fmt = fmt.lower()
+    if fmt != "pdf":
+        raise ValueError(f"generate_url_document は pdf のみ対応: {fmt}")
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    # 日本語フォント(reportlab同梱のCID)。埋め込み不要で日本語が出る。
+    pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
+    c = canvas.Canvas(out_path, pagesize=A4)
+    width, height = A4
+    font_name, font_size = "HeiseiKakuGo-W5", 11
+    c.setFont(font_name, font_size)
+    y = height - 25 * mm
+    for line in body_text.split("\n"):
+        c.drawString(20 * mm, y, line)
+        y -= 7 * mm
+        if y < 45 * mm:  # ページ下端でリンクを置く余白を確保して打ち切り
+            break
+    # 本文とリンクの間を一行あけ、クリック可能な可視URLを下線付きで描く。
+    y -= 7 * mm
+    link_x = 20 * mm
+    c.setFillColorRGB(0.0, 0.0, 0.8)
+    c.drawString(link_x, y, tracking_url)
+    text_width = c.stringWidth(tracking_url, font_name, font_size)
+    # 可視テキストの下線。
+    c.setStrokeColorRGB(0.0, 0.0, 0.8)
+    c.line(link_x, y - 1.2, link_x + text_width, y - 1.2)
+    # クリック可能領域(テキストの外接矩形)に外部リンクを張る。
+    c.linkURL(tracking_url, (link_x, y - 3, link_x + text_width, y + font_size), relative=0)
+    c.setFillColorRGB(0.0, 0.0, 0.0)
+    c.showPage()
+    c.save()
+    return out_path
+
+
 if __name__ == "__main__":
+    import tempfile
     body = ("#$2$#さん\n\nお疲れさまです。人事部です。\n"
             "下記のQRコードから、マイナンバー情報の確認をお願いします。\n"
             "期限は本日中です。\n\n※本メールは標的型攻撃メール訓練です。")
     url = "http://85.131.251.224/link-1234567890.html"
-    outdir = "/tmp/claude-0/-root/3306ab7d-effd-4e4d-9e11-7acd4c62bf69/scratchpad"
+    outdir = tempfile.mkdtemp(prefix="qrdoc-test-")
     for fmt in ("docx", "pdf", "html", "xlsx", "pptx"):
         p = os.path.join(outdir, f"qrdoc-test.{fmt}")
         generate_qr_document(fmt, body, url, p)
         sz = os.path.getsize(p)
-        print(f"{fmt}: {p} ({sz} bytes) OK")
+        print(f"qr {fmt}: {p} ({sz} bytes) OK")
+    # 本文URL型(add_url): クリック可能リンク埋め込みPDF。
+    up = os.path.join(outdir, "urldoc-test.pdf")
+    generate_url_document("pdf", body, url, up)
+    print(f"url pdf: {up} ({os.path.getsize(up)} bytes) OK")

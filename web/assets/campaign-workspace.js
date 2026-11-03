@@ -4,7 +4,7 @@ function createCampaignWorkspace(root, actions) {
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const count = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
-  const modeLabel = { link: 'リンク', attachment: '添付', form: 'フォーム', qr: 'QRコード' };
+  const modeLabel = { link: 'リンク', attachment: '添付（偽ログイン）', attachment_url: '添付（本文URL）', form: 'フォーム', qr: 'QRコード' };
   root.addEventListener('click', (event) => {
     const button = event.target.closest('[data-campaign-action]');
     if (!button || !root.contains(button) || button.disabled) return;

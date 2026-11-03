@@ -1,7 +1,7 @@
 <?php declare(strict_types=1); require __DIR__."/../lib/bootstrap.php";
 require_once __DIR__ . '/../lib/CampaignDraftFactory.php';
 
-const CAMPAIGN_LINK_MODES = ['link', 'attachment', 'form', 'qr'];
+const CAMPAIGN_LINK_MODES = ['link', 'attachment', 'attachment_url', 'form', 'qr'];
 const CAMPAIGN_SEND_MODES = ['normal', 'split', 'slow'];
 const CAMPAIGN_SPLIT_INTERVALS = [5, 15, 30, 60];
 const CAMPAIGN_MAX_CONTENTS = 100;

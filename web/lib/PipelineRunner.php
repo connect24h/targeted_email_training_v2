@@ -282,9 +282,15 @@ final class PipelineRunner
             // 未指定/不正値なら従来の 'qr'（生QR画像PNG・後方互換）にフォールバックする。
             // それ以外の添付型は attachment_ext を使う。
             $linkMode = (string) ($content['link_mode'] ?? 'link');
-            $ext = $linkMode === 'qr'
-                ? self::qrAttachmentExtension($content['attachment_ext'] ?? null)
-                : (string) ($content['attachment_ext'] ?? 'html');
+            if ($linkMode === 'qr') {
+                $ext = self::qrAttachmentExtension($content['attachment_ext'] ?? null);
+            } elseif ($linkMode === 'attachment_url') {
+                // 本文URL型は必ずPDF。create_beacon_files.py がこの識別子で
+                // 「QR画像の代わりにクリック可能な偽ログインURLを埋め込んだPDF」を生成する。
+                $ext = 'url_pdf';
+            } else {
+                $ext = (string) ($content['attachment_ext'] ?? 'html');
+            }
             $zip = (int) ($content['attachment_zip'] ?? 0);
             $prefix = self::sanitizePrefix($content['attachment_filename'] ?? null);
             $attachRows[] = [$contentNo, $prefix, $ext, $zip];
@@ -350,10 +356,11 @@ final class PipelineRunner
             $contentBase = rtrim($r !== null ? $r['beacon'] : self::beaconUrlBase(['beacon_base' => $targetContent['beacon_base'] ?? ($c['beacon_base'] ?? null)]), '/');
             $contentFromAddr = $r !== null ? $r['from'] : (string) ($targetContent['from_address'] ?? $fromAddr);
 
-            if ($linkMode === 'attachment' || $linkMode === 'qr') {
-                // 添付型/QR型: 本文はトップ、添付を付ける(添付番号=content_no)。
+            if ($linkMode === 'attachment' || $linkMode === 'qr' || $linkMode === 'attachment_url') {
+                // 添付型/QR型/本文URL型: 本文はトップ、添付を付ける(添付番号=content_no)。
                 //  - attachment: 添付HTML(偽ログイン)。追跡は添付内ビーコン。
                 //  - qr: 添付はQR画像PNG。QRの中身が link-{tid}.html なので、スキャン→追跡URL→click記録。
+                //  - attachment_url: 添付はPDF。本文にクリック可能な link-{tid}.html を埋め込み、クリック→click記録→偽ログイン。
                 $bodyUrl = $contentBase . '/';
                 $attachNo = $targetContentNo;
             } else {

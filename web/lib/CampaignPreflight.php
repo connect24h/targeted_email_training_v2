@@ -169,10 +169,10 @@ final class CampaignPreflight
                     $blockers[] = "コンテンツ{$no}の{$kind}テンプレートが利用できません";
                 }
             }
-            if (!in_array((string) ($content['link_mode'] ?? ''), ['link', 'attachment', 'form', 'qr'], true)) {
+            if (!in_array((string) ($content['link_mode'] ?? ''), ['link', 'attachment', 'attachment_url', 'form', 'qr'], true)) {
                 $blockers[] = "コンテンツ{$no}の配信形式が不正です";
             }
-            if (in_array((string) ($content['link_mode'] ?? ''), ['attachment', 'qr'], true)) $generatedAttachmentCount++;
+            if (in_array((string) ($content['link_mode'] ?? ''), ['attachment', 'attachment_url', 'qr'], true)) $generatedAttachmentCount++;
         }
         if ($generatedAttachmentCount > 0) {
             $warnings[] = "添付/QR形式のコンテンツが{$generatedAttachmentCount}件あります。生成物は配信予約時に作成・全行検証し、失敗した場合は予約しません";
@@ -181,7 +181,7 @@ final class CampaignPreflight
         // 受信者に訓練だと気づかれやすいので注意として出す。
         $defaultNameCount = 0;
         foreach ($contents as $content) {
-            if (!in_array((string) ($content['link_mode'] ?? ''), ['attachment', 'qr'], true)) continue;
+            if (!in_array((string) ($content['link_mode'] ?? ''), ['attachment', 'attachment_url', 'qr'], true)) continue;
             if (trim((string) ($content['attachment_filename'] ?? '')) === '') $defaultNameCount++;
         }
         if ($defaultNameCount > 0) {

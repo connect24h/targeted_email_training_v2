@@ -2371,7 +2371,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       <div class="c-preview-area border rounded p-2 mt-1 bg-light d-none"></div>
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">配信形式</label>
-          <select class="form-select form-select-sm c-linkmode"><option value="link">リンク</option><option value="attachment">添付</option><option value="form">フォーム</option><option value="qr">QRコード</option></select></div>
+          <select class="form-select form-select-sm c-linkmode"><option value="link">リンク</option><option value="attachment">添付（偽ログイン）</option><option value="attachment_url">添付（本文URL）</option><option value="form">フォーム</option><option value="qr">QRコード</option></select></div>
         <div class="col-md-4"><label class="form-label small c-ext-label text-muted">添付拡張子(添付/QR時)</label><input class="form-control form-control-sm c-ext" placeholder="html / docx / pdf / xlsx / pptx"></div>
         <div class="col-md-4 d-flex align-items-end"><div class="form-check">
           <input class="form-check-input c-zip" type="checkbox"><label class="form-check-label small c-zip-label text-muted">zip化</label></div></div>
@@ -2518,7 +2518,10 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
   // link/form 型は本文中のリンクで追跡するため、添付拡張子・zipは意味を持たない→無効化。
   const syncAttachment = (row) => {
     const mode = row.querySelector('.c-linkmode').value;
-    const needsAttachment = (mode === 'attachment' || mode === 'qr');
+    // 添付を生成する形式(接頭辞・zip・本文URL抑制が有効)。
+    const needsAttachment = (mode === 'attachment' || mode === 'qr' || mode === 'attachment_url');
+    // 拡張子を利用者が選べる形式。本文URL型(attachment_url)は常にPDFなので拡張子は固定(編集不可)。
+    const extEditable = (mode === 'attachment' || mode === 'qr');
     const ext = row.querySelector('.c-ext');
     const zip = row.querySelector('.c-zip');
     const prefix = row.querySelector('.c-prefix');
@@ -2528,22 +2531,26 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     const hint = row.querySelector('.c-linkmode-hint');
     const suppress = row.querySelector('.c-suppress-url');
     const suppressLabel = row.querySelector('.c-suppress-label');
-    ext.disabled = !needsAttachment;
+    ext.disabled = !extEditable;
     zip.disabled = !needsAttachment;
-    // 添付ファイル名の接頭辞も添付/QR型のみ有効(link/form型ではファイルを作らない)。
+    // 添付ファイル名の接頭辞も添付/QR/本文URL型のみ有効(link/form型ではファイルを作らない)。
     prefix.disabled = !needsAttachment;
-    // 本文URL抑制は添付/QR型のみ有効(リンク/フォーム型でURLを消すと追跡不能になるため)。
+    // 本文URL抑制は添付/QR/本文URL型のみ有効(リンク/フォーム型でURLを消すと追跡不能になるため)。
     suppress.disabled = !needsAttachment;
-    extLabel.classList.toggle('text-muted', !needsAttachment);
+    extLabel.classList.toggle('text-muted', !extEditable);
     zipLabel.classList.toggle('text-muted', !needsAttachment);
     prefixLabel.classList.toggle('text-muted', !needsAttachment);
     suppressLabel.classList.toggle('text-muted', !needsAttachment);
     if (!needsAttachment) { ext.value = ''; zip.checked = false; suppress.checked = false; prefix.value = ''; }
-    else { suppress.checked = true; } // 添付/QR型は既定で本文URLを抑制(半端なリンクを残さない)
+    else {
+      suppress.checked = true; // 添付/QR/本文URL型は既定で本文URLを抑制(半端なリンクを残さない)
+      if (!extEditable) ext.value = ''; // 本文URL型は拡張子固定(PDF)。入力値は使わない
+    }
     const hints = {
       link: 'リンク型：本文中のリンクをクリックすると追跡します（添付は使いません）。',
       form: 'フォーム型：偽ログインフォームへの入力を追跡します（添付は使いません）。',
-      attachment: '添付型：指定拡張子のファイルを添付し、開封を追跡します。',
+      attachment: '添付型：添付ファイル自体が偽ログイン画面です。開いて入力させて追跡します（拡張子を指定）。',
+      attachment_url: '添付（本文URL）型：PDFを添付し、PDF本文にクリック可能な偽ログインURLを埋め込みます（拡張子はPDF固定）。',
       qr: 'QRコード型：QR画像を添付し、スキャン（＝クリック）を追跡します。',
     };
     hint.textContent = hints[mode] || '';

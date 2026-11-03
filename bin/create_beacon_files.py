@@ -17,8 +17,8 @@ import qrcode
 from datetime import datetime
 from pathlib import Path
 
-# QR埋め込み文書生成（同ディレクトリに配置。ロジックは qr_doc_gen.py 側を正とし、ここでは import のみ行う）。
-from qr_doc_gen import generate_qr_document
+# QR埋め込み文書生成／本文URLリンク埋め込み文書生成（同ディレクトリに配置。ロジックは qr_doc_gen.py 側を正とし、ここでは import のみ行う）。
+from qr_doc_gen import generate_qr_document, generate_url_document
 
 import sqlite3
 
@@ -118,6 +118,15 @@ QR_DOCUMENT_FORMATS = {
     'qr_pptx': 'pptx',
 }
 
+# 本文URL型(link_mode='attachment_url')添付の拡張子識別子。Attachment.csv の「拡張子」列の値と一致させる
+# （PipelineRunner.php が attachment_url のとき 'url_pdf' を書く）。
+#   'url_pdf' : 本文に、クリック可能な偽ログインURL(link-{tid}.html)を埋め込んだ pdf
+# QR型と違い生画像へのフォールバックは無い（本文URL型は常にPDF）。未知値はここに無いので
+# resolve_url_extension が None を返し、従来の添付(HTML等)経路には進ませない。
+URL_DOCUMENT_FORMATS = {
+    'url_pdf': 'pdf',
+}
+
 WEB_ROOT = Path("/var/www/html")
 ATTACHMENT_ROOT = Path("/opt/training/bin/Attachment")
 
@@ -193,6 +202,16 @@ def resolve_qr_extension(extension):
         return ('doc', QR_DOCUMENT_FORMATS[key])
     # 'qr' 含む未知の識別子は全て従来PNGにフォールバック（後方互換を最優先）。
     return ('png', None)
+
+
+def resolve_url_extension(extension):
+    """Attachment.csv の拡張子文字列が本文URL型(attachment_url)の識別子かを判定する。
+
+    戻り値: 'pdf'  本文にクリック可能な追跡URLリンクを埋め込む文書形式
+            None   本文URL型ではない（QR型/従来の添付型として処理する）
+    """
+    key = str(extension).strip().lower()
+    return URL_DOCUMENT_FORMATS.get(key)
 
 
 def is_suppress_prefill_email(value):
@@ -536,7 +555,50 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
                         # QR型の処理（拡張子が 'qr' または 'qr_docx'/'qr_pdf'/'qr_html' の場合）
                         # 判定は resolve_qr_extension() に集約。未知の識別子は 'qr'(PNG)後方互換にフォールバックする。
                         qr_kind, qr_doc_fmt = resolve_qr_extension(extension)
-                        if extension.lower() == 'qr' or extension.lower() in QR_DOCUMENT_FORMATS:
+                        url_doc_fmt = resolve_url_extension(extension)
+                        if url_doc_fmt is not None:
+                            # 本文URL型(attachment_url): 本文テンプレをそのまま流し込み、
+                            # クリック可能な偽ログインURL(link-{tid}.html)を埋め込んだ PDF を生成する。
+                            # QRと違い画像ではなくハイパーリンク。踏む→click記録→偽ログイン。
+                            print(f"  [URL] 本文URL型添付ファイル処理開始（種別: {extension}）", flush=True)
+                            try:
+                                tracking_url = f"{beacon_base}/link-{random_value}.html"
+                                print(f"     [URL] 埋め込みリンク先: {tracking_url}", flush=True)
+                                logger.info(f"本文URLリンク先: {tracking_url}")
+
+                                body_template_no = row.get('本文定型文No', 1)
+                                raw_body = get_body_template(honbun_df, body_template_no)
+                                body_text = replace_placeholders(raw_body, row)
+
+                                doc_filename = f"{filename}{random_value}.{url_doc_fmt}"
+                                url_dest_path = f"/opt/training/bin/Attachment/{doc_filename}"
+
+                                if os.path.exists(url_dest_path):
+                                    os.remove(url_dest_path)
+
+                                generate_url_document(url_doc_fmt, body_text, tracking_url, url_dest_path)
+                                os.chmod(url_dest_path, 0o644)
+
+                                print(f"     [OK] 本文URL文書作成({url_doc_fmt}): {doc_filename}", flush=True)
+                                logger.info(f"本文URL文書作成({url_doc_fmt}): {url_dest_path}")
+
+                                # ZIPフラグが1の場合、ZIPファイル化（QR型と共通ロジック）
+                                if float(zip_flag) == 1.0:
+                                    url_zip_filename = f"{filename}{random_value}.zip"
+                                    url_zip_dest_path = f"/opt/training/bin/Attachment/{url_zip_filename}"
+                                    with zipfile.ZipFile(url_zip_dest_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                                        zipf.write(url_dest_path, os.path.basename(url_dest_path))
+                                    os.remove(url_dest_path)
+                                    print(f"     [ZIP] ZIP化完了: {url_zip_filename}", flush=True)
+                                    logger.info(f"本文URL文書ZIPファイル作成: {url_zip_dest_path}")
+                                    list_df.at[index, '添付ファイル'] = url_zip_dest_path
+                                else:
+                                    list_df.at[index, '添付ファイル'] = url_dest_path
+
+                            except Exception as e:
+                                print(f"     [ERROR] 本文URL文書生成エラー: {str(e)}", flush=True)
+                                logger.error(f"本文URL文書生成エラー: {str(e)}")
+                        elif extension.lower() == 'qr' or extension.lower() in QR_DOCUMENT_FORMATS:
                             print(f"  [QR] QRコード型添付ファイル処理開始（種別: {extension}）", flush=True)
                             try:
                                 # 追跡URLの構築
