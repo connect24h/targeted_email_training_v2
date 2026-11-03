@@ -95,7 +95,9 @@ foreach (array_slice($listCsv, 1) as $row) {
         $foundAu = true;
         check(trim((string) $row[$attachNoIdx]) !== '', 'attachment_url 行は添付ファイル番号あり(添付を生成する)');
         check((int) $row[$attachNoIdx] === 1, 'attachment_url 行の添付ファイル番号 = content_no(1)');
-        check(strpos((string) $row[$bodyUrlIdx], 'link-') === false, 'attachment_url 行の本文URLは link-{tid}.html ではない(トップ or 空)');
+        check(strpos((string) $row[$bodyUrlIdx], 'link-') === false, 'attachment_url 行のメール本文 #$1$# は URL ではない');
+        // メール本文 #$1$# は固定の添付参照文言に差し替える(実URLはPDF添付内 #$1$# に入る)。
+        check((string) $row[$bodyUrlIdx] === '添付ファイルをご参照ください', 'attachment_url 行のメール本文 #$1$# は「添付ファイルをご参照ください」');
     }
     if ($contentNo === 2) { // link 対比
         $foundLink = true;

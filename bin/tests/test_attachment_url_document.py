@@ -51,6 +51,31 @@ class GenerateUrlDocumentTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 qr_doc_gen.generate_url_document(fmt, "body", "http://x/link-0000000000.html", "/tmp/should-not-create")
 
+    def test_marker_places_link_and_is_not_rendered_literally(self) -> None:
+        # url_marker(本文の #$1$# 相当)の位置にリンクを差し込み、マーカー自体は本文に残さない。
+        url = "http://85.131.251.224/link-1234567890.html"
+        marker = "@@TET2_URL_LINK@@"
+        body = "山田さん\n\n確認をお願いします。\n\n" + marker + "\n\nご多忙のところ恐縮です。"
+        with tempfile.TemporaryDirectory() as d:
+            out = str(Path(d) / "marker.pdf")
+            qr_doc_gen.generate_url_document("pdf", body, url, out, url_marker=marker)
+            data = Path(out).read_bytes()
+            self.assertIn(b'/Link', data)
+            self.assertIn(url.encode('ascii'), data)
+            # マーカー文字列が本文テキストとして残っていない(=リンクに置換された)。
+            self.assertNotIn(b'TET2_URL_LINK', data)
+
+    def test_missing_marker_falls_back_to_appended_link(self) -> None:
+        # マーカーが本文に無ければ末尾に追記する(後方互換)。
+        url = "http://85.131.251.224/link-1234567890.html"
+        body = "山田さん\n\n本文にマーカーはありません。"
+        with tempfile.TemporaryDirectory() as d:
+            out = str(Path(d) / "nomarker.pdf")
+            qr_doc_gen.generate_url_document("pdf", body, url, out, url_marker="@@TET2_URL_LINK@@")
+            data = Path(out).read_bytes()
+            self.assertIn(b'/Link', data)
+            self.assertIn(url.encode('ascii'), data)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -372,6 +372,12 @@ final class PipelineRunner
             if (!empty($targetContent['suppress_body_url'])) {
                 $bodyUrl = '';
             }
+            // 本文URL型(attachment_url)のメール本文 #$1$# は、URLではなく添付参照の案内に差し替える。
+            // 実URLは PDF 添付内の #$1$# 位置にクリック可能リンクとして入る(create_beacon_files.py)。
+            // suppress の後に上書きするので、suppress の有無に関わらずこの案内が入る。
+            if ($linkMode === 'attachment_url') {
+                $bodyUrl = '添付ファイルをご参照ください';
+            }
 
             // 実際の送信先。リダイレクトありなら content_no ごとのカウンタで emails[k % N]、
             // 無ければ本番の宛先。content 単位に回すことで各テスト宛先が全 content を受け取る。

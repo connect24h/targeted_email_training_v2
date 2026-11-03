@@ -581,7 +581,13 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
 
                                 body_template_no = row.get('本文定型文No', 1)
                                 raw_body = get_body_template(honbun_df, body_template_no)
-                                body_text = replace_placeholders(raw_body, row)
+                                # PDF本文は #$1$# の位置にクリック可能な追跡URLを差し込む。
+                                # #$1$# の list.csv 値はメール用(「添付ファイルをご参照ください」)なので、
+                                # PDF では使わない。#$1$# を一旦マーカーに退避してから他の差し込み
+                                # (#$2$# 等)を置換し、generate_url_document でマーカー位置をリンク化する。
+                                url_marker = '@@TET2_URL_LINK@@'
+                                marked_body = str(raw_body).replace('#$1$#', url_marker)
+                                body_text = replace_placeholders(marked_body, row)
 
                                 doc_filename = f"{filename}{random_value}.{url_doc_fmt}"
                                 url_dest_path = f"/opt/training/bin/Attachment/{doc_filename}"
@@ -589,7 +595,8 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
                                 if os.path.exists(url_dest_path):
                                     os.remove(url_dest_path)
 
-                                generate_url_document(url_doc_fmt, body_text, tracking_url, url_dest_path)
+                                generate_url_document(url_doc_fmt, body_text, tracking_url, url_dest_path,
+                                                      url_marker=url_marker)
                                 os.chmod(url_dest_path, 0o644)
 
                                 print(f"     [OK] 本文URL文書作成({url_doc_fmt}): {doc_filename}", flush=True)

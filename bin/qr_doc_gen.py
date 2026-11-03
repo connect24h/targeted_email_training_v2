@@ -148,13 +148,17 @@ def generate_qr_document(fmt: str, body_text: str, tracking_url: str, out_path: 
     return out_path
 
 
-def generate_url_document(fmt: str, body_text: str, tracking_url: str, out_path: str) -> str:
+def generate_url_document(fmt: str, body_text: str, tracking_url: str, out_path: str,
+                          url_marker: str = None) -> str:
     """本文 body_text に、クリック可能な追跡URLリンクを埋め込んだ PDF を out_path に書き出す。
 
     QR型(generate_qr_document)が QR 画像を置くのに対し、本関数は tracking_url への
-    クリック可能なハイパーリンク(下線付きの可視URL)を本文末に置く。受信者がPDFを開いて
+    クリック可能なハイパーリンク(下線付きの可視URL)を本文に置く。受信者がPDFを開いて
     リンクを踏む→link-{tid}.html(偽ログイン)へ、という導線を作る(add_url型)。
 
+    url_marker: 本文中のこの文字列の位置にリンクを差し込む(本文テンプレの #$1$# 相当)。
+                指定があり本文中に見つかればその位置へ、見つからない/未指定なら本文末尾に
+                追記する(後方互換)。
     fmt: 'pdf' のみ対応(本文URL型の添付は常にPDF)。他は ValueError。
     tracking_url: 埋め込むリンク先(通常 {base}/link-{tracking_id}.html)。
     """
@@ -172,25 +176,55 @@ def generate_url_document(fmt: str, body_text: str, tracking_url: str, out_path:
     c = canvas.Canvas(out_path, pagesize=A4)
     width, height = A4
     font_name, font_size = "HeiseiKakuGo-W5", 11
+    left = 20 * mm
+    line_gap = 7 * mm
+    top_y = height - 25 * mm
+    bottom_limit = 20 * mm
+
+    def new_page_if_needed(yy):
+        if yy < bottom_limit:
+            c.showPage()
+            c.setFont(font_name, font_size)
+            return top_y
+        return yy
+
+    def draw_clickable_url(x, yy):
+        """(x, yy) から可視の tracking_url を青・下線・外部リンク付きで描き、右端のxを返す。"""
+        c.setFillColorRGB(0.0, 0.0, 0.8)
+        c.drawString(x, yy, tracking_url)
+        w = c.stringWidth(tracking_url, font_name, font_size)
+        c.setStrokeColorRGB(0.0, 0.0, 0.8)
+        c.line(x, yy - 1.2, x + w, yy - 1.2)
+        c.linkURL(tracking_url, (x, yy - 3, x + w, yy + font_size), relative=0)
+        c.setFillColorRGB(0.0, 0.0, 0.0)
+        return x + w
+
     c.setFont(font_name, font_size)
-    y = height - 25 * mm
+    y = top_y
+    placed = False
     for line in body_text.split("\n"):
-        c.drawString(20 * mm, y, line)
-        y -= 7 * mm
-        if y < 45 * mm:  # ページ下端でリンクを置く余白を確保して打ち切り
-            break
-    # 本文とリンクの間を一行あけ、クリック可能な可視URLを下線付きで描く。
-    y -= 7 * mm
-    link_x = 20 * mm
-    c.setFillColorRGB(0.0, 0.0, 0.8)
-    c.drawString(link_x, y, tracking_url)
-    text_width = c.stringWidth(tracking_url, font_name, font_size)
-    # 可視テキストの下線。
-    c.setStrokeColorRGB(0.0, 0.0, 0.8)
-    c.line(link_x, y - 1.2, link_x + text_width, y - 1.2)
-    # クリック可能領域(テキストの外接矩形)に外部リンクを張る。
-    c.linkURL(tracking_url, (link_x, y - 3, link_x + text_width, y + font_size), relative=0)
-    c.setFillColorRGB(0.0, 0.0, 0.0)
+        y = new_page_if_needed(y)
+        if url_marker and url_marker in line:
+            # #$1$# の位置: マーカー前テキスト → クリック可能URL → マーカー後テキスト を同じ行に描く。
+            before, after = line.split(url_marker, 1)
+            x = left
+            if before:
+                c.setFillColorRGB(0.0, 0.0, 0.0)
+                c.drawString(x, y, before)
+                x += c.stringWidth(before, font_name, font_size)
+            x = draw_clickable_url(x, y)
+            if after:
+                c.setFillColorRGB(0.0, 0.0, 0.0)
+                c.drawString(x, y, after)
+            placed = True
+        else:
+            c.setFillColorRGB(0.0, 0.0, 0.0)
+            c.drawString(left, y, line)
+        y -= line_gap
+    if not placed:
+        # マーカーが無い本文は、一行あけて末尾にリンクを追記する(後方互換)。
+        y = new_page_if_needed(y - line_gap)
+        draw_clickable_url(left, y)
     c.showPage()
     c.save()
     return out_path
@@ -208,7 +242,14 @@ if __name__ == "__main__":
         generate_qr_document(fmt, body, url, p)
         sz = os.path.getsize(p)
         print(f"qr {fmt}: {p} ({sz} bytes) OK")
-    # 本文URL型(add_url): クリック可能リンク埋め込みPDF。
+    # 本文URL型(add_url): クリック可能リンク埋め込みPDF(末尾追記=マーカー無し)。
     up = os.path.join(outdir, "urldoc-test.pdf")
     generate_url_document("pdf", body, url, up)
-    print(f"url pdf: {up} ({os.path.getsize(up)} bytes) OK")
+    print(f"url pdf (末尾): {up} ({os.path.getsize(up)} bytes) OK")
+    # 本文URL型(マーカー位置に差し込み)。#$1$# 相当のマーカーをリンクに置換する。
+    marker = "@@TET2_URL_LINK@@"
+    body_with_marker = ("#$2$#さん\n\n連絡先情報の確認をお願いします。\n\n"
+                        + marker + "\n\nご多忙のところ恐縮です。")
+    up2 = os.path.join(outdir, "urldoc-marker-test.pdf")
+    generate_url_document("pdf", body_with_marker, url, up2, url_marker=marker)
+    print(f"url pdf (マーカー): {up2} ({os.path.getsize(up2)} bytes) OK")
