@@ -33,12 +33,25 @@ def is_credential_capture_approved(tracking_id, auth_flag, db_path='/opt/trainin
             return False
         conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
         try:
+            # 本文(資格情報)収集は「配信形式=資格情報収集(link_mode='form') かつ 顧客承認済み
+            # かつ auth_flag∈1..4」の3条件が揃ったときだけ有効にする。link型等は承認があっても
+            # 収集しない。現行キャンペーンは対象 content(content_no 一致)が form であること、旧経路
+            # (campaign_contents が1件も無い)は campaigns.link_mode='form' であることを要求する。
+            # content_no 欠け/不一致で form content に当たらない行は収集しない(fail-closed)。
+            # サーバ側 CredentialVault::record と同じ述語にそろえる。
             row = conn.execute(
                 'SELECT 1 FROM campaign_targets ct '
                 'JOIN campaigns c ON c.id=ct.campaign_id '
                 'WHERE ct.tracking_id=? AND ct.auth_flag=? AND c.deleted_at IS NULL '
                 "AND c.credential_capture_approval_ref IS NOT NULL "
-                "AND trim(c.credential_capture_approval_ref)<>'' LIMIT 1",
+                "AND trim(c.credential_capture_approval_ref)<>'' "
+                'AND ('
+                '  EXISTS (SELECT 1 FROM campaign_contents cc '
+                '           WHERE cc.campaign_id=ct.campaign_id AND cc.content_no=ct.content_no '
+                "             AND cc.link_mode='form') "
+                '  OR (NOT EXISTS (SELECT 1 FROM campaign_contents cc2 WHERE cc2.campaign_id=ct.campaign_id) '
+                "      AND c.link_mode='form') "
+                ') LIMIT 1',
                 (str(tracking_id), flag),
             ).fetchone()
         finally:

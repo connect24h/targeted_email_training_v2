@@ -10,7 +10,8 @@ load_api('credential_captures');
 
 $tenantId = Db::insert("INSERT INTO tenants (name, slug, data_dir) VALUES ('API Capture', 'api-capture', '/tmp/api-capture')");
 $targetId = Db::insert('INSERT INTO targets (tenant_id, email) VALUES (?, ?)', [$tenantId, 'api-person@example.test']);
-$campaignId = Db::insert("INSERT INTO campaigns (tenant_id, name, status) VALUES (?, 'API capture', 'running')", [$tenantId]);
+// 本文収集は配信形式=資格情報収集(link_mode='form')に限る。旧経路(contents 無し)の form で用意する。
+$campaignId = Db::insert("INSERT INTO campaigns (tenant_id, name, status, link_mode) VALUES (?, 'API capture', 'running', 'form')", [$tenantId]);
 Db::run('INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, auth_flag) VALUES (?, ?, ?, 1)', [$campaignId, $targetId, '1234567890']);
 
 $keyFile = tempnam(sys_get_temp_dir(), 'tet2-capture-api-key-');

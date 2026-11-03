@@ -8,7 +8,8 @@ require_once __DIR__ . '/../lib/CredentialVault.php';
 
 $tenantId = Db::insert("INSERT INTO tenants (name, slug, data_dir) VALUES ('Capture Test', 'capture-test', '/tmp/capture-test')");
 $targetId = Db::insert('INSERT INTO targets (tenant_id, email) VALUES (?, ?)', [$tenantId, 'person@example.test']);
-$campaignId = Db::insert("INSERT INTO campaigns (tenant_id, name, status) VALUES (?, 'Capture test', 'running')", [$tenantId]);
+// 本文収集は配信形式=資格情報収集(link_mode='form')に限る。主キャンペーンは旧経路(contents 無し)の form。
+$campaignId = Db::insert("INSERT INTO campaigns (tenant_id, name, status, link_mode) VALUES (?, 'Capture test', 'running', 'form')", [$tenantId]);
 $trackingId = '0123456789';
 Db::run('INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, auth_flag) VALUES (?, ?, ?, 1)', [$campaignId, $targetId, $trackingId]);
 
@@ -90,3 +91,27 @@ $rejected = false;
 try { CredentialVault::record($trackingId, 'box', $entered); }
 catch (DomainException $error) { $rejected = true; }
 check($rejected, 'クローズ後の本文再収集を拒否する');
+
+// --- 配信形式の強制(資格情報収集=form のみ収集。link型は承認があっても保存しない) ---
+// (a) 承認済みだが link 型の旧経路キャンペーン(contents 無し, campaigns.link_mode='link')→拒否。
+$linkCampaignId = Db::insert("INSERT INTO campaigns (tenant_id, name, status, link_mode, credential_capture_approval_ref) VALUES (?, 'Capture link', 'running', 'link', 'synthetic-approval-link')", [$tenantId]);
+Db::run('INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, auth_flag) VALUES (?, ?, ?, 1)', [$linkCampaignId, $targetId, '1000000001']);
+$rejected = false;
+try { CredentialVault::record('1000000001', 'box', $entered); }
+catch (DomainException $error) { $rejected = true; }
+check($rejected, 'link型は承認があっても本文を保存しない(サーバ側の防御線)');
+
+// (b) 現行キャンペーン: content_no=1 が form、=2 が link。form を指す行は保存する。
+$formCampaignId = Db::insert("INSERT INTO campaigns (tenant_id, name, status, link_mode, credential_capture_approval_ref) VALUES (?, 'Capture form content', 'running', NULL, 'synthetic-approval-form')", [$tenantId]);
+Db::run("INSERT INTO campaign_contents (campaign_id, content_no, link_mode) VALUES (?, 1, 'form')", [$formCampaignId]);
+Db::run("INSERT INTO campaign_contents (campaign_id, content_no, link_mode) VALUES (?, 2, 'link')", [$formCampaignId]);
+Db::run('INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, auth_flag, content_no) VALUES (?, ?, ?, 1, 1)', [$formCampaignId, $targetId, '1000000002']);
+$formId = CredentialVault::record('1000000002', 'box', $entered);
+check($formId > 0, 'form content(content_no一致)は本文を保存する');
+
+// (c) 同じキャンペーンで content_no が link content(=2)を指す行は、承認済みでも拒否(content単位の判定)。
+Db::run('INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, auth_flag, content_no) VALUES (?, ?, ?, 1, 2)', [$formCampaignId, $targetId, '1000000003']);
+$rejected = false;
+try { CredentialVault::record('1000000003', 'box', $entered); }
+catch (DomainException $error) { $rejected = true; }
+check($rejected, 'link content を指す行は承認済みでも保存しない(content単位のform判定)');

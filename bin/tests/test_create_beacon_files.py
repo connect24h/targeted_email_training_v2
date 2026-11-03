@@ -17,29 +17,54 @@ class CredentialCaptureApprovalTest(unittest.TestCase):
             db_path = Path(temp_dir) / "capture.sqlite"
             conn = sqlite3.connect(db_path)
             try:
+                # 本文収集は「資格情報収集(link_mode='form') かつ 承認済み かつ auth_flag∈1..4」でのみ有効。
+                # 現行は campaign_contents.link_mode、旧経路は campaigns.link_mode を見る。
                 conn.executescript("""
                     CREATE TABLE campaigns (id INTEGER PRIMARY KEY,
-                        credential_capture_approval_ref TEXT, deleted_at TEXT);
+                        credential_capture_approval_ref TEXT, deleted_at TEXT, link_mode TEXT);
                     CREATE TABLE campaign_targets (campaign_id INTEGER,
-                        tracking_id TEXT, auth_flag INTEGER);
-                    INSERT INTO campaigns VALUES (1, 'synthetic-approval', NULL);
-                    INSERT INTO campaigns VALUES (2, NULL, NULL);
-                    INSERT INTO campaign_targets VALUES (1, '0123456789', 1);
-                    INSERT INTO campaign_targets VALUES (2, '1111111111', 1);
+                        tracking_id TEXT, auth_flag INTEGER, content_no INTEGER);
+                    CREATE TABLE campaign_contents (campaign_id INTEGER, content_no INTEGER, link_mode TEXT);
+                    -- 1: 承認済み + form(contents) → 収集可
+                    INSERT INTO campaigns VALUES (1, 'synthetic-approval', NULL, NULL);
+                    INSERT INTO campaign_targets VALUES (1, '0123456789', 1, 1);
+                    INSERT INTO campaign_contents VALUES (1, 1, 'form');
+                    -- 2: 承認なし → 不可
+                    INSERT INTO campaigns VALUES (2, NULL, NULL, NULL);
+                    INSERT INTO campaign_targets VALUES (2, '1111111111', 1, 1);
+                    INSERT INTO campaign_contents VALUES (2, 1, 'form');
+                    -- 3: 承認済み だが link 形式 → 不可(承認があっても収集しない)
+                    INSERT INTO campaigns VALUES (3, 'approved-but-link', NULL, NULL);
+                    INSERT INTO campaign_targets VALUES (3, '2222222222', 1, 1);
+                    INSERT INTO campaign_contents VALUES (3, 1, 'link');
+                    -- 4: 旧経路(campaign_contents 無し)。承認済み + campaigns.link_mode='form' → 収集可
+                    INSERT INTO campaigns VALUES (4, 'legacy-form-approval', NULL, 'form');
+                    INSERT INTO campaign_targets VALUES (4, '3333333333', 1, NULL);
+                    -- 5: 混在。content_no=1 が form、=2 が link。承認済み。対象が =2 を指す行は不可
+                    --    (content 単位の判定。campaigns 単位にフォールバックしない)
+                    INSERT INTO campaigns VALUES (5, 'mixed-approval', NULL, 'form');
+                    INSERT INTO campaign_contents VALUES (5, 1, 'form');
+                    INSERT INTO campaign_contents VALUES (5, 2, 'link');
+                    INSERT INTO campaign_targets VALUES (5, '4444444444', 1, 2);
+                    INSERT INTO campaign_targets VALUES (5, '5555555555', 1, 1);
                 """)
                 conn.commit()
             finally:
                 conn.close()
 
             approved = create_beacon_files.is_credential_capture_approved
-            self.assertTrue(approved("0123456789", 1, db_path))
-            self.assertFalse(approved("0123456789", 2, db_path))
-            self.assertFalse(approved("1111111111", 1, db_path))
-            self.assertFalse(approved("9999999999", 1, db_path))
+            self.assertTrue(approved("0123456789", 1, db_path), 'form+承認+auth_flag=収集可')
+            self.assertFalse(approved("0123456789", 2, db_path), 'auth_flag 不一致は不可')
+            self.assertFalse(approved("1111111111", 1, db_path), '承認なしは不可')
+            self.assertFalse(approved("2222222222", 1, db_path), 'link形式は承認があっても不可')
+            self.assertTrue(approved("3333333333", 1, db_path), '旧経路のform+承認は収集可')
+            self.assertFalse(approved("4444444444", 1, db_path), '混在で link content(content_no=2)を指す行は不可')
+            self.assertTrue(approved("5555555555", 1, db_path), '混在で form content(content_no=1)を指す行は可')
+            self.assertFalse(approved("9999999999", 1, db_path), '未知trackingは不可')
             self.assertTrue(create_beacon_files.capture_enabled_for_page(
-                "https://example.test", "0123456789", 1, db_path))
+                "https://example.test", "0123456789", 1, db_path), 'https+form+承認=収集可')
             self.assertFalse(create_beacon_files.capture_enabled_for_page(
-                "http://example.test", "0123456789", 1, db_path))
+                "http://example.test", "0123456789", 1, db_path), 'http は不可(平文送信を防ぐ)')
 
 
 

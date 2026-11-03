@@ -6,8 +6,9 @@ tet2_test_boot();
 
 $tenantId = Db::insert("INSERT INTO tenants (name, slug, data_dir) VALUES ('Capture HTTP', 'capture-http', '/tmp/capture-http')");
 $targetId = Db::insert('INSERT INTO targets (tenant_id, email) VALUES (?, ?)', [$tenantId, 'person@example.test']);
+// 本文収集は配信形式=資格情報収集(link_mode='form')に限る。旧経路(contents 無し)の form で用意する。
 $campaignId = Db::insert(
-    "INSERT INTO campaigns (tenant_id, name, status, credential_capture_approval_ref) VALUES (?, 'Capture HTTP', 'running', 'synthetic-approval')",
+    "INSERT INTO campaigns (tenant_id, name, status, link_mode, credential_capture_approval_ref) VALUES (?, 'Capture HTTP', 'running', 'form', 'synthetic-approval')",
     [$tenantId]
 );
 Db::run('INSERT INTO campaign_targets (campaign_id, target_id, tracking_id, auth_flag) VALUES (?, ?, ?, 1)',

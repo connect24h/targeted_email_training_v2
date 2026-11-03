@@ -23,10 +23,23 @@ final class CredentialVault
         $fields = self::validateFields($authType, $entered);
         $key = self::loadKey();
         return Db::txImmediate(static function () use ($trackingId, $authType, $fields, $key): int {
+            // 本文(資格情報)収集は、配信形式が「資格情報収集」(link_mode='form')の content に
+            // 限る。link/attachment 等は承認があっても保存しない。現行キャンペーンは対象の
+            // content(content_no 一致)が form であること、旧経路(campaign_contents が1件も無い)は
+            // campaigns.link_mode='form' であることを要求する。content_no が欠け/不一致で
+            // form content に当たらない行は収集しない(サーバ側の fail-closed な防御線。
+            // 生成物の #$C$# フラグだけに依存しない)。
             $ref = Db::one(
-                'SELECT c.id AS campaign_id, c.tenant_id, c.credential_capture_approval_ref, ct.auth_flag
+                "SELECT c.id AS campaign_id, c.tenant_id, c.credential_capture_approval_ref, ct.auth_flag
                    FROM campaign_targets ct JOIN campaigns c ON c.id = ct.campaign_id
-                  WHERE ct.tracking_id=? AND c.deleted_at IS NULL AND c.closed_at IS NULL', [$trackingId]
+                  WHERE ct.tracking_id=? AND c.deleted_at IS NULL AND c.closed_at IS NULL
+                    AND (
+                      EXISTS (SELECT 1 FROM campaign_contents cc
+                               WHERE cc.campaign_id=ct.campaign_id AND cc.content_no=ct.content_no
+                                 AND cc.link_mode='form')
+                      OR (NOT EXISTS (SELECT 1 FROM campaign_contents cc2 WHERE cc2.campaign_id=ct.campaign_id)
+                          AND c.link_mode='form')
+                    )", [$trackingId]
             );
             if ($ref === null || trim((string) $ref['credential_capture_approval_ref']) === '') {
                 throw new DomainException('本文収集が承認された訓練ではありません');

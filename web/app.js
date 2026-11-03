@@ -1595,6 +1595,44 @@ async function revealCredentialCapture(button) {
     button.disabled = false;
   }
 }
+
+// 本文収集の顧客承認登録(superadmin)。上部で選択中のキャンペーンに参照番号を登録する。
+// 承認者と日時はサーバ側 audit() が自動記録する。
+function openCredentialApproveDialog() {
+  if (State.user?.role !== 'superadmin') return;
+  const tenantId = String(State.activeTenantId || '');
+  const campaignId = String($('#logsCampaignFilter')?.value || '');
+  if (!tenantId || !campaignId) { toast('承認するキャンペーンを上部で選択してください', 'err'); return; }
+  const ref = $('#credentialApproveRef'); if (ref) ref.value = '';
+  $('#credentialApproveDialog')?.showModal();
+}
+
+async function submitCredentialApprove(e) {
+  e.preventDefault();
+  if (State.user?.role !== 'superadmin') return;
+  const tenantId = Number(State.activeTenantId || 0);
+  const campaignId = Number($('#logsCampaignFilter')?.value || 0);
+  const reference = String($('#credentialApproveRef')?.value || '').trim();
+  if (!tenantId || !campaignId) { toast('承認するキャンペーンを選択してください', 'err'); return; }
+  if (!reference) { toast('顧客承認の参照番号を入力してください', 'err'); return; }
+  const submitBtn = $('#credentialApproveForm button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await api('api/credential_captures.php', {
+      method: 'POST', query: { action: 'approve' },
+      body: { tenant_id: tenantId, campaign_id: campaignId, approval_ref: reference },
+    });
+    $('#credentialApproveDialog')?.close();
+    toast('本文収集を承認しました（承認者と日時を監査に記録）', 'ok');
+    logsState.offset = 0;
+    loadLogs();
+  } catch (error) {
+    toast(error.message || '承認を登録できませんでした', 'err');
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
 function reportMailCells(r) {
   const labels = { pending: '保留', confirmed: '確定', rejected: '却下' };
   const colors = { pending: 'warning text-dark', confirmed: 'success', rejected: 'secondary' };
@@ -2023,6 +2061,8 @@ function switchLogTab(type) {
   show('#logsCsvBtn', isTr || isTld || isWeb || isMd || isCf);
   // Excel(XLSX)出力: 生ログ以外の全タブ。
   show('#logsXlsxBtn', !isRaw && !isReport && !isCapture);
+  // 本文収集の顧客承認登録: 資格情報収集の履歴タブで、システム管理者のみ。
+  show('#credentialApproveBtn', isCapture && State.user?.role === 'superadmin');
   // GeoIP取得: WebアクセスLog のみ(一覧はキャッシュのみ表示、未知IPはこのボタンで後追い解決)。
   show('#webGeoipBtn', isWeb);
   show('#tldGeoipBtn', isTld);
@@ -2371,7 +2411,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       <div class="c-preview-area border rounded p-2 mt-1 bg-light d-none"></div>
       <div class="row g-2 mt-1">
         <div class="col-md-4"><label class="form-label small">配信形式</label>
-          <select class="form-select form-select-sm c-linkmode"><option value="link">リンク</option><option value="attachment">添付（偽ログイン）</option><option value="attachment_url">添付（本文URL）</option><option value="form">フォーム</option><option value="qr">QRコード</option></select></div>
+          <select class="form-select form-select-sm c-linkmode"><option value="link">リンク</option><option value="attachment">添付（偽ログイン）</option><option value="attachment_url">添付（本文URL）</option><option value="form">資格情報収集</option><option value="qr">QRコード</option></select></div>
         <div class="col-md-4"><label class="form-label small c-ext-label text-muted">添付拡張子(添付/QR時)</label><input class="form-control form-control-sm c-ext" placeholder="html / docx / pdf / xlsx / pptx"></div>
         <div class="col-md-4 d-flex align-items-end"><div class="form-check">
           <input class="form-check-input c-zip" type="checkbox"><label class="form-check-label small c-zip-label text-muted">zip化</label></div></div>
@@ -2548,7 +2588,7 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
     }
     const hints = {
       link: 'リンク型：本文中のリンクをクリックすると追跡します（添付は使いません）。',
-      form: 'フォーム型：偽ログインフォームへの入力を追跡します（添付は使いません）。',
+      form: '資格情報収集型：偽ログイン画面に入力されたID/パスワードを収集します（添付は使いません）。収集には顧客承認(システム管理者が参照番号を登録)とHTTPSが必要で、未承認なら入力有無のみ記録します。',
       attachment: '添付型：添付ファイル自体が偽ログイン画面です。開いて入力させて追跡します（拡張子を指定）。',
       attachment_url: '添付（本文URL）型：PDFを添付し、PDF本文にクリック可能な偽ログインURLを埋め込みます（拡張子はPDF固定）。',
       qr: 'QRコード型：QR画像を添付し、スキャン（＝クリック）を追跡します。',
@@ -6376,6 +6416,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#credentialRevealDialog')?.addEventListener('close', closeCredentialDialog);
   $('#credentialRevealDialog')?.addEventListener('cancel', closeCredentialDialog);
   $('#credentialRevealDialog button')?.addEventListener('click', closeCredentialDialog);
+  $('#credentialApproveBtn')?.addEventListener('click', openCredentialApproveDialog);
+  $('#credentialApproveCancel')?.addEventListener('click', () => $('#credentialApproveDialog')?.close());
+  $('#credentialApproveForm')?.addEventListener('submit', submitCredentialApprove);
   document.addEventListener('visibilitychange', () => { if (document.hidden) closeCredentialDialog(); });
   window.addEventListener('pagehide', closeCredentialDialog);
   $('#logsRefreshBtn')?.addEventListener('click', () => { logsState.offset = 0; loadLogs(); });
