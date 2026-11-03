@@ -67,7 +67,8 @@ function createCampaignWorkspace(root, actions) {
         <p class="small text-muted">${isTest ? '全送信行をTEST宛先へ転送します。元の対象者へは送信しません。' : '本番の対象者へ送信します。開始日時に達すると送信ワーカーが処理します。'}</p>
         <div class="campaign-review-actions"><button type="button" class="btn btn-outline-secondary" data-campaign-action="edit">設定を修正</button>
           <button type="button" class="btn btn-outline-primary" data-campaign-action="refresh">配信前チェックを更新</button>
-          <button type="button" class="btn btn-primary" data-campaign-action="launch" data-ready="${review.can_launch ? 'true' : 'false'}" ${review.can_launch ? '' : 'disabled'}>配信を予約する</button></div>
+          <button type="button" class="btn btn-primary" data-campaign-action="launch" data-ready="${review.can_launch ? 'true' : 'false'}" ${review.can_launch ? '' : 'disabled'}>配信を予約する</button>
+          <button type="button" class="btn btn-warning ms-2" data-campaign-action="immediateLaunch" data-ready="${review.can_launch ? 'true' : 'false'}" ${review.can_launch ? '' : 'disabled'}>即時送信開始</button></div>
       </aside></div></div>`;
   }
   return { loading, error, render, setLaunching };

@@ -35,9 +35,11 @@ try {
 
     if ($action === 'launch') {
         $revision = isset($body['revision']) && is_string($body['revision']) ? $body['revision'] : '';
-        $result = CampaignLaunchService::launch($campaignId, $tenantId, $revision);
+        // 即時送信: true なら launch 中に start_at を今(+5分)へ差し替える。revision は stable_revision で照合。
+        $immediate = isset($body['immediate']) && $body['immediate'] === true;
+        $result = CampaignLaunchService::launch($campaignId, $tenantId, $revision, null, $immediate);
         if (!$result['ok']) json_error($result['error'], $result['status']);
-        audit('campaign.launch', 'campaign_id=' . $campaignId . ',batches=' . $result['batches']);
+        audit('campaign.launch', 'campaign_id=' . $campaignId . ',batches=' . $result['batches'] . ',immediate=' . ($immediate ? '1' : '0'));
         json_out(['success' => true, 'batches' => $result['batches'], 'status' => 'scheduled']);
     }
 

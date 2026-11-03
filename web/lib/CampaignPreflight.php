@@ -71,6 +71,12 @@ final class CampaignPreflight
             return $row;
         }, $targets);
         $revision = hash('sha256', json_encode([$campaign, $contents, $revisionTargets, $templates], JSON_THROW_ON_ERROR));
+        // 即時送信は start_at/end_at を launch 中に差し替えるため、日時を除いた安定 revision も返す。
+        // これで「日時以外の設定(対象者・テンプレ・コンテンツ・from/beacon)が変わっていないか」だけを
+        // 即時経路で検証できる。日時の妥当性は checkPeriod が別途 launch 時に再検証する。
+        $campaignNoSchedule = $campaign;
+        unset($campaignNoSchedule['start_at'], $campaignNoSchedule['end_at']);
+        $stableRevision = hash('sha256', json_encode([$campaignNoSchedule, $contents, $revisionTargets, $templates], JSON_THROW_ON_ERROR));
         $visibleContents = [];
         foreach ($contents as $content) {
             $visibleContents[] = [
@@ -85,6 +91,7 @@ final class CampaignPreflight
             'blockers' => $blockers,
             'warnings' => $warnings,
             'revision' => $revision,
+            'stable_revision' => $stableRevision,
             'contents' => $visibleContents,
             'summary' => [
                 'campaign_name' => (string) $campaign['name'],

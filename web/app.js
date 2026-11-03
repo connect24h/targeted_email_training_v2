@@ -925,7 +925,8 @@ async function renderCampaignWorkspace() {
       back: () => navigate('campaigns'),
       edit: () => editCampaign(State.campaignWorkspaceId),
       refresh: () => renderCampaignWorkspace(),
-      launch: () => confirmCampaignWorkspaceLaunch(),
+      launch: () => confirmCampaignWorkspaceLaunch(false),
+      immediateLaunch: () => confirmCampaignWorkspaceLaunch(true),
     });
   }
   campaignWorkspaceUi.loading();
@@ -942,7 +943,7 @@ async function renderCampaignWorkspace() {
     }
   }
 }
-async function confirmCampaignWorkspaceLaunch() {
+async function confirmCampaignWorkspaceLaunch(immediate = false) {
   const current = State.workspaceReview;
   if (!current || current.id !== State.campaignWorkspaceId || current.tenantId !== State.activeTenantId || !current.review.can_launch) {
     toast('配信前確認をやり直してください', 'err');
@@ -951,18 +952,27 @@ async function confirmCampaignWorkspaceLaunch() {
   const summary = current.review.summary;
   const distribution = summary.test_distribution.map((row) => `${row.email}: ${row.count}通`).join('\n');
   const mode = summary.is_test ? 'TEST（全件転送）' : '本番';
-  const message = `${summary.campaign_name}\n${mode} / 対象 ${summary.target_count}名 / 総通数 ${summary.send_count}通\n${summary.start_at} ～ ${summary.end_at}${distribution ? `\n${distribution}` : ''}\n\n配信を予約しますか？`;
+  const schedule = immediate
+    ? '即時送信：今から約5分後に送信を開始します（開始日時は上書きされます）'
+    : `${summary.start_at} ～ ${summary.end_at}`;
+  const question = immediate ? '今すぐ送信を開始しますか？' : '配信を予約しますか？';
+  const message = `${summary.campaign_name}\n${mode} / 対象 ${summary.target_count}名 / 総通数 ${summary.send_count}通\n${schedule}${distribution ? `\n${distribution}` : ''}\n\n${question}`;
   if (!confirm(message)) return;
   campaignWorkspaceUi.setLaunching(true);
   // 大人数のキャンペーンは送信データ生成に時間がかかる(1,876人で約40秒)。
   // 生成中と分かる表示を出し、api の既定30秒では切れるので timeout を延ばす。
   const overlay = showProgress('送信データを生成しています…（対象人数が多いと1分ほどかかります）');
   try {
+    // 即時送信は start_at を launch 中に差し替えるため、日時を除いた stable_revision で照合する。
     const r = await api('api/campaign_launch.php', {
-      method: 'POST', query: { action: 'launch' }, body: { id: current.id, revision: current.review.revision }, timeout: 180000,
+      method: 'POST', query: { action: 'launch' },
+      body: immediate
+        ? { id: current.id, revision: current.review.stable_revision, immediate: true }
+        : { id: current.id, revision: current.review.revision },
+      timeout: 180000,
     });
     State.workspaceReview = null;
-    toast(`配信を予約しました（${r.batches} バッチ）`, 'ok');
+    toast(immediate ? `即時送信を開始しました（${r.batches} バッチ）` : `配信を予約しました（${r.batches} バッチ）`, 'ok');
     navigate('campaigns');
   } catch (e) {
     toast(e.message, 'err');

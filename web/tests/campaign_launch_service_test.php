@@ -78,4 +78,31 @@ $resolvedLaunch = CampaignLaunchService::launch(2, 1, $revResolved, static funct
 });
 check($resolvedLaunch['ok'] === true, '生成中の resolved_* 確定を設定変更とみなさず予約できる');
 
+// --- 即時送信(immediate) ---
+// draft に戻し、開始を遠い未来に設定しておく。即時送信で now+5分 付近へ差し替わるのを確認する。
+Db::run('DELETE FROM send_schedule WHERE campaign_id=2');
+Db::run('DELETE FROM campaign_template_snapshots WHERE campaign_id=2');
+Db::run("UPDATE campaigns SET status='draft', start_at='2099-01-01 09:00:00', end_at='2099-01-02 18:00:00' WHERE id=2");
+$insp = CampaignPreflight::inspect(2, 1);
+$stable = $insp['stable_revision'];
+$normal = $insp['revision'];
+check(is_string($stable) && preg_match('/^[a-f0-9]{64}$/', $stable) === 1, 'inspect が stable_revision を返す');
+check($stable !== $normal, 'stable_revision は通常 revision と異なる(日時を除いているため)');
+// immediate=true で stable_revision を渡すと、start_at を差し替えても churn せず予約できる
+$imm = CampaignLaunchService::launch(2, 1, $stable, static fn(): array => [true, ''], true);
+check($imm['ok'] === true, '即時送信は stable_revision で churn せず予約できる');
+$after = Db::one('SELECT status, start_at FROM campaigns WHERE id=2');
+check($after['status'] === 'scheduled', '即時送信で scheduled へ');
+$startTs = strtotime((string) $after['start_at']);
+$nowTs = time();
+check($startTs > $nowTs && $startTs <= $nowTs + 20 * 60, '即時送信で start_at が今から数分後へ差し替わる(2099年のままでない): ' . $after['start_at']);
+
+// immediate=true に通常 revision(日時含む)を渡すと stable と一致せず 409 になる(誤用の検出)
+Db::run('DELETE FROM send_schedule WHERE campaign_id=2');
+Db::run('DELETE FROM campaign_template_snapshots WHERE campaign_id=2');
+Db::run("UPDATE campaigns SET status='draft', start_at='2099-01-01 09:00:00', end_at='2099-01-02 18:00:00' WHERE id=2");
+$insp2 = CampaignPreflight::inspect(2, 1);
+$immWrong = CampaignLaunchService::launch(2, 1, $insp2['revision'], static fn(): array => [true, ''], true);
+check($immWrong['ok'] === false && $immWrong['status'] === 409, '即時送信に通常 revision を渡すと 409(stable と不一致)');
+
 echo "ALL TESTS PASSED\n";

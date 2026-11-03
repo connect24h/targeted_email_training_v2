@@ -368,8 +368,9 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
         html_master = html_files.get(auth_flag_int, html_files[0])
 
         if not os.path.exists(html_master):
-            logger.info(f"警告: HTMLマスターファイルが見つかりません: {html_master}")
-            logger.info(f"       デフォルトのmaster.htmlを使用します")
+            # 認証フラグに対応するマスターが無いと、意図と違う画面(既定=通常)が黙って出てしまう。
+            # 取り違えに気づけるよう warning で残す。
+            logger.warning(f"HTMLマスターファイルが見つかりません: {html_master} / 既定の master.html にフォールバックします")
             html_master = html_files[0]
 
         # マスターHTMLファイルの読み込み（文字エンコーディング自動検出）
@@ -615,18 +616,13 @@ def create_beacon_files(data_dir='/opt/training/bin/data', beacon_base_override=
                             # Attachmentディレクトリは固定パス
                             attachment_dest_path = f"/opt/training/bin/Attachment/{attachment_filename}"
 
-                            # 添付ファイル作成時は認証フラグを無視してmaster.htmlを使用
-                            logger.info(f"添付ファイル作成: 認証フラグに関わらずmaster.htmlを使用")
-                            try:
-                                with open("/opt/training/bin/master.html", 'r', encoding='utf-8') as f:
-                                    attachment_html_content = f.read()
-                            except UnicodeDecodeError:
-                                try:
-                                    with open("/opt/training/bin/master.html", 'r', encoding='shift_jis') as f:
-                                        attachment_html_content = f.read()
-                                except UnicodeDecodeError:
-                                    with open("/opt/training/bin/master.html", 'r', encoding='cp932') as f:
-                                        attachment_html_content = f.read()
+                            # 添付ファイルも認証フラグに応じた偽ログイン(master*.html)を使う。
+                            # 以前は認証フラグを無視して master.html 固定だったため、添付型では
+                            # 偽ログインを選んでも種明かし相当(通常=master.html)になっていた(2026-11 修正)。
+                            # 認証フラグ列が無い/空の呼び出し(v1 等)は row.get で 0 になり、
+                            # load_html_master(0)=master.html となって従来と同じ結果になる。
+                            attachment_html_content, attachment_master_path = load_html_master(auth_flag)
+                            logger.info(f"添付ファイル作成: 認証フラグ {auth_flag} のマスター {os.path.basename(attachment_master_path)} を使用")
 
                             # プレースホルダーの置換（添付ファイル用）
                             # #$6$# は master.html の value="#$6$#" 属性値に埋まるため quote=True でエスケープ。
