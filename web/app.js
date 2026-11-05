@@ -3719,10 +3719,15 @@ function importCsv() {
     <p class="small text-muted">既存の対象者との照合: 従業員番号が入っている行は<strong>従業員番号で先に</strong>探し、見つかった人のメールアドレスを CSV の値に変えます。番号で見つからなければメールアドレスで探します。従業員番号とメモが空の行は、今の値を残します。</p>
     <input type="file" class="form-control mb-2" id="targetCsvFile" accept=".csv,text/csv">
     <textarea class="form-control mb-2" id="csvText" rows="8" placeholder="ファイルを選ぶか貼り付け&#10;社員番号,表示氏名（姓名）,メールアドレス（会社）,会社名,本務役職名称"></textarea>
-    <div class="form-check">
-      <input class="form-check-input" type="checkbox" id="rosterSyncChk">
-      <label class="form-check-label" for="rosterSyncChk"><strong>この CSV を全員名簿として取り込む</strong>（CSV にいない現役の対象者を「退職」にします）</label>
-      <div class="form-text">全社員の名簿を丸ごと取り込むときに使います。チェックしないと、CSV にいない人はそのまま残ります。テスト用アカウント（is_test）は退職化しません。退職にした人は、あとで状態を戻せます。</div>
+    <div class="border border-2 border-warning rounded p-3 mt-2" style="background:rgba(255,193,7,0.08)">
+      <div class="form-check mb-0">
+        <input class="form-check-input" type="checkbox" id="rosterSyncChk" style="width:1.25em;height:1.25em;margin-top:0.15em">
+        <label class="form-check-label" for="rosterSyncChk">
+          <span class="badge text-bg-warning me-1">名簿同期</span>
+          <strong>この CSV を全員名簿として取り込む</strong>（CSV にいない現役の対象者を「退職」にし、削除日を記録します）
+        </label>
+        <div class="form-text">全社員の名簿を丸ごと取り込むときにチェックします。<strong class="text-danger">チェックしないと、CSV にいない人は退職になりません（削除日も入りません）。</strong>テスト用アカウント（is_test）は退職化しません。退職にした人は、あとで対象者一覧から状態を戻せます。</div>
+      </div>
     </div>`;
   showModal('CSV 取込', body, async () => {
     const csv = $('#csvText').value.trim();
