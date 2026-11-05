@@ -182,9 +182,16 @@ function groups_handle_delete(array $actor): never
     $id = groups_int($body, 'id');
     groups_assert_owned($id, $tenantId);
 
+    // 論理削除。UNIQUE (tenant_id, name) を占有したままだと、同名のグループを
+    // あとで作れず「name は既に使用されています」になる。削除時に name を一意な
+    // 退避名へリネームして制約を解放する(archived は一覧に出ないので表示影響なし)。
+    // 退避名は元名が分かる形にし、同名を何度削除しても id で必ず一意になる。
     Db::run(
-        "UPDATE groups SET status='archived', archived_at=datetime('now','localtime')
-         WHERE id = ? AND tenant_id = ?",
+        "UPDATE groups
+            SET status='archived',
+                archived_at=datetime('now','localtime'),
+                name = name || ' (削除#' || id || ' ' || datetime('now','localtime') || ')'
+          WHERE id = ? AND tenant_id = ?",
         [$id, $tenantId]
     );
     audit('group.archive', 'group_id=' . $id);

@@ -79,9 +79,25 @@ check($r['code'] === 400, 'GC-7: update no fields → 400');
 $r = call_handler('groups_handle_delete', ['id' => $customGroupId], 'operator');
 check($r['code'] === 200, 'GC-8: archive → 200');
 check(($r['payload']['archived'] ?? false) === true, 'GC-8: archived=true');
-$archived = Db::one('SELECT status, archived_at FROM groups WHERE id = ?', [$customGroupId]);
+$archived = Db::one('SELECT status, archived_at, name FROM groups WHERE id = ?', [$customGroupId]);
 check($archived !== null && $archived['status'] === 'archived', 'GC-8: グループを論理archiveする');
 check($archived['archived_at'] !== null, 'GC-8: archive日時を保存する');
+check(($archived['name'] ?? '') !== 'カスタムグループA' && str_contains((string) ($archived['name'] ?? ''), 'カスタムグループA'),
+    'GC-8: 削除時に name を退避名へリネームし元名を解放する');
+
+// GC-8b: 削除したグループと同名で再作成できる(退職グループが名前を占有しない)
+$r = call_handler('groups_handle_create', ['name' => 'カスタムグループA', 'kind' => 'custom'], 'operator');
+check($r['code'] === 201, 'GC-8b: 削除済みと同名で再作成 → 201');
+check(($r['payload']['group']['name'] ?? '') === 'カスタムグループA', 'GC-8b: 元名で作れる');
+$recreatedId = (int) $r['payload']['group']['id'];
+check($recreatedId !== $customGroupId, 'GC-8b: 新しい id で作られる(復活ではない)');
+// 退避名の archived はそのまま履歴として残る
+$stillArchived = Db::one('SELECT status FROM groups WHERE id = ?', [$customGroupId]);
+check(($stillArchived['status'] ?? '') === 'archived', 'GC-8b: 旧グループは archived のまま残る');
+
+// GC-8c: 同名をもう一度削除してもリネームが id で一意になり衝突しない
+$r = call_handler('groups_handle_delete', ['id' => $recreatedId], 'operator');
+check($r['code'] === 200, 'GC-8c: 同名グループの再削除も 200(退避名が id で一意)');
 
 // GC-9: 他テナントのグループを delete → 404
 if ($otherTenantId !== null) {
