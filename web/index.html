@@ -258,6 +258,22 @@
             </div>
             <div class="tab-pane fade" id="reportPane-attributes" role="tabpanel" aria-labelledby="reportTab-attributes" tabindex="0">
               <div class="row g-3">
+                <div class="col-12">
+                  <div class="card mb-2"><div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <h6 class="mb-0"><i class="bi bi-building me-1"></i>会社別グラフ</h6>
+                    <div class="btn-group btn-group-sm" role="group" data-report-chart-toggle="company" aria-label="会社別グラフの向き">
+                      <button type="button" class="btn btn-outline-secondary" data-orientation="vertical">縦棒</button>
+                      <button type="button" class="btn btn-outline-secondary active" data-orientation="horizontal" aria-pressed="true">横棒</button>
+                    </div></div>
+                    <div class="card-body"><div class="row g-2">
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportCompanyChartBar1"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportCompanyChartBar2"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportCompanyChartBar3"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportCompanyChartBar4"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportCompanyChartBar5"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportCompanyChartDoughnut"></canvas></div></div>
+                    </div></div></div>
+                </div>
                 <div class="col-xl-6"><h6 class="text-muted"><i class="bi bi-building me-1"></i>会社別</h6>
                   <div class="table-responsive">
                         <table class="table table-sm mb-0"><thead><tr><th>会社</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
@@ -268,6 +284,22 @@
                         <table class="table table-sm mb-0"><thead><tr><th>役職</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByPosition"></tbody></table>
                       </div></div>
+                <div class="col-12">
+                  <div class="card mb-2"><div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <h6 class="mb-0"><i class="bi bi-person-badge me-1"></i>役職別グラフ</h6>
+                    <div class="btn-group btn-group-sm" role="group" data-report-chart-toggle="position" aria-label="役職別グラフの向き">
+                      <button type="button" class="btn btn-outline-secondary" data-orientation="vertical">縦棒</button>
+                      <button type="button" class="btn btn-outline-secondary active" data-orientation="horizontal" aria-pressed="true">横棒</button>
+                    </div></div>
+                    <div class="card-body"><div class="row g-2">
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportPositionChartBar1"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportPositionChartBar2"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportPositionChartBar3"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportPositionChartBar4"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportPositionChartBar5"></canvas></div></div>
+                      <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportPositionChartDoughnut"></canvas></div></div>
+                    </div></div></div>
+                </div>
                 <div class="col-12"><div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
                   <h6 class="text-muted mb-0"><i class="bi bi-diagram-3 me-1"></i>部署別</h6>
                   <div class="d-none align-items-center gap-1 fw-normal" data-dept-level-wrap><label class="small text-muted text-nowrap mb-0" for="reportDeptLevel">部署のまとめ方</label><select class="form-select form-select-sm w-auto" id="reportDeptLevel" data-dept-level><option value="0">全部</option><option value="1">1段目</option><option value="2">2段目</option></select></div></div>
@@ -279,6 +311,20 @@
               </div>
             </div>
             <div class="tab-pane fade" id="reportPane-contents" role="tabpanel" aria-labelledby="reportTab-contents" tabindex="0">
+              <div class="card mb-2"><div class="card-header d-flex justify-content-between align-items-center py-2">
+                <h6 class="mb-0"><i class="bi bi-files me-1"></i>コンテンツ別グラフ</h6>
+                <div class="btn-group btn-group-sm" role="group" data-report-chart-toggle="content" aria-label="コンテンツ別グラフの向き">
+                  <button type="button" class="btn btn-outline-secondary" data-orientation="vertical">縦棒</button>
+                  <button type="button" class="btn btn-outline-secondary active" data-orientation="horizontal" aria-pressed="true">横棒</button>
+                </div></div>
+                <div class="card-body"><div class="row g-2">
+                  <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportContentChartBar1"></canvas></div></div>
+                  <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportContentChartBar2"></canvas></div></div>
+                  <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportContentChartBar3"></canvas></div></div>
+                  <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportContentChartBar4"></canvas></div></div>
+                  <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportContentChartBar5"></canvas></div></div>
+                  <div class="col-md-4"><div style="position:relative;height:280px"><canvas id="reportContentChartDoughnut"></canvas></div></div>
+                </div></div></div>
               <div class="table-responsive">
                         <table class="table table-sm mb-0"><thead><tr><th>No</th><th>件名</th><th>数</th><th title="訓練メールのリンクを踏んで偽サイトを表示した数と割合">サイト表示</th><th title="認証した数と割合。認証率＝認証数÷サイト表示数">認証</th><th title="認証率＝認証数÷対象数">認証率(対象比)</th><th title="報告率＝報告数÷対象数。高いほど良い">報告率</th></tr></thead>
                           <tbody id="reportByContent"></tbody></table>
@@ -1151,7 +1197,7 @@
 
 <script src="assets/vendor/bootstrap.bundle.min.js"></script>
 <script src="assets/vendor/chart.umd.min.js"></script>
-<script src="app.js?v=6cba5852"></script>
+<script src="app.js?v=c03fc66b"></script>
 <script src="assets/campaign-workspace.js?v=58aef9df"></script>
 <script src="assets/campaign-editor-steps.js?v=021e55d5"></script>
 <script src="assets/context-help.js?v=f2e1099c"></script>

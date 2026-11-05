@@ -70,6 +70,13 @@ foreach ($d['by_company'] as $row) { $byCompany[$row['company']] = $row; }
 check($byCompany['会社A']['count'] === 3 && $byCompany['会社A']['beacon_opened'] === 3, '会社A count3/beacon3');
 check($byCompany['会社A']['auth_rate'] === 50.0, '会社A auth_rate=50(1/2, 分母=link_clicked)');
 check($byCompany['会社B']['beacon_rate'] === 50.0, '会社B beacon_rate=50(1/2)');
+// 属性別グラフ(会社/役職/コンテンツ)が読むフィールドが揃っていることを固定する。
+// renderReportAttrCharts は count / link_clicked / link_rate / auth_count を使う。
+// 会社A: link_clicked=2, count=3 → link_rate = round(2/3*100,2)=66.67
+check($byCompany['会社A']['link_clicked'] === 2 && $byCompany['会社A']['link_rate'] === 66.67,
+    '会社A link_clicked=2/link_rate=66.67(グラフのサイト表示数・表示率の源)');
+check(array_key_exists('auth_count', $byCompany['会社A']),
+    'by_company に auth_count がある(グラフの認証試行数の源)');
 
 // 役職別: 不正役職(部長)は「その他」
 $positions = array_column($d['by_position'], 'position');
@@ -79,6 +86,8 @@ check(in_array('その他', $positions, true), '不正役職は「その他」�
 $byContent = [];
 foreach ($d['by_content'] as $row) { $byContent[$row['content_no']] = $row; }
 check($byContent['1']['count'] === 3 && $byContent['2']['count'] === 2, 'コンテンツ別 content1=3/content2=2');
+// コンテンツ別グラフのラベルは content_no と subject を使う。subject キーが必ず存在する(未設定は空文字)。
+check(array_key_exists('subject', $byContent['1']), 'by_content に subject がある(グラフのラベル用)');
 
 // タイムライン累積サイト表示(click): 1→2
 $cum = array_column($d['timeline'], 'cum_beacon');

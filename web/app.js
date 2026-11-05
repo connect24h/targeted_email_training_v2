@@ -3049,6 +3049,13 @@ function multiVals(sel) { return Array.from(sel.selectedOptions).map((o) => Numb
 let reportChart = null;
 let reportTimelineChart = null;
 let reportSelectedId = null;
+// 属性別(会社/役職/コンテンツ)グラフ。v1(tet)と同じく各カテゴリ 棒5枚＋ドーナツ1枚。
+// Chart インスタンスはカテゴリごとに配列で保持し、再描画前に destroy する(リーク防止)。
+const reportAttrCharts = { company: [], position: [], content: [] };
+// 縦棒/横棒の向き。既定は横棒(会社名・件名が長くても読める)。v1 の既定と同じ。
+const reportAttrOrientation = { company: 'horizontal', position: 'horizontal', content: 'horizontal' };
+// 直近に描いた行データをカテゴリごとに保持(トグルで再描画するため)。
+const reportAttrRows = { company: null, position: null, content: null };
 let reportCommitCampaignId = null;
 function pct(v) { return `${(Number(v) || 0).toFixed(1)}%`; }
 // 数と率の併記セル。率が null(分母0で未定義)のときは数だけを出す。
@@ -3149,6 +3156,85 @@ function renderReportOverviewKpis(s) {
     item('届かない宛先', `${Number(s.undeliverable_count) || 0}人`, '相手のサーバーから届かないと返された宛先の人数。率の分母（対象数）から外しています'),
   );
 }
+// 属性別グラフの配色(v1 の 10 色パレットを踏襲)。カテゴリの要素数に合わせて使い回す。
+const REPORT_ATTR_COLORS = [
+  'rgba(255, 99, 132, 0.8)', 'rgba(54, 162, 235, 0.8)', 'rgba(255, 206, 86, 0.8)',
+  'rgba(75, 192, 192, 0.8)', 'rgba(153, 102, 255, 0.8)', 'rgba(255, 159, 64, 0.8)',
+  'rgba(199, 199, 199, 0.8)', 'rgba(83, 102, 255, 0.8)', 'rgba(255, 99, 255, 0.8)',
+  'rgba(99, 255, 132, 0.8)',
+];
+// 会社別/役職別/コンテンツ別のグラフ群(棒5枚＋ドーナツ1枚)を描く。v1(tet)の
+// company/content/position の3関数を1つにまとめたもの。prefix は canvas id の接頭辞
+// ('Company'/'Position'/'Content')、key は状態キー('company'等)。
+// 指標は tet2 の画面統一語に合わせ「サイト表示(=click=link_clicked)」を用いる
+// (v1 の「ビーコン開封」は open だが、tet2 は open と click をほぼ同一事象として click に統一済み)。
+function renderReportAttrCharts(key, prefix, rows, labelField) {
+  reportAttrRows[key] = rows;
+  // 既存インスタンスを破棄してから描き直す(タブ再描画・トグルで多重生成しない)。
+  reportAttrCharts[key].forEach((c) => { try { c.destroy(); } catch (_e) { /* 破棄済みは無視 */ } });
+  reportAttrCharts[key] = [];
+  if (typeof Chart === 'undefined') return;  // Chart.js 未読込なら何もしない
+  const list = Array.isArray(rows) ? rows : [];
+  // ラベル。コンテンツ別は件名が長いので「No」を基本にし、件名があれば先頭を短く添える。
+  const labels = list.map((r) => {
+    if (labelField === 'content_no') {
+      const no = String(r.content_no ?? '');
+      const subj = String(r.subject ?? '').trim();
+      return subj ? `${no}: ${subj.length > 12 ? subj.slice(0, 12) + '…' : subj}` : no;
+    }
+    return String(r[labelField] ?? '');
+  });
+  const counts = list.map((r) => Number(r.count) || 0);
+  const shown = list.map((r) => Number(r.link_clicked) || 0);          // サイト表示数(click)
+  const shownRates = list.map((r) => Number(r.link_rate) || 0);        // サイト表示率(%)
+  const authCounts = list.map((r) => Number(r.auth_count) || 0);       // 認証試行数
+  // 認証率は 認証÷サイト表示(click)。分母0は0に。
+  const authRates = list.map((r) => { const c = Number(r.link_clicked) || 0; return c > 0 ? Math.round((Number(r.auth_count) || 0) / c * 1000) / 10 : 0; });
+  const colors = REPORT_ATTR_COLORS;
+  const border = colors.map((c) => c.replace('0.8', '1'));
+  const horizontal = reportAttrOrientation[key] === 'horizontal';
+  const barOpts = horizontal ? { indexAxis: 'y', scales: { x: { beginAtZero: true, ticks: { precision: 0 } } } } : { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } };
+  const pctOpts = horizontal ? { indexAxis: 'y', scales: { x: { beginAtZero: true, max: 100 } } } : { scales: { y: { beginAtZero: true, max: 100 } } };
+  const defs = [
+    { id: `report${prefix}ChartBar1`, type: 'bar', data: counts, label: '送信件数', title: '送信件数', opts: barOpts },
+    { id: `report${prefix}ChartBar2`, type: 'bar', data: shown, label: 'サイト表示数', title: 'サイト表示数', opts: barOpts },
+    { id: `report${prefix}ChartBar3`, type: 'bar', data: shownRates, label: 'サイト表示率 (%)', title: 'サイト表示率 (%)', opts: pctOpts },
+    { id: `report${prefix}ChartBar4`, type: 'bar', data: authCounts, label: '認証試行数', title: '認証試行数', opts: barOpts },
+    { id: `report${prefix}ChartBar5`, type: 'bar', data: authRates, label: '認証率 (%)', title: '認証率 (認証/サイト表示 %)', opts: pctOpts },
+    { id: `report${prefix}ChartDoughnut`, type: 'doughnut', data: shown, label: '', title: 'サイト表示数の割合', opts: { plugins: { legend: { position: 'right' } } } },
+  ];
+  for (const def of defs) {
+    const canvas = document.getElementById(def.id);
+    if (!canvas) continue;
+    const isDoughnut = def.type === 'doughnut';
+    const dataset = isDoughnut
+      ? { data: def.data, backgroundColor: colors.slice(0, labels.length || 1), borderColor: '#fff', borderWidth: 2 }
+      : { label: def.label, data: def.data, backgroundColor: colors.slice(0, labels.length || 1), borderColor: border.slice(0, labels.length || 1), borderWidth: 1 };
+    const chart = new Chart(canvas, {
+      type: def.type,
+      data: { labels, datasets: [dataset] },
+      options: Object.assign({
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { title: { display: true, text: def.title }, legend: { display: isDoughnut } },
+      }, def.opts),
+    });
+    reportAttrCharts[key].push(chart);
+  }
+}
+// 縦横トグル。カテゴリの向きを変えて、保持している行データで描き直す。
+function setReportAttrOrientation(key, orientation) {
+  reportAttrOrientation[key] = orientation;
+  const toggle = document.querySelector(`[data-report-chart-toggle="${key}"]`);
+  if (toggle) toggle.querySelectorAll('button').forEach((b) => {
+    const on = b.dataset.orientation === orientation;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  const field = key === 'company' ? 'company' : key === 'position' ? 'position' : 'content_no';
+  const prefix = key === 'company' ? 'Company' : key === 'position' ? 'Position' : 'Content';
+  if (reportAttrRows[key]) renderReportAttrCharts(key, prefix, reportAttrRows[key], field);
+}
 // P7: v1同等の詳細レポート(会社別/役職別/コンテンツ別/日別タイムライン)
 async function renderReportDetail(campaignId) {
   const selected = Cache.reports[campaignId];
@@ -3189,6 +3275,7 @@ async function renderReportDetail(campaignId) {
         <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
         <td class="${r.report_rate == null ? '' : goodRateClass(r.report_rate,5,20)}">${r.report_rate == null ? '-' : countRate(r.report_count, r.report_rate)}</td></tr>`; }).join('')
     : emptyRow(6);
+  renderReportAttrCharts('company', 'Company', d.by_company || [], 'company');
   // 役職別
   $('#reportByPosition').innerHTML = (d.by_position || []).length
     ? d.by_position.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.position)}</td><td>${r.count}</td>
@@ -3197,6 +3284,7 @@ async function renderReportDetail(campaignId) {
         <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
         <td class="${r.report_rate == null ? '' : goodRateClass(r.report_rate,5,20)}">${r.report_rate == null ? '-' : countRate(r.report_count, r.report_rate)}</td></tr>`; }).join('')
     : emptyRow(6);
+  renderReportAttrCharts('position', 'Position', d.by_position || [], 'position');
   // コンテンツ別(No昇順・件名付き)
   $('#reportByContent').innerHTML = (d.by_content || []).length
     ? d.by_content.map((r) => { const authTargetRate = authTargetRateOf(r.auth_count, r.count); return `<tr><td>${esc(r.content_no)}</td>
@@ -3207,6 +3295,7 @@ async function renderReportDetail(campaignId) {
         <td class="${authTargetRate === null ? '' : rateClass(authTargetRate,5,20)}">${authTargetRate === null ? '-' : pct(authTargetRate)}</td>
         <td class="${r.report_rate == null ? '' : goodRateClass(r.report_rate,5,20)}">${r.report_rate == null ? '-' : countRate(r.report_count, r.report_rate)}</td></tr>`; }).join('')
     : emptyRow(7);
+  renderReportAttrCharts('content', 'Content', d.by_content || [], 'content_no');
   // 日別タイムライン(累積 beacon/auth)
   const tl = d.timeline || [];
   if (reportTimelineChart) reportTimelineChart.destroy();
@@ -3717,6 +3806,28 @@ async function deleteGroup(id) {
   try { await api('api/groups.php', { method: 'POST', query: { action: 'delete' }, body: { id } });
     toast('削除しました', 'ok'); renderGroups(); } catch (e) { toast(e.message, 'err'); }
 }
+// CSV テキストからメールアドレスを抜き出す。列順に依存せず「@ を含むトークン」を拾うので、
+// 見出し行(email/メールアドレス 等、@ を含まない)は自然に無視される。小文字化・trim・重複除去。
+// Excel 由来の Shift_JIS で氏名が化けても、メールは ASCII なので抽出に影響しない。
+function parseEmailsFromCsv(text) {
+  const out = [];
+  const seen = new Set();
+  // 先頭 BOM(U+FEFF)を除去してから行分割。
+  const stripped = String(text || '').replace(new RegExp('^' + String.fromCharCode(0xFEFF)), '');
+  const lines = stripped.split(/\r\n|\r|\n/);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    for (const cellRaw of line.split(',')) {
+      const cell = cellRaw.trim().replace(/^["']|["']$/g, '').trim();
+      // メールらしいセルだけ拾う(最低限 local@domain.tld の形)。
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cell)) {
+        const email = cell.toLowerCase();
+        if (!seen.has(email)) { seen.add(email); out.push(email); }
+      }
+    }
+  }
+  return out;
+}
 // グループのメンバー管理: 現メンバーと全対象者を一覧し、チェックで追加/削除する。
 async function manageGroupMembers(groupId) {
   const g = Cache.groups[groupId];
@@ -3739,8 +3850,19 @@ async function manageGroupMembers(groupId) {
       <input class="form-check-input gm-chk" type="checkbox" value="${t.id}" id="gm-${t.id}" ${memberIds.has(t.id) ? 'checked' : ''}>
       <label class="form-check-label" for="gm-${t.id}">${esc(t.email)}${t.name ? '（' + esc(t.name) + '）' : ''}${t.department ? ' <span class="text-muted small">' + esc(t.department) + '</span>' : ''}</label>
     </div>`).join('');
+  // email→id マップ(小文字化)。CSV 取込時のメール解決に使う。
+  const idByEmail = new Map();
+  for (const t of allTargets) { if (t.email) idByEmail.set(String(t.email).toLowerCase(), t.id); }
   const body = `
     <p class="small text-muted mb-2">グループ「${esc(g ? g.name : '')}」のメンバーを選びます。チェックした対象者がメンバーになります（現メンバーは初期選択済み）。</p>
+    <div class="card mb-2"><div class="card-body py-2">
+      <div class="small fw-semibold mb-1"><i class="bi bi-upload me-1"></i>CSV で選択</div>
+      <p class="small text-muted mb-2">メールアドレスの列がある CSV を取り込むと、<strong>一致した対象者だけ</strong>をチェックします（今のチェックは置き換わります）。氏名などほかの列は無視します。CSV にあって対象者一覧にないメールがあれば、エラーとして知らせます。</p>
+      <input type="file" class="form-control form-control-sm mb-2" id="gmCsvFile" accept=".csv,text/csv">
+      <textarea class="form-control form-control-sm mb-2" id="gmCsvText" rows="4" placeholder="ファイルを選ぶか、メールアドレスを貼り付け（1行1件でも、CSVの列でも可）"></textarea>
+      <button type="button" class="btn btn-sm btn-primary" id="gmCsvApplyBtn"><i class="bi bi-check2-square me-1"></i>CSV で選択</button>
+      <div class="small mt-2 d-none" id="gmCsvResult"></div>
+    </div></div>
     <div class="mb-2"><button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.gm-chk').forEach(c=>c.checked=true)">全選択</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.gm-chk').forEach(c=>c.checked=false)">全解除</button></div>
     <div style="max-height:340px;overflow-y:auto;border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);padding:8px">${rows}</div>`;
@@ -3753,6 +3875,57 @@ async function manageGroupMembers(groupId) {
     if (toRemove.length) await api('api/groups.php', { method: 'POST', query: { action: 'remove_targets' }, body: { group_id: groupId, target_ids: toRemove } });
     toast(`メンバーを更新しました（追加${toAdd.length}・削除${toRemove.length}）`, 'ok');
     renderGroups();
+  });
+  // CSV ファイル選択 → textarea に読み込む(貼り付けとどちらでも可)。
+  const csvFileEl = document.getElementById('gmCsvFile');
+  if (csvFileEl) csvFileEl.addEventListener('change', async () => {
+    const f = csvFileEl.files && csvFileEl.files[0];
+    if (!f) return;
+    if (f.size > 1024 * 1024) { toast('CSV は1MB以内にしてください', 'err'); csvFileEl.value = ''; return; }
+    try { document.getElementById('gmCsvText').value = await f.text(); }
+    catch (_e) { toast('CSV を読み込めませんでした', 'err'); }
+  });
+  // 「CSV で選択」: CSV のメールで checkbox を置き換え、差異(未登録メール)があればエラーで知らせる。
+  const csvApplyBtn = document.getElementById('gmCsvApplyBtn');
+  if (csvApplyBtn) csvApplyBtn.addEventListener('click', () => {
+    const text = document.getElementById('gmCsvText').value;
+    const emails = parseEmailsFromCsv(text);
+    const resultEl = document.getElementById('gmCsvResult');
+    if (!emails.length) {
+      toast('CSV からメールアドレスを読み取れませんでした', 'err');
+      if (resultEl) { resultEl.className = 'small mt-2 text-danger'; resultEl.textContent = 'メールアドレスの列（@ を含む値）が見つかりませんでした。'; }
+      return;
+    }
+    // CSV のメールを対象者 id に解決。見つからないものは差異(未登録)として控える。
+    const matchedIds = new Set();
+    const missing = [];
+    for (const email of emails) {
+      const id = idByEmail.get(email);
+      if (id === undefined) missing.push(email);
+      else matchedIds.add(Number(id));
+    }
+    // 置き換え: 一致した id だけ ON、他は OFF。
+    document.querySelectorAll('.gm-chk').forEach((c) => { c.checked = matchedIds.has(Number(c.value)); });
+    // 差異があればエラーメッセージ。なければ成功通知。
+    if (missing.length) {
+      toast(`CSV と対象者一覧に差異があります（未登録 ${missing.length} 件）`, 'err', 6000);
+      if (resultEl) {
+        resultEl.className = 'small mt-2 text-danger';
+        // 未登録メールは利用者由来の値。textContent で安全に出す(DOM 構築)。
+        resultEl.replaceChildren();
+        const head = document.createElement('div');
+        head.className = 'fw-semibold';
+        head.textContent = `一致 ${matchedIds.size} 件 / 対象者に未登録 ${missing.length} 件（下記は選択されていません）`;
+        const ul = document.createElement('ul');
+        ul.className = 'mb-0 ps-3';
+        for (const email of missing.slice(0, 50)) { const li = document.createElement('li'); li.textContent = email; ul.appendChild(li); }
+        if (missing.length > 50) { const li = document.createElement('li'); li.textContent = `… 他 ${missing.length - 50} 件`; ul.appendChild(li); }
+        resultEl.append(head, ul);
+      }
+    } else {
+      toast(`CSV の ${matchedIds.size} 件を選択しました`, 'ok');
+      if (resultEl) { resultEl.className = 'small mt-2 text-success'; resultEl.textContent = `一致 ${matchedIds.size} 件すべてを選択しました。保存すると反映されます。`; }
+    }
   });
 }
 
@@ -6392,7 +6565,18 @@ document.addEventListener('DOMContentLoaded', () => {
   $$('#reportTabs [data-bs-toggle="tab"]').forEach((tab) => tab.addEventListener('shown.bs.tab', () => {
     reportChart?.resize();
     reportTimelineChart?.resize();
+    // 会社別/役職別/コンテンツ別のグラフも、非表示タブから開いた直後に大きさを確定させる
+    for (const key of ['company', 'position', 'content']) {
+      reportAttrCharts[key].forEach((c) => { try { c.resize(); } catch (_e) { /* 破棄済みは無視 */ } });
+    }
   }));
+  // 属性別グラフの縦棒/横棒トグル(会社/役職/コンテンツ)
+  $$('[data-report-chart-toggle]').forEach((group) => {
+    const key = group.dataset.reportChartToggle;
+    group.querySelectorAll('button[data-orientation]').forEach((btn) => {
+      btn.addEventListener('click', () => setReportAttrOrientation(key, btn.dataset.orientation));
+    });
+  });
   $('#reportPeriodBtn')?.addEventListener('click', () => { if (reportSelectedId) renderReportDetail(reportSelectedId); });
   $('#reportPeriodClearBtn')?.addEventListener('click', () => {
     $('#reportStartDate').value = ''; $('#reportEndDate').value = '';
