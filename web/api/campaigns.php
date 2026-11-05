@@ -353,6 +353,75 @@ function campaigns_target_ids_from_groups(array $groupIds, int $tenantId): array
     return $ids;
 }
 
+/**
+ * content_delivery を正規値へ正規化する。
+ * 'all'=全員が全コンテンツ / 'manual'=シナリオ毎に手動割当 / それ以外は 'distribute'(既定,均等割り)。
+ */
+function campaigns_normalize_delivery(?string $value): string
+{
+    if ($value === 'all') {
+        return 'all';
+    }
+    if ($value === 'manual') {
+        return 'manual';
+    }
+    return 'distribute';
+}
+
+/**
+ * manual(シナリオ毎手動割当)の assignments をパースし、target_id => content_no の単一マップを返す。
+ *
+ * body['assignments'] = { "<content_no>": { group_ids:[...], target_ids:[...] }, ... }
+ * - group_ids はメンバー target_id に展開する(保存時展開。グループ→シナリオの紐づきは残さない)。
+ * - 割当できるのは $poolTargetIds(全体プール = collect_target_ids の結果)の中の人だけ。
+ *   プール外/他テナントの target を混ぜられたらエラー(IDOR 防止。group も tenant スコープで展開)。
+ * - content_no は 1..$contentCount の範囲。範囲外はエラー。
+ * - 1人1シナリオ排他: 同じ target_id が複数 content_no に出たらエラー。
+ * 未割当(どの content にも出ない)プール対象者は、このマップに現れない(= content_no NULL のまま=送信対象外)。
+ *
+ * @param list<int> $poolTargetIds
+ * @return array<int,int> target_id => content_no
+ */
+function campaigns_parse_assignments(array $body, int $tenantId, array $poolTargetIds, int $contentCount): array
+{
+    $raw = $body['assignments'] ?? null;
+    if (!is_array($raw)) {
+        json_error('assignments が不正です', 400);
+    }
+    $pool = [];
+    foreach ($poolTargetIds as $tid) {
+        $pool[(int) $tid] = true;
+    }
+    $map = [];              // target_id => content_no
+    foreach ($raw as $key => $spec) {
+        $contentNo = (int) $key;
+        if ($contentNo < 1 || $contentNo > $contentCount) {
+            json_error('assignments の content_no が範囲外です: ' . $key, 400);
+        }
+        if (!is_array($spec)) {
+            json_error('assignments[' . $key . '] が不正です', 400);
+        }
+        // この content に割り当てる target を集める(group はメンバーへ展開)。
+        $targetIds = campaigns_int_array($spec, 'target_ids') ?? [];
+        campaigns_assert_targets_owned($targetIds, $tenantId); // 他テナント target を弾く(IDOR)
+        $groupIds = campaigns_int_array($spec, 'group_ids') ?? [];
+        $expanded = array_merge($targetIds, campaigns_target_ids_from_groups($groupIds, $tenantId));
+        foreach ($expanded as $tid) {
+            $tid = (int) $tid;
+            if (!isset($pool[$tid])) {
+                // 全体プールに居ない target は割り当てられない(越境・取り違え防止)。
+                json_error('割当に含まれる対象者が、選択した対象者(全体)に含まれていません: target_id=' . $tid, 400);
+            }
+            if (isset($map[$tid]) && $map[$tid] !== $contentNo) {
+                // 1人1シナリオ排他。
+                json_error('同じ対象者が複数のシナリオに割り当てられています: target_id=' . $tid, 409);
+            }
+            $map[$tid] = $contentNo;
+        }
+    }
+    return $map;
+}
+
 function campaigns_collect_target_ids(array $body, int $tenantId): array
 {
     $targetIds = campaigns_int_array($body, 'target_ids') ?? [];
@@ -398,7 +467,11 @@ function campaigns_insert_targets(int $campaignId, array $targetIds, ?int $authF
  * 
  * 均等性: N人×K コンテンツなら各コンテンツ floor(N/K)〜ceil(N/K) 人（差最大1）。
  */
-function campaigns_distribute_contents(int $campaignId, array $targetIds): void
+/**
+ * @param array<int,int>|null $contentNoByTarget manual モード用の target_id => content_no。
+ *        null なら content_delivery に従う(distribute/all)。manual で渡されたときだけ使う。
+ */
+function campaigns_distribute_contents(int $campaignId, array $targetIds, ?array $contentNoByTarget = null): void
 {
     // campaign_contents を content_no 順で取得
     $contents = Db::all(
@@ -408,16 +481,39 @@ function campaigns_distribute_contents(int $campaignId, array $targetIds): void
          ORDER BY cc.content_no',
         [$campaignId]
     );
-    
+
     if (count($contents) === 0) {
         throw new RuntimeException('このキャンペーンにはコンテンツが登録されていません');
     }
-    
+
     $contentCount = count($contents);
 
-    // 配信方式: 'all' は各対象者に全コンテンツを送る(テスト用)。'distribute'(既定)は従来のラウンドロビン均等割り。
+    // 配信方式: 'all' は各対象者に全コンテンツを送る(テスト用)。'manual' はシナリオ毎の手動割当。
+    // 'distribute'(既定)は従来のラウンドロビン均等割り。
     $mode = Db::one('SELECT content_delivery FROM campaigns WHERE id = ?', [$campaignId]);
     $deliveryMode = $mode !== null ? (string) ($mode['content_delivery'] ?? 'distribute') : 'distribute';
+
+    if ($deliveryMode === 'manual') {
+        // 手動割当: 各対象者を、割当された content_no に設定する(1人1シナリオ)。
+        // 割当の無い対象者(マップに無い)は content_no=NULL のまま = 送信対象外。
+        // auth_flag は割当先コンテンツの phish テンプレから引く。
+        $authByContentNo = [];
+        foreach ($contents as $content) {
+            $authByContentNo[(int) $content['content_no']] = $content['auth_flag'] !== null ? (int) $content['auth_flag'] : null;
+        }
+        foreach ($targetIds as $targetId) {
+            $targetId = (int) $targetId;
+            if (!isset($contentNoByTarget[$targetId])) {
+                continue; // 未割当 = 送信対象外(content_no は NULL のまま)
+            }
+            $contentNo = (int) $contentNoByTarget[$targetId];
+            Db::run(
+                'UPDATE campaign_targets SET content_no = ?, auth_flag = ? WHERE campaign_id = ? AND target_id = ?',
+                [$contentNo, $authByContentNo[$contentNo] ?? null, $campaignId, $targetId]
+            );
+        }
+        return;
+    }
 
     if ($deliveryMode === 'all') {
         // 各対象者に全コンテンツ分のレコードを作る。既存レコード(insert_targets が作った1件)を
@@ -541,11 +637,23 @@ function campaigns_handle_get(array $actor): never
         [$id]
     );
     $targetIds = array_map(static fn ($r) => (int) $r['target_id'], $targetRows);
+    // manual(シナリオ毎手動割当)の復元用: content_no => [割当済み target_id]。
+    // content_no が付いている行だけ(未割当=NULL は含めない)。distribute/all でも害はない情報。
+    $assignRows = Db::all(
+        'SELECT content_no, target_id FROM campaign_targets
+          WHERE campaign_id = ? AND content_no IS NOT NULL ORDER BY content_no, koban',
+        [$id]
+    );
+    $assignments = [];
+    foreach ($assignRows as $ar) {
+        $assignments[(string) (int) $ar['content_no']][] = (int) $ar['target_id'];
+    }
     json_out([
-        'success'    => true,
-        'campaign'   => $campaign,
-        'contents'   => $contents,
-        'target_ids' => $targetIds,
+        'success'     => true,
+        'campaign'    => $campaign,
+        'contents'    => $contents,
+        'target_ids'  => $targetIds,
+        'assignments' => $assignments,
     ]);
 }
 
@@ -717,8 +825,8 @@ function campaigns_handle_create(array $actor): never
             'start_at' => campaigns_string($body, 'start_at'),
             'end_at' => campaigns_string($body, 'end_at'),
             'is_test' => campaigns_optional_bool_int($body, 'is_test') ?? 0,
-            // 配信方式: 'all'=全員に全コンテンツ / 'distribute'=均等割り(既定)。
-            'content_delivery' => (campaigns_optional_string($body, 'content_delivery') === 'all') ? 'all' : 'distribute',
+            // 配信方式: 'all'=全員に全コンテンツ / 'manual'=シナリオ毎手動割当 / 'distribute'=均等割り(既定)。
+            'content_delivery' => campaigns_normalize_delivery(campaigns_optional_string($body, 'content_delivery')),
             // テスト宛先(カンマ区切り)。is_test時、実Toをここに均等分配する(PipelineRunnerがemail検証)。
             // is_test OFF 時は空欄で送られるため、空文字は NULL 扱い(不正としない)。
             'test_redirect_emails' => campaigns_optional_string_or_null($body, 'test_redirect_emails'),
@@ -758,7 +866,14 @@ function campaigns_handle_create(array $actor): never
 
     $targetIds = campaigns_collect_target_ids($body, $tenantId);
 
-    $id = Db::tx(function () use ($tenantId, $actor, $data, $targetIds, $phishTemplate, $parsedContents): int {
+    // manual(シナリオ毎手動割当)のとき、assignments を target_id => content_no に正規化する。
+    // 全体プール外/他テナント/重複(1人1シナリオ違反)はここでエラーにする。
+    $contentNoByTarget = null;
+    if ($data['content_delivery'] === 'manual') {
+        $contentNoByTarget = campaigns_parse_assignments($body, $tenantId, $targetIds, count($parsedContents));
+    }
+
+    $id = Db::tx(function () use ($tenantId, $actor, $data, $targetIds, $phishTemplate, $parsedContents, $contentNoByTarget): int {
         $campaignId = Db::insert(
             'INSERT INTO campaigns
              (tenant_id, name, status, subject_template_id, body_template_id, phish_template_id,
@@ -828,8 +943,8 @@ function campaigns_handle_create(array $actor): never
         }
 
         campaigns_insert_targets($campaignId, $targetIds, $phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null, $data['from_address']);
-        campaigns_distribute_contents($campaignId, $targetIds);
-        
+        campaigns_distribute_contents($campaignId, $targetIds, $contentNoByTarget);
+
         return $campaignId;
     });
     audit('campaign.create', 'campaign_id=' . $id);
@@ -847,6 +962,10 @@ function campaigns_update_fields(array $body): array
                 json_error($key . ' が不正です', 400);
             }
         }
+    }
+    // 配信方式は 'all'/'manual'/'distribute' の正規値に寄せる(create と同じ扱い)。
+    if (array_key_exists('content_delivery', $fields)) {
+        $fields['content_delivery'] = campaigns_normalize_delivery($fields['content_delivery']);
     }
     // test_redirect_emails は任意項目。is_test OFF 時は空欄で送られるため空文字を NULL 扱いにする。
     if (array_key_exists('test_redirect_emails', $body)) {
@@ -957,7 +1076,29 @@ function campaigns_handle_update(array $actor): never
         json_error('更新項目がありません', 400);
     }
 
-    Db::tx(function () use ($id, $tenantId, $fields, $replaceTargets, $targetIds, $campaign, $phishTemplate, $hasContents, $parsedContents): void {
+    // 実効の配信方式: 今回更新で来たならそれ、来なければ既存キャンペーンの値。
+    $effectiveDelivery = array_key_exists('content_delivery', $fields)
+        ? (string) $fields['content_delivery']
+        : (string) ($campaign['content_delivery'] ?? 'distribute');
+
+    // manual のとき assignments を target_id => content_no に正規化する。
+    // targets を作り直す経路(contents 差し替え or target 差し替え)のときだけ再割当が要る。
+    // content_no の上限は、contents が来たならその件数、来なければ既存 campaign_contents の件数。
+    $contentNoByTarget = null;
+    $willRebuildTargets = $hasContents || $replaceTargets;
+    if ($effectiveDelivery === 'manual' && $willRebuildTargets) {
+        $contentCount = $hasContents
+            ? count($parsedContents)
+            : (int) (Db::one('SELECT COUNT(*) AS c FROM campaign_contents WHERE campaign_id = ?', [$id])['c'] ?? 0);
+        // 割当先の対象者プール: targets を差し替えるならその集合、contents だけ差し替えるなら既存 targets。
+        $poolForAssign = $replaceTargets ? $targetIds : array_map(
+            static fn ($r) => (int) $r['target_id'],
+            Db::all('SELECT DISTINCT target_id FROM campaign_targets WHERE campaign_id = ?', [$id])
+        );
+        $contentNoByTarget = campaigns_parse_assignments($body, $tenantId, $poolForAssign, $contentCount);
+    }
+
+    Db::tx(function () use ($id, $tenantId, $fields, $replaceTargets, $targetIds, $campaign, $phishTemplate, $hasContents, $parsedContents, $contentNoByTarget): void {
         campaigns_apply_update($id, $tenantId, $fields);
         
         if ($hasContents) {
@@ -1005,13 +1146,13 @@ function campaigns_handle_update(array $actor): never
             $authFlag = $phishTemplate !== null ? ($phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null) : ($campaign['phish_template_id'] !== null ? (int) campaigns_assert_template_visible((int) $campaign['phish_template_id'], $tenantId, 'phish_login')['auth_flag'] : null);
             $fromAddress = array_key_exists('from_address', $fields) ? $fields['from_address'] : ($campaign['from_address'] !== null ? (string) $campaign['from_address'] : null);
             campaigns_insert_targets($id, $targetIds, $authFlag, $fromAddress);
-            campaigns_distribute_contents($id, $targetIds);
+            campaigns_distribute_contents($id, $targetIds, $contentNoByTarget);
         } elseif ($replaceTargets) {
             Db::run('DELETE FROM campaign_targets WHERE campaign_id = ?', [$id]);
             $authFlag = $phishTemplate !== null ? ($phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null) : ($campaign['phish_template_id'] !== null ? (int) campaigns_assert_template_visible((int) $campaign['phish_template_id'], $tenantId, 'phish_login')['auth_flag'] : null);
             $fromAddress = array_key_exists('from_address', $fields) ? $fields['from_address'] : ($campaign['from_address'] !== null ? (string) $campaign['from_address'] : null);
             campaigns_insert_targets($id, $targetIds, $authFlag, $fromAddress);
-            campaigns_distribute_contents($id, $targetIds);
+            campaigns_distribute_contents($id, $targetIds, $contentNoByTarget);
         } else {
             if ($phishTemplate !== null) {
                 Db::run(

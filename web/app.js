@@ -2351,8 +2351,9 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
         <select class="form-select" name="content_delivery">
           <option value="distribute">均等割り（各対象者に1コンテンツを均等配分）</option>
           <option value="all">全員に全コンテンツ（テスト対象者に全パターン送付）</option>
+          <option value="manual">シナリオ毎に割当（対象者ごとに受け取るシナリオを指定）</option>
         </select>
-        <div class="form-text">「全員に全コンテンツ」は各対象者へ登録した全コンテンツを送ります。コンテンツごとに個別追跡されます。</div></div>
+        <div class="form-text">「全員に全コンテンツ」は各対象者へ登録した全コンテンツを送ります。「シナリオ毎に割当」は対象者ごとに受け取るシナリオ（コンテンツ）を個別指定します（1人1シナリオ）。</div></div>
       <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_test" id="cbTest"><label class="form-check-label" for="cbTest">テスト送信（is_test）</label></div>
       <div class="mb-2" id="testRedirectWrap" style="display:none">
         <label class="form-label">テスト宛先（対象者・グループから選択、または直接入力）</label>
@@ -2374,6 +2375,23 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       <div class="mb-2"><label class="form-label">個別対象者（グループへ追加する場合）</label>
         <select class="form-select" name="target_ids" multiple size="4">${(tgts.targets||[]).map((t)=>`<option value="${t.id}">${esc(t.email)}（${esc(t.name||'')}）</option>`).join('')}</select></div>
       <div class="alert alert-info py-2 mb-0" id="campaignTargetSummary">送付予定人数を計算しています...</div>
+      <div class="mt-3 d-none" id="manualAssignWrap">
+        <label class="form-label mb-1"><strong>シナリオ毎の割当</strong></label>
+        <div class="form-text mt-0 mb-2">対象者ごとに受け取るシナリオを選びます（1人1シナリオ）。「未割当」の人には送りません。グループ単位の一括指定も使えます。</div>
+        <div class="row g-2 mb-2 align-items-end">
+          <div class="col-md-5"><label class="form-label small mb-1">グループ一括指定</label>
+            <select class="form-select form-select-sm" id="manualBulkGroup"><option value="">グループを選ぶ…</option></select></div>
+          <div class="col-md-4"><label class="form-label small mb-1">割り当てるシナリオ</label>
+            <select class="form-select form-select-sm" id="manualBulkContent"></select></div>
+          <div class="col-md-3"><button type="button" class="btn btn-sm btn-outline-primary w-100" id="manualBulkApply">一括で割当</button></div>
+        </div>
+        <div id="manualAssignValidation" class="small mb-2"></div>
+        <div class="table-responsive" style="max-height:320px;overflow:auto">
+          <table class="table table-sm align-middle mb-0"><thead class="table-light"><tr>
+            <th>対象者</th><th style="width:40%">シナリオ</th></tr></thead>
+            <tbody id="manualAssignRows"></tbody></table>
+        </div>
+      </div>
       </section>
       <section class="campaign-editor-section" data-campaign-step="review"><h3 tabindex="-1">最終確認</h3>
         <p>保存後、配信前確認画面で対象人数・総通数・TEST宛先別の通数を確認してください。</p>
@@ -2501,6 +2519,15 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
       target_ids: multiVals(f.target_ids),
       group_ids: multiVals(f.group_ids),
     };
+    // manual(シナリオ毎割当): target_id -> content_no を content_no -> [target_ids] に畳んで送る。
+    if (payload.content_delivery === 'manual' && f._manualChosen) {
+      const assignments = {};
+      f._manualChosen.forEach((cno, tid) => {
+        if (!cno) return;
+        (assignments[String(cno)] = assignments[String(cno)] || { target_ids: [] }).target_ids.push(Number(tid));
+      });
+      payload.assignments = assignments;
+    }
     if (f.split_count.value) payload.split_count = Number(f.split_count.value);
     if (f.split_interval_min.value) payload.split_interval_min = Number(f.split_interval_min.value);
     if (f.business_start.value.trim()) payload.business_start = f.business_start.value.trim();
@@ -2839,6 +2866,119 @@ async function openCampaignModal(campaignId = null, initialStep = 0) {
   const cbTest = document.getElementById('cbTest');
   if (cbTest) cbTest.addEventListener('change', toggleTestRedirect);
   toggleTestRedirect();  // 初期表示
+
+  // ===== シナリオ毎の手動割当(content_delivery='manual') =====
+  setupManualAssign(campaignForm, tgts.targets || [], grps.groups || [],
+    () => cachedGroupMemberIds, editData);
+}
+
+// シナリオ毎割当UIの配線。content_delivery='manual' のときだけ表示し、
+// 全体プール(グループ所属 + 個別選択)の各対象者に受け取るシナリオ(content_no)を選ばせる。
+// 1人1シナリオ(各対象者につき select は1つ)。未選択は「未割当」=送信対象外。
+function setupManualAssign(form, allTargets, allGroups, getGroupMemberIds, editData) {
+  const wrap = document.getElementById('manualAssignWrap');
+  if (!wrap || !form.content_delivery) return;
+  const rowsEl = document.getElementById('manualAssignRows');
+  const validationEl = document.getElementById('manualAssignValidation');
+  const bulkGroupEl = document.getElementById('manualBulkGroup');
+  const bulkContentEl = document.getElementById('manualBulkContent');
+  const bulkApplyEl = document.getElementById('manualBulkApply');
+  const targetById = new Map(allTargets.map((t) => [Number(t.id), t]));
+  // 直前に選んだ割当を保持し、行の作り直し(プール変化)でも引き継ぐ。target_id -> content_no。
+  const chosen = new Map();
+  // 編集復元: get の assignments(content_no -> [target_id])を chosen に展開。
+  if (editData && editData.assignments) {
+    Object.entries(editData.assignments).forEach(([cno, ids]) => {
+      (ids || []).forEach((tid) => chosen.set(Number(tid), Number(cno)));
+    });
+  }
+  // 現在のコンテンツ数とラベル(件名select の表示)を読む。
+  const contentOptions = () => {
+    const rows = Array.from(document.querySelectorAll('#contentsList .content-row'));
+    return rows.map((row, i) => {
+      const scen = row.querySelector('.c-scenario');
+      const label = (scen && scen.selectedOptions[0]) ? scen.selectedOptions[0].textContent.trim() : '';
+      return { no: i + 1, label: `シナリオ ${i + 1}${label ? '：' + label : ''}` };
+    });
+  };
+  // 全体プール(グループ所属 + 個別選択)の target_id 配列。
+  const poolIds = () => {
+    const ind = multiVals(form.target_ids).map(Number);
+    const grp = [...getGroupMemberIds()].map(Number);
+    return [...new Set([...grp, ...ind])];
+  };
+  const scenarioSelectHtml = (opts, selected) => {
+    const o = ['<option value="">未割当（送らない）</option>']
+      .concat(opts.map((c) => `<option value="${c.no}"${Number(selected) === c.no ? ' selected' : ''}>${esc(c.label)}</option>`));
+    return o.join('');
+  };
+  const refreshValidation = (opts) => {
+    const ids = poolIds();
+    const assigned = ids.filter((id) => chosen.has(id) && chosen.get(id) >= 1).length;
+    const unassigned = ids.length - assigned;
+    const perContent = opts.map((c) => ids.filter((id) => chosen.get(id) === c.no).length);
+    const parts = [`割当済み ${assigned}名`, `未割当 ${unassigned}名（送信対象外）`]
+      .concat(opts.map((c, i) => `${c.label.split('：')[0]}: ${perContent[i]}名`));
+    validationEl.innerHTML = `<span class="text-muted">${parts.map(esc).join(' / ')}</span>`;
+  };
+  const rebuild = () => {
+    const opts = contentOptions();
+    // 一括指定のシナリオ候補。
+    bulkContentEl.innerHTML = opts.map((c) => `<option value="${c.no}">${esc(c.label)}</option>`).join('')
+      + '<option value="">未割当にする</option>';
+    // 一括指定のグループ候補。
+    bulkGroupEl.innerHTML = '<option value="">グループを選ぶ…</option>'
+      + allGroups.map((g) => `<option value="${Number(g.id)}">${esc(g.name)}（${Number(g.target_count || 0)}名）</option>`).join('');
+    // 対象者行。プール内の人だけ。
+    const ids = poolIds();
+    if (!ids.length) {
+      rowsEl.innerHTML = '<tr><td colspan="2" class="text-muted">対象者（グループ・個別）を選ぶと、ここに一覧が出ます。</td></tr>';
+      validationEl.innerHTML = '';
+      return;
+    }
+    rowsEl.innerHTML = ids.map((id) => {
+      const t = targetById.get(id);
+      const label = t ? `${esc(t.email)}（${esc(t.name || '')}）` : `ID ${id}`;
+      return `<tr data-tid="${id}"><td class="small">${label}</td>`
+        + `<td><select class="form-select form-select-sm manual-scenario" data-tid="${id}">${scenarioSelectHtml(opts, chosen.get(id))}</select></td></tr>`;
+    }).join('');
+    rowsEl.querySelectorAll('.manual-scenario').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const tid = Number(sel.dataset.tid);
+        if (sel.value) chosen.set(tid, Number(sel.value)); else chosen.delete(tid);
+        refreshValidation(contentOptions());
+      });
+    });
+    refreshValidation(opts);
+  };
+  const applyBulk = () => {
+    const gid = Number(bulkGroupEl.value);
+    if (!gid) { toast('グループを選んでください', 'warn'); return; }
+    const cno = bulkContentEl.value ? Number(bulkContentEl.value) : null;
+    // 選んだグループの所属かつ現在プールにいる人に、まとめてシナリオを設定。
+    api('api/groups.php', { query: { action: 'members', group_id: gid } }).then((res) => {
+      const pool = new Set(poolIds());
+      const memberIds = (res.members || []).map((m) => Number(m.id)).filter((id) => pool.has(id));
+      memberIds.forEach((id) => { if (cno) chosen.set(id, cno); else chosen.delete(id); });
+      rebuild();
+      toast(`${memberIds.length}名を一括で${cno ? '割当' : '未割当に'}しました`, 'ok');
+    }).catch((e) => toast(`一括指定に失敗: ${e.message}`, 'err'));
+  };
+  const toggleManual = () => {
+    const on = form.content_delivery.value === 'manual';
+    wrap.classList.toggle('d-none', !on);
+    if (on) rebuild();
+  };
+  form.content_delivery.addEventListener('change', toggleManual);
+  if (form.group_ids) form.group_ids.addEventListener('change', () => { if (form.content_delivery.value === 'manual') setTimeout(rebuild, 400); });
+  if (form.target_ids) form.target_ids.addEventListener('change', () => { if (form.content_delivery.value === 'manual') rebuild(); });
+  if (bulkApplyEl) bulkApplyEl.addEventListener('click', applyBulk);
+  // コンテンツ行の増減・件名変更に追従。
+  const listEl = document.getElementById('contentsList');
+  if (listEl) listEl.addEventListener('change', () => { if (form.content_delivery.value === 'manual') rebuild(); });
+  // この割当を payload 用に公開する(収集時に参照)。
+  form._manualChosen = chosen;
+  toggleManual();  // 初期表示(編集で manual のとき開く)
 }
 // datetime-local 用にローカル時刻を "YYYY-MM-DDTHH:MM" へ整形する(UTC変換しない)。
 function toLocalDatetimeValue(date) {
