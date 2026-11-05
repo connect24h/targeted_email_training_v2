@@ -3748,7 +3748,7 @@ function importCsv() {
     const f = fileEl.files && fileEl.files[0];
     if (!f) return;
     if (f.size > 2 * 1024 * 1024) { toast('CSV は2MB以内にしてください', 'err'); fileEl.value = ''; return; }
-    try { document.getElementById('csvText').value = await f.text(); }
+    try { document.getElementById('csvText').value = await readCsvFileText(f); }
     catch (_e) { toast('CSV を読み込めませんでした', 'err'); }
   });
 }
@@ -3886,6 +3886,27 @@ async function deleteGroup(id) {
 // CSV テキストからメールアドレスを抜き出す。列順に依存せず「@ を含むトークン」を拾うので、
 // 見出し行(email/メールアドレス 等、@ を含まない)は自然に無視される。小文字化・trim・重複除去。
 // Excel 由来の Shift_JIS で氏名が化けても、メールは ASCII なので抽出に影響しない。
+// CSV ファイルをテキストで読む。File.text() は常に UTF-8 デコードのため、
+// Excel が日本語 Windows で保存する Shift_JIS(CP932) のファイルはその時点で
+// 置換文字(U+FFFD)に化け、サーバ側の文字コード変換では復元できない。
+// ここでバイト列を読み、UTF-8 で妥当ならそれ、だめなら Shift_JIS でデコードする。
+async function readCsvFileText(file) {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  // UTF-8 を厳格デコード(不正バイトがあれば例外)。成功すれば UTF-8 とみなす。
+  // TextDecoder('utf-8') は先頭 BOM を自動で取り除く。
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (_e) {
+    // UTF-8 として不正 → Shift_JIS(ブラウザは CP932 相当)としてデコードする。
+    try {
+      return new TextDecoder('shift_jis').decode(bytes);
+    } catch (_e2) {
+      // それも無理なら UTF-8 の寛容デコード(置換文字混じり)で最後の手段。
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+  }
+}
 function parseEmailsFromCsv(text) {
   const out = [];
   const seen = new Set();
@@ -3959,7 +3980,7 @@ async function manageGroupMembers(groupId) {
     const f = csvFileEl.files && csvFileEl.files[0];
     if (!f) return;
     if (f.size > 1024 * 1024) { toast('CSV は1MB以内にしてください', 'err'); csvFileEl.value = ''; return; }
-    try { document.getElementById('gmCsvText').value = await f.text(); }
+    try { document.getElementById('gmCsvText').value = await readCsvFileText(f); }
     catch (_e) { toast('CSV を読み込めませんでした', 'err'); }
   });
   // 「CSV で選択」: CSV のメールで checkbox を置き換え、差異(未登録メール)があればエラーで知らせる。
@@ -6123,8 +6144,8 @@ function importUsersCsv() {
     const file = ev.target.files[0];
     if (!file) return;
     if (file.size > 1024 * 1024) { toast('CSV は1MB以内にしてください', 'err'); ev.target.value = ''; return; }
-    // 先頭の BOM はサーバが取り除く
-    $('#userCsvText').value = await file.text();
+    // 先頭の BOM はサーバが取り除く。Shift_JIS(Excel 既定)でも化けないよう判定して読む。
+    $('#userCsvText').value = await readCsvFileText(file);
   });
 }
 async function exportUsersCsv() {
