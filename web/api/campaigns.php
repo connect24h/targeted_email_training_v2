@@ -942,8 +942,13 @@ function campaigns_handle_create(array $actor): never
             );
         }
 
-        campaigns_insert_targets($campaignId, $targetIds, $phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null, $data['from_address']);
-        campaigns_distribute_contents($campaignId, $targetIds, $contentNoByTarget);
+        // manual のとき、未割当の人は campaign_targets 行を一切作らない(送信対象に出さない)。
+        // NULL content_no で残すと PipelineRunner が content 1 にフォールバックして誤送信するため。
+        $insertTargetIds = $data['content_delivery'] === 'manual'
+            ? array_values(array_filter($targetIds, static fn ($tid) => isset($contentNoByTarget[(int) $tid])))
+            : $targetIds;
+        campaigns_insert_targets($campaignId, $insertTargetIds, $phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null, $data['from_address']);
+        campaigns_distribute_contents($campaignId, $insertTargetIds, $contentNoByTarget);
 
         return $campaignId;
     });
@@ -1145,14 +1150,22 @@ function campaigns_handle_update(array $actor): never
             Db::run('DELETE FROM campaign_targets WHERE campaign_id = ?', [$id]);
             $authFlag = $phishTemplate !== null ? ($phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null) : ($campaign['phish_template_id'] !== null ? (int) campaigns_assert_template_visible((int) $campaign['phish_template_id'], $tenantId, 'phish_login')['auth_flag'] : null);
             $fromAddress = array_key_exists('from_address', $fields) ? $fields['from_address'] : ($campaign['from_address'] !== null ? (string) $campaign['from_address'] : null);
-            campaigns_insert_targets($id, $targetIds, $authFlag, $fromAddress);
-            campaigns_distribute_contents($id, $targetIds, $contentNoByTarget);
+            // manual(contentNoByTarget!=null)なら未割当の人は行を作らない(誤送信防止)。
+            $insertTargetIds = $contentNoByTarget !== null
+                ? array_values(array_filter($targetIds, static fn ($tid) => isset($contentNoByTarget[(int) $tid])))
+                : $targetIds;
+            campaigns_insert_targets($id, $insertTargetIds, $authFlag, $fromAddress);
+            campaigns_distribute_contents($id, $insertTargetIds, $contentNoByTarget);
         } elseif ($replaceTargets) {
             Db::run('DELETE FROM campaign_targets WHERE campaign_id = ?', [$id]);
             $authFlag = $phishTemplate !== null ? ($phishTemplate['auth_flag'] !== null ? (int) $phishTemplate['auth_flag'] : null) : ($campaign['phish_template_id'] !== null ? (int) campaigns_assert_template_visible((int) $campaign['phish_template_id'], $tenantId, 'phish_login')['auth_flag'] : null);
             $fromAddress = array_key_exists('from_address', $fields) ? $fields['from_address'] : ($campaign['from_address'] !== null ? (string) $campaign['from_address'] : null);
-            campaigns_insert_targets($id, $targetIds, $authFlag, $fromAddress);
-            campaigns_distribute_contents($id, $targetIds, $contentNoByTarget);
+            // manual(contentNoByTarget!=null)なら未割当の人は行を作らない(誤送信防止)。
+            $insertTargetIds = $contentNoByTarget !== null
+                ? array_values(array_filter($targetIds, static fn ($tid) => isset($contentNoByTarget[(int) $tid])))
+                : $targetIds;
+            campaigns_insert_targets($id, $insertTargetIds, $authFlag, $fromAddress);
+            campaigns_distribute_contents($id, $insertTargetIds, $contentNoByTarget);
         } else {
             if ($phishTemplate !== null) {
                 Db::run(

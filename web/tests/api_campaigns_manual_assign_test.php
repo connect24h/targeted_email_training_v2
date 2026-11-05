@@ -119,7 +119,15 @@ $r = create(base_body([
 check($r['code'] === 201, 'M-5: 未割当があっても作成は成功(送信対象の絞り込みに使える)');
 $cid5 = (int) $r['payload']['campaign']['id'];
 check($contentNoOf($cid5, 9901) === 1, 'M-5: 9901 は content_no=1');
-check($contentNoOf($cid5, 9902) === null, 'M-5: 未割当の 9902 は content_no=NULL(送信対象外)');
+// 重要(fail-open 対策): 未割当者は campaign_targets 行そのものを作らない。
+// NULL content_no で行を残すと、PipelineRunner が content_no=1 にフォールバックして
+// 「送らないはずの人」に実際にメールが届く(実在従業員への誤送信事故)。
+$row9902 = Db::one('SELECT COUNT(*) AS c FROM campaign_targets WHERE campaign_id = ? AND target_id = ?', [$cid5, 9902]);
+check((int) ($row9902['c'] ?? -1) === 0, 'M-5: 未割当の 9902 は campaign_targets 行が存在しない(送信対象に出さない)');
+$row9901 = Db::one('SELECT COUNT(*) AS c FROM campaign_targets WHERE campaign_id = ? AND target_id = ?', [$cid5, 9901]);
+check((int) ($row9901['c'] ?? -1) === 1, 'M-5: 割当済みの 9901 は行が1つある');
+// target_count(送信対象の人数)も割当済みの1名だけ。
+check((int) ($r['payload']['target_count'] ?? -1) === 1, 'M-5: target_count は割当済みの1名のみ');
 
 // ===== M-6: update でも manual 割当が反映される =====
 // まず distribute で作り、update で manual に切り替える。
