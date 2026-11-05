@@ -594,6 +594,33 @@ function targets_handle_restore(array $actor): never
     json_out(['success' => true, 'restored' => true, 'limit_warning' => TenantStatus::targetLimitWarning($tenantId)]);
 }
 
+/**
+ * 取込 CSV を UTF-8 へ正規化する。
+ * Excel で保存した CSV は日本語 Windows だと既定で Shift_JIS(CP932) になり、
+ * UTF-8 前提のまま str_getcsv に渡すと氏名・会社名・役職名が文字化けする。
+ * 先頭の UTF-8 BOM を落としたうえで、文字コードを自動判定して UTF-8 でなければ変換する。
+ * 既に UTF-8 のもの(自前出力の BOM 付き CSV を含む)は無変換で通す(後方互換)。
+ */
+function targets_normalize_csv_encoding(string $csv): string
+{
+    // UTF-8 BOM を除去(ヘッダー側でも落とすが、判定前に外しておく)。
+    $csv = preg_replace('/^\xEF\xBB\xBF/', '', $csv) ?? $csv;
+    // 判定順: UTF-8 を最優先。次に Windows の Excel が出す CP932(SJIS-win)、EUC-JP。
+    // CP932 は ㈱・① 等の機種依存文字も含むため SJIS ではなく CP932 を使う。
+    $enc = mb_detect_encoding($csv, ['UTF-8', 'SJIS-win', 'EUC-JP'], true);
+    if ($enc === false) {
+        // 判定不能でも UTF-8 として妥当ならそのまま、そうでなければ CP932 とみなして変換を試す。
+        $enc = mb_check_encoding($csv, 'UTF-8') ? 'UTF-8' : 'SJIS-win';
+    }
+    if ($enc !== 'UTF-8') {
+        $converted = mb_convert_encoding($csv, 'UTF-8', $enc);
+        if (is_string($converted) && $converted !== '') {
+            $csv = $converted;
+        }
+    }
+    return $csv;
+}
+
 function targets_csv_header_map(array $headers): array
 {
     $map = [];
@@ -787,7 +814,7 @@ function targets_handle_import_csv(array $actor): never
     tet2_require_csrf();
     $body = json_body();
     $tenantId = effective_tenant_id($actor, targets_body_optional_int($body, 'tenant_id'));
-    $csv = targets_string($body, 'csv');
+    $csv = targets_normalize_csv_encoding(targets_string($body, 'csv'));
     $groupId = targets_body_optional_int($body, 'group_id');
     if ($groupId !== null) {
         targets_assert_group_owned($groupId, $tenantId);
