@@ -21,6 +21,17 @@ const TARGET_CSV_HEADERS = [
     'メモ' => 'memo',
     'employee_no' => 'employee_no',
     'memo' => 'memo',
+    // 人事名簿 CSV の列名(2026-11-05)。全角括弧（）・半角括弧() の両方を受ける。
+    // 「No」列はマップしない(未知の列として無視される)。
+    '社員番号' => 'employee_no',
+    '表示氏名（姓名）' => 'name',
+    '表示氏名(姓名)' => 'name',
+    '表示氏名' => 'name',
+    'メールアドレス（会社）' => 'email',
+    'メールアドレス(会社)' => 'email',
+    'メールアドレス' => 'email',
+    '本務役職名称' => 'title',
+    '役職名称' => 'title',
 ];
 
 // name/company/department/title 等の自由入力テキストの共通サニタイズ検証。
@@ -678,7 +689,7 @@ function targets_import_match(int $tenantId, string $email, ?string $employeeNo)
  * @param array<string, string> $positionMap 役職名→カテゴリ。CSV にカテゴリ列が無いときの補完に使う
  * @param array<string, true> $seenEmployeeNos この取込で既に読んだ従業員番号(同じ番号の2行目は取り込まない)
  */
-function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId, array $positionMap = [], array &$seenEmployeeNos = []): string
+function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId, array $positionMap = [], array &$seenEmployeeNos = [], array &$rosterKeys = []): string
 {
     $email = targets_csv_value($row, $map, 'email');
     if ($email === null || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
@@ -753,6 +764,12 @@ function targets_import_row(int $tenantId, array $row, array $map, ?int $groupId
         );
         $result = (string) $existing['email'] === $email ? 'updated' : 'email_changed';
     }
+    // 名簿同期(roster_sync)用に、取り込めた行の照合キーを記録する。
+    // 既存照合と同じ優先順位(従業員番号→メール)。両方を入れておき、同期側でどちらでも残せるようにする。
+    $rosterKeys['emails'][strtolower($email)] = true;
+    if ($employeeNo !== null) {
+        $rosterKeys['employee_nos'][$employeeNo] = true;
+    }
     if ($groupId !== null) {
         Db::run(
             'INSERT OR IGNORE INTO target_group (target_id, group_id)
@@ -775,6 +792,9 @@ function targets_handle_import_csv(array $actor): never
     if ($groupId !== null) {
         targets_assert_group_owned($groupId, $tenantId);
     }
+    // 名簿同期: ON のとき、この CSV を「全員名簿」とみなし、CSV にいない既存者を archived(退職)にする。
+    // 既定 OFF(通常の追記取込では退職化しない。部分CSVで全員退職にする事故を防ぐ)。
+    $rosterSync = (bool) ($body['roster_sync'] ?? false);
 
     $lines = preg_split('/\r\n|\n|\r/', $csv);
     if ($lines === false || count($lines) === 0) {
@@ -787,8 +807,12 @@ function targets_handle_import_csv(array $actor): never
     // 役職マスタを1回だけ読み込む(行ごとに引くとクエリが行数分発行される)。
     // CSV に役職カテゴリ列が無い/空のとき、役職名から補完するために使う。
     $positionMap = targets_position_master_map($tenantId);
+    // 取り込めた行の照合キー(名簿同期で「残す人」を決める)。emails は小文字化。
+    $rosterKeys = ['emails' => [], 'employee_nos' => []];
+    // 名簿同期で退職にした人の一覧(email/name)。
+    $archived = [];
 
-    Db::tx(function () use ($lines, $tenantId, $map, $groupId, $positionMap, &$result): void {
+    Db::tx(function () use ($lines, $tenantId, $map, $groupId, $positionMap, $rosterSync, &$result, &$rosterKeys, &$archived): void {
         $seenEmployeeNos = [];
         foreach ($lines as $index => $line) {
             if (trim((string) $line) === '') {
@@ -796,17 +820,27 @@ function targets_handle_import_csv(array $actor): never
             }
             $lineNumber = $index + 2;
             try {
-                $status = targets_import_row($tenantId, str_getcsv((string) $line), $map, $groupId, $positionMap, $seenEmployeeNos);
+                $status = targets_import_row($tenantId, str_getcsv((string) $line), $map, $groupId, $positionMap, $seenEmployeeNos, $rosterKeys);
                 $result[$status]++;
             } catch (InvalidArgumentException $e) {
                 $result['skipped']++;
                 $result['errors'][] = ['line' => $lineNumber, 'reason' => $e->getMessage()];
             }
         }
+        // 名簿同期: CSV に1件も取り込めていなければ同期しない(空/全不正CSVでの誤爆を防ぐ)。
+        $importedOk = $result['imported'] + $result['updated'] + $result['email_changed'];
+        if ($rosterSync && $importedOk > 0) {
+            $archived = targets_roster_archive_missing($tenantId, $rosterKeys);
+        }
     });
     // 従業員番号で当たりメールアドレスを変えた人も「更新」に数え、内訳を別に返す
     $updated = $result['updated'] + $result['email_changed'];
-    audit('target.import_csv', 'imported=' . $result['imported'] . ',updated=' . $updated . ',email_changed=' . $result['email_changed']);
+    // 新規役職(役職マスタに無い役職)を集計して返す。取込画面でカテゴリ割当を促すため。
+    $unmapped = targets_unmapped_positions($tenantId);
+    $archivedCount = count($archived);
+    audit('target.import_csv', 'imported=' . $result['imported'] . ',updated=' . $updated
+        . ',email_changed=' . $result['email_changed'] . ',roster_sync=' . ($rosterSync ? '1' : '0')
+        . ',archived=' . $archivedCount);
     json_out([
         'success' => true,
         'imported' => $result['imported'],
@@ -814,8 +848,80 @@ function targets_handle_import_csv(array $actor): never
         'email_changed' => $result['email_changed'],
         'skipped' => $result['skipped'],
         'errors' => $result['errors'],
+        'unmapped' => $unmapped,
+        'roster_sync' => $rosterSync,
+        'archived_count' => $archivedCount,
+        'archived' => array_slice($archived, 0, 200),
         'limit_warning' => TenantStatus::targetLimitWarning($tenantId),
     ]);
+}
+
+/**
+ * 名簿同期: 取り込んだ照合キー集合に含まれない既存の対象者(active/suspended)を archived にする。
+ * is_test(テスト用アカウント)は名簿同期の対象外。既に archived の人は対象外。
+ * 照合キーは取込と同じ優先順位(従業員番号→メール): 従業員番号が一致するか、メールが一致すれば「名簿にいる」とみなす。
+ *
+ * @param array{emails: array<string,true>, employee_nos: array<string,true>} $rosterKeys
+ * @return list<array{email:string,name:?string}> 退職にした人の一覧
+ */
+function targets_roster_archive_missing(int $tenantId, array $rosterKeys): array
+{
+    $emails = $rosterKeys['emails'] ?? [];
+    $employeeNos = $rosterKeys['employee_nos'] ?? [];
+    $rows = Db::all(
+        "SELECT id, email, name, employee_no FROM targets
+          WHERE tenant_id = ? AND is_test = 0 AND status != 'archived'",
+        [$tenantId]
+    );
+    $archived = [];
+    foreach ($rows as $r) {
+        $email = strtolower((string) $r['email']);
+        $empNo = $r['employee_no'] !== null ? (string) $r['employee_no'] : null;
+        // 名簿にいる = メール一致 or 従業員番号一致。どちらかで残す。
+        $inRoster = isset($emails[$email]) || ($empNo !== null && isset($employeeNos[$empNo]));
+        if ($inRoster) {
+            continue;
+        }
+        Db::run(
+            "UPDATE targets SET status = 'archived', archived_at = datetime('now','localtime')
+              WHERE id = ? AND tenant_id = ?",
+            [(int) $r['id'], $tenantId]
+        );
+        $archived[] = ['email' => (string) $r['email'], 'name' => $r['name'] !== null ? (string) $r['name'] : null];
+    }
+    return $archived;
+}
+
+/**
+ * 役職マスタ(position_masters)に無い役職(=新規役職)を [title, count] で返す。
+ * CSV 取込後に「カテゴリ未割当の新規役職」を画面に促すため。coverage の unmapped と同じ考え方。
+ * アーカイブ済みは数えない(現役の名簿に対する新規役職だけを出す)。
+ *
+ * @return list<array{title:string,count:int}>
+ */
+function targets_unmapped_positions(int $tenantId): array
+{
+    try {
+        $rows = Db::all(
+            "SELECT t.title AS title, COUNT(*) AS count
+               FROM targets t
+               LEFT JOIN position_masters pm
+                      ON pm.tenant_id = t.tenant_id AND pm.title = t.title
+              WHERE t.tenant_id = ? AND pm.id IS NULL
+                AND t.title IS NOT NULL AND t.title != ''
+                AND t.status != 'archived' AND t.is_test = 0
+              GROUP BY t.title
+              ORDER BY COUNT(*) DESC, t.title",
+            [$tenantId]
+        );
+    } catch (Throwable) {
+        return [];
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['title' => (string) $r['title'], 'count' => (int) $r['count']];
+    }
+    return $out;
 }
 
 /**

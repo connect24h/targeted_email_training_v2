@@ -3715,17 +3715,94 @@ async function deleteTarget(id) {
   } catch (e) { toast(e.message, 'err'); }
 }
 function importCsv() {
-  const body = `<p class="small text-muted">1行目にヘッダ（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ/従業員番号/メモ または email/name/company/department/title/position_category/employee_no/memo）。メール列は必須。役職カテゴリは「役員/管理職/一般従業員」のみ有効（旧称「社員」は「一般従業員」として取り込みます）。列が無い場合は役職名から役職マスタを引いて自動補完します。</p>
+  const body = `<p class="small text-muted">1行目にヘッダ。人事名簿の列名（社員番号/表示氏名（姓名）/メールアドレス（会社）/会社名/本務役職名称）にも対応しています。従来の列名（メールアドレス/氏名/会社名/部署/役職/役職カテゴリ/従業員番号/メモ、または英語名）も使えます。メール列は必須。「No」など対応しない列は無視します。役職カテゴリは役職名から役職マスタを引いて自動補完します（マスタに無い役職は取込後にカテゴリ割当を促します）。</p>
     <p class="small text-muted">既存の対象者との照合: 従業員番号が入っている行は<strong>従業員番号で先に</strong>探し、見つかった人のメールアドレスを CSV の値に変えます。番号で見つからなければメールアドレスで探します。従業員番号とメモが空の行は、今の値を残します。</p>
-    <textarea class="form-control" id="csvText" rows="8" placeholder="メールアドレス,氏名,部署&#10;taro@example.com,山田太郎,営業部"></textarea>`;
+    <input type="file" class="form-control mb-2" id="targetCsvFile" accept=".csv,text/csv">
+    <textarea class="form-control mb-2" id="csvText" rows="8" placeholder="ファイルを選ぶか貼り付け&#10;社員番号,表示氏名（姓名）,メールアドレス（会社）,会社名,本務役職名称"></textarea>
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" id="rosterSyncChk">
+      <label class="form-check-label" for="rosterSyncChk"><strong>この CSV を全員名簿として取り込む</strong>（CSV にいない現役の対象者を「退職」にします）</label>
+      <div class="form-text">全社員の名簿を丸ごと取り込むときに使います。チェックしないと、CSV にいない人はそのまま残ります。テスト用アカウント（is_test）は退職化しません。退職にした人は、あとで状態を戻せます。</div>
+    </div>`;
   showModal('CSV 取込', body, async () => {
     const csv = $('#csvText').value.trim();
     if (!csv) throw new Error('CSV を入力してください');
-    const r = await api('api/targets.php', { method: 'POST', query: { action: 'import_csv' }, body: { csv } });
+    const rosterSync = $('#rosterSyncChk').checked;
+    if (rosterSync && !confirm('この CSV にいない現役の対象者を「退職」にします。全員分の名簿であることを確認してください。よろしいですか？')) return;
+    const r = await api('api/targets.php', { method: 'POST', query: { action: 'import_csv' }, body: { csv, roster_sync: rosterSync }, timeout: 120000 });
     toast(`取込 ${r.imported} / 更新 ${r.updated}${r.email_changed ? `（うちメールアドレスの変更 ${r.email_changed}）` : ''} / スキップ ${r.skipped}`, r.skipped ? 'warn' : 'ok'); renderTargets();
     (r.errors || []).slice(0, 3).forEach((x) => toast(`${x.line}行目: ${x.reason}`, 'err', 10000));
     if (r.limit_warning) toast(r.limit_warning, 'warn', 8000);
+    // 名簿同期で退職にした人の結果。
+    if (r.roster_sync && Number(r.archived_count) > 0) {
+      setTimeout(() => showRosterArchivedResult(r.archived_count, r.archived || []), 300);
+    }
+    // 新規役職(カテゴリ未割当)があれば、カテゴリ割当モーダルを出す。退職結果と重ならないよう少し遅らせる。
+    if ((r.unmapped || []).length) {
+      setTimeout(() => showPositionAssignModal(r.unmapped), (r.roster_sync && Number(r.archived_count) > 0) ? 700 : 300);
+    }
   });
+  // ファイル選択 → textarea に読み込む。
+  const fileEl = document.getElementById('targetCsvFile');
+  if (fileEl) fileEl.addEventListener('change', async () => {
+    const f = fileEl.files && fileEl.files[0];
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { toast('CSV は2MB以内にしてください', 'err'); fileEl.value = ''; return; }
+    try { document.getElementById('csvText').value = await f.text(); }
+    catch (_e) { toast('CSV を読み込めませんでした', 'err'); }
+  });
+}
+// 名簿同期で退職にした人の一覧を出す(情報表示)。値は利用者由来なので textContent で入れる。
+function showRosterArchivedResult(count, archived) {
+  const wrap = document.createElement('div');
+  const p = document.createElement('p');
+  p.textContent = `CSV にいなかった ${count} 人を「退職」にしました。状態は対象者一覧から戻せます。`;
+  wrap.appendChild(p);
+  if (archived.length) {
+    const box = document.createElement('div');
+    box.style.cssText = 'max-height:260px;overflow:auto;border:1px solid var(--tet-border);border-radius:var(--tet-radius-sm);padding:8px';
+    const ul = document.createElement('ul'); ul.className = 'mb-0 ps-3';
+    for (const a of archived) { const li = document.createElement('li'); li.textContent = `${a.name ? a.name + ' ' : ''}<${a.email}>`; ul.appendChild(li); }
+    box.appendChild(ul); wrap.appendChild(box);
+  }
+  showInfoModal('退職にした人', wrap.outerHTML);
+}
+// 新規役職(役職マスタに無い役職)にカテゴリを割り当てるモーダル。
+// 保存で positions.php create(各役職をマスタに追加) → apply(targets に反映)を呼ぶ。
+function showPositionAssignModal(unmapped) {
+  const cats = ['役員', '管理職', '一般従業員'];
+  const rows = unmapped.map((u, i) => `
+    <tr><td>${esc(u.title)}</td><td class="text-muted small">${Number(u.count)}人</td>
+      <td><select class="form-select form-select-sm pa-cat" data-title="${esc(u.title)}" id="pa-${i}">
+        <option value="">（あとで）</option>
+        ${cats.map((c) => `<option value="${c}">${c}</option>`).join('')}
+      </select></td></tr>`).join('');
+  const body = `
+    <p class="small text-muted">CSV に、役職カテゴリがまだ決まっていない役職が ${unmapped.length} 種類ありました。それぞれのカテゴリを選んで保存すると、該当する対象者に一括で反映します。「（あとで）」のままにした役職は、役職マスタ管理の画面でも割り当てられます。</p>
+    <div class="table-responsive"><table class="table table-sm mb-0">
+      <thead><tr><th>役職名</th><th>人数</th><th>カテゴリ</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  showModal('新しい役職のカテゴリを割り当て', body, async () => {
+    const selects = Array.from(document.querySelectorAll('.pa-cat'));
+    const assigns = selects.map((s) => ({ title: s.dataset.title, category: s.value })).filter((a) => a.category);
+    if (!assigns.length) { toast('割り当てる役職が選ばれていません（あとで割り当てできます）', 'warn'); return; }
+    // 役職マスタに追加する(create は内部で該当役職の対象者へカテゴリを反映する)。
+    // unmapped はマスタに無い役職なので create は通常重複しない。万一の 409 は「登録済み」として流す。
+    let created = 0;
+    const fails = [];
+    for (const a of assigns) {
+      try {
+        await api('api/positions.php', { method: 'POST', query: { action: 'create' }, body: { title: a.title, category: a.category } });
+        created++;
+      } catch (e) {
+        if (/既に登録/.test(e.message)) { created++; }
+        else { fails.push(`「${a.title}」: ${e.message}`); }
+      }
+    }
+    fails.slice(0, 3).forEach((m) => toast(m, 'err', 8000));
+    toast(`${created} 件の役職にカテゴリを割り当てました`, created ? 'ok' : 'warn');
+    renderTargets();
+  }, { saveLabel: '割り当てて反映' });
 }
 // 現対象者を CSV でダウンロード。CSV(非JSON)なので api() は使わず直接 fetch → blob 保存。
 // 既定は一覧と同じくアーカイブ(退職者)を除外。includeArchived=true で削除日付きの全件を出す。
