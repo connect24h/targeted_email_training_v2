@@ -34,11 +34,15 @@ function weblog_load_ip_cache(): array
 }
 
 /** IPキャッシュを保存する。 */
-function weblog_save_ip_cache(array $cache): void
+function weblog_save_ip_cache(array $cache): bool
 {
     $dir = dirname(WEBLOG_IP_CACHE);
     if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
-    @file_put_contents(WEBLOG_IP_CACHE, json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+    // 書き込めなかった場合に呼び出し側がログを出せるよう成否を返す(既存の呼び出しは
+    // 戻り値を使っていないため後方互換)。自動取込(report_ingest)が training ユーザで
+    // 走り、キャッシュの所有/権限が合わないと黙って失敗するのを検知するため。
+    $ok = @file_put_contents(WEBLOG_IP_CACHE, json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+    return $ok !== false;
 }
 
 /**
@@ -134,6 +138,69 @@ function weblog_resolve_ips(array $ips, int $limit = 0, int $sleepUs = 1500000, 
     }
     if ($sinceFlush > 0) { weblog_save_ip_cache($cache); }
     return $calls;
+}
+
+/**
+ * 直近 $days 日のクリック(apache_access 由来)イベントの送信元 IP のうち、
+ * キャッシュ未解決(未登録 or country=Unknown)のものを集める。
+ *
+ * click の raw は Apache 生ログ1行で、先頭の空白区切りトークンが IP。
+ * auth(text_log 由来)は入力時点で国/ISP を raw に持つので対象にしない。
+ * events への問い合わせは Db 経由(呼び出し側で Db が初期化済みの前提)。
+ *
+ * @return list<string> 要解決のユニーク IP(新しいイベント順)
+ */
+function weblog_collect_unresolved_click_ips(int $days = 30): array
+{
+    $rows = Db::all(
+        "SELECT raw FROM events
+         WHERE event_type = 'click' AND source = 'apache_access'
+           AND occurred_at >= datetime('now', 'localtime', ? )
+         ORDER BY occurred_at DESC, id DESC",
+        ['-' . max(1, $days) . ' days']
+    );
+    $cache = weblog_load_ip_cache();
+    $seen = [];
+    $need = [];
+    foreach ($rows as $r) {
+        $raw = (string) ($r['raw'] ?? '');
+        if (!preg_match('/^(\S+)\s/', $raw, $m)) { continue; }
+        $ip = $m[1];
+        if (isset($seen[$ip])) { continue; }
+        $seen[$ip] = true;
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) { continue; }
+        $needs = !isset($cache[$ip]) || ($cache[$ip]['country'] ?? '') === 'Unknown';
+        if ($needs) { $need[] = $ip; }
+    }
+    return $need;
+}
+
+/**
+ * 自動取込(report_ingest)から呼ぶ、直近クリック IP の GeoIP 一括解決。
+ * 1 回の呼び出しで最大 $limit 件だけ外部 API を叩く(無料枠 45req/分に収めるため
+ * 既定 40 件・1.5 秒間隔 = 最長約 60 秒)。残りは次回の timer に回す。
+ * 解決した件数と、保存に失敗したかどうかを返す。
+ *
+ * @return array{resolved:int, target:int, save_failed:bool}
+ */
+function weblog_autoresolve_recent_click_ips(int $limit = 40, int $days = 30): array
+{
+    $need = weblog_collect_unresolved_click_ips($days);
+    if ($need === []) {
+        return ['resolved' => 0, 'target' => 0, 'save_failed' => false];
+    }
+    // 解決したら最後に1回だけ保存する(flushEvery を上限より大きくして途中保存を抑え、
+    // 保存の成否を1回で判定できるようにする)。weblog_resolve_ips は解決できたものだけ
+    // 保存するので、保存が走ったかどうかは「解決件数>0」で判断する。
+    $before = weblog_load_ip_cache();
+    $resolved = weblog_resolve_ips($need, $limit, 1500000, max(1, $limit) + 1);
+    $saveFailed = false;
+    if ($resolved > 0) {
+        // 保存後のキャッシュを読み直し、件数が増えていなければ保存失敗とみなす。
+        $after = weblog_load_ip_cache();
+        if (count($after) <= count($before)) { $saveFailed = true; }
+    }
+    return ['resolved' => $resolved, 'target' => count($need), 'save_failed' => $saveFailed];
 }
 
 /**

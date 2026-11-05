@@ -221,7 +221,7 @@ function report_closed_summary(?array $snapshot, array $liveRow): array
     ]);
 }
 
-function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
+function report_campaign_rows(int $tenantId, string $testFilter = 'prod', bool $includeDeleted = false): array
 {
     // test_filter: 'prod'(既定)=本番のみ(is_test=0) / 'test'=テストのみ(is_test=1) / 'all'=全部。
     // 本番統計にテスト送信が混ざらないよう、既定は本番のみを返す。
@@ -231,8 +231,11 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
     } elseif ($testFilter === 'test') {
         $testWhere = ' AND c.is_test = 1';
     }
+    // $includeDeleted=false(既定)=削除済み(deleted_at IS NOT NULL)を除く。ダッシュボードと
+    // レポート画面の統計に削除済みを混ぜないため。ログ画面の絞り込みだけ true で全件を出す。
+    $deletedWhere = $includeDeleted ? '' : ' AND c.deleted_at IS NULL';
     return Db::all(
-        "SELECT c.id, c.tenant_id, c.name, c.status, c.closed_at, c.start_at, c.end_at, c.is_test, c.created_at,
+        "SELECT c.id, c.tenant_id, c.name, c.status, c.closed_at, c.start_at, c.end_at, c.is_test, c.created_at, c.deleted_at,
                 rs.payload AS report_snapshot_payload,
                 COALESCE(ct.target_count, 0) AS target_count,
                 COALESCE(ct.sent_count, 0) AS sent_count,
@@ -271,7 +274,7 @@ function report_campaign_rows(int $tenantId, string $testFilter = 'prod'): array
                                WHERE ct3.tracking_id = e.tracking_id AND t3.is_test = 1)
              GROUP BY e.campaign_id
          ) ev ON ev.campaign_id = c.id
-         WHERE c.tenant_id = ? AND c.deleted_at IS NULL" . $testWhere . "
+         WHERE c.tenant_id = ?" . $deletedWhere . $testWhere . "
          ORDER BY c.id DESC",
         [$tenantId, $tenantId, $tenantId]
     );
@@ -284,8 +287,10 @@ function report_handle_campaigns(): never
     // test_filter: prod(既定,本番のみ) / test(テストのみ) / all(全部)。本番統計にテストを混ぜない。
     $tf = $_GET['test_filter'] ?? 'prod';
     if (!in_array($tf, ['prod', 'test', 'all'], true)) { $tf = 'prod'; }
+    // include_deleted=1 のときだけ削除済みキャンペーンも返す(ログ画面の絞り込み用)。
+    $includeDeleted = isset($_GET['include_deleted']) && (string) $_GET['include_deleted'] === '1';
     $campaigns = [];
-    foreach (report_campaign_rows($tenantId, $tf) as $row) {
+    foreach (report_campaign_rows($tenantId, $tf, $includeDeleted) as $row) {
         $summary = $row['closed_at'] !== null
             ? report_closed_summary(['payload' => $row['report_snapshot_payload']], $row)
             : report_summary_from_counts($row);
@@ -299,6 +304,7 @@ function report_handle_campaigns(): never
             'end_at' => $row['end_at'],
             'is_test' => (int) $row['is_test'],
             'created_at' => (string) $row['created_at'],
+            'deleted_at' => $row['deleted_at'],
         ], $summary);
     }
     json_out(['success' => true, 'campaigns' => $campaigns]);

@@ -1482,12 +1482,15 @@ async function renderLogs() {
     const tenantChanged = sel.dataset.tenantKey !== undefined && sel.dataset.tenantKey !== tenantKey;
     const prev = tenantChanged ? '' : sel.value;
     try {
-      const { campaigns } = await api('api/report.php', { query: { action: 'campaigns' } });
+      // ログの絞り込みは本番・テスト・削除済みをすべて選べる(明細は events 直参照で
+      // 削除済みキャンペーンの行も残るため)。test_filter:all + include_deleted:1 で全件取る。
+      const { campaigns } = await api('api/report.php', { query: { action: 'campaigns', test_filter: 'all', include_deleted: 1 } });
       // 先頭の「すべて」を残して以降を破棄してから詰め直す。
       while (sel.options.length > 1) sel.remove(1);
       for (const c of campaigns) {
         const o = document.createElement('option');
-        o.value = c.id; o.textContent = `#${c.id} ${c.name}`;
+        const tags = `${Number(c.is_test) ? '[テスト]' : ''}${c.deleted_at ? '[削除済]' : ''}`;
+        o.value = c.id; o.textContent = `#${c.id} ${tags ? tags + ' ' : ''}${c.name}`;
         sel.appendChild(o);
       }
       // 選択中の値が新しい一覧にも存在すれば復元する。無ければ「すべて」に戻す。
