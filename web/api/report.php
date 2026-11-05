@@ -1504,13 +1504,14 @@ function report_handle_export_xlsx(): never
     $sRate = [
         ['指標', '率 (%)'],
         ['サイト表示率', $cnt > 0 ? round($lc / $cnt * 100, 1) : 0],
+        ['認証率 (認証/表示)', $lc > 0 ? round($ac / $lc * 100, 1) : 0],
         ['認証率 (認証/対象数)', $cnt > 0 ? round($ac / $cnt * 100, 1) : 0],
         ['報告率', (float) ($s['report_rate'] ?? 0)],
     ];
     $xlsx->addSheet('概要グラフ', $sRate, [0 => 24, 1 => 12]);
     $xlsx->addChart('概要グラフ', 'bar', '概要: 表示率・認証率・報告率 (%)',
-        ['col' => 0, 'from' => 2, 'to' => 4],
-        [['col' => 1, 'from' => 2, 'to' => 4, 'name' => '率 (%)']],
+        ['col' => 0, 'from' => 2, 'to' => 5],
+        [['col' => 1, 'from' => 2, 'to' => 5, 'name' => '率 (%)']],
         ['fromCol' => 3, 'fromRow' => 1, 'toCol' => 12, 'toRow' => 18]);
 
     // ---- シート2: 会社別 ----
@@ -1533,10 +1534,11 @@ function report_handle_export_xlsx(): never
     }
     $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20, 7 => 12, 8 => 14]);
     if (count($companyRows) > 1) {
-        // カテゴリ=会社(A列), 系列=サイト表示率(D列)・認証率/対象数(G列)。右側(K列〜)に配置。
+        // カテゴリ=会社(A列), 系列=サイト表示率(D列)・認証率(認証/表示 F列)・認証率(認証/対象数 G列)。右側(K列〜)に配置。
         $xlsx->addChart('会社別', 'bar', '会社別 サイト表示率・認証率 (%)',
             ['col' => 0, 'from' => 2, 'to' => count($companyRows)],
             [['col' => 3, 'from' => 2, 'to' => count($companyRows), 'name' => 'サイト表示率 (%)'],
+             ['col' => 5, 'from' => 2, 'to' => count($companyRows), 'name' => '認証率 (認証/表示 %)'],
              ['col' => 6, 'from' => 2, 'to' => count($companyRows), 'name' => '認証率 (認証/対象数 %)']],
             ['fromCol' => 10, 'fromRow' => 1, 'toCol' => 20, 'toRow' => 18]);
     }
@@ -1564,6 +1566,7 @@ function report_handle_export_xlsx(): never
         $xlsx->addChart('役職別', 'bar', '役職別 サイト表示率・認証率 (%)',
             ['col' => 0, 'from' => 2, 'to' => count($posRows)],
             [['col' => 3, 'from' => 2, 'to' => count($posRows), 'name' => 'サイト表示率 (%)'],
+             ['col' => 5, 'from' => 2, 'to' => count($posRows), 'name' => '認証率 (認証/表示 %)'],
              ['col' => 6, 'from' => 2, 'to' => count($posRows), 'name' => '認証率 (認証/対象数 %)']],
             ['fromCol' => 10, 'fromRow' => 1, 'toCol' => 20, 'toRow' => 18]);
     }
@@ -1588,6 +1591,16 @@ function report_handle_export_xlsx(): never
         ];
     }
     $xlsx->addSheet('コンテンツ別', $contentRows, [0 => 14, 1 => 40, 2 => 10, 3 => 14, 4 => 16, 5 => 10, 6 => 20, 7 => 20, 8 => 12, 9 => 14]);
+    if (count($contentRows) > 1) {
+        // カテゴリ=コンテンツNo(A列。件名は長いので軸には使わない)。
+        // 系列=サイト表示率(E列)・認証率(認証/表示 G列)・認証率(認証/対象数 H列)。右側(L列〜)に配置。
+        $xlsx->addChart('コンテンツ別', 'bar', 'コンテンツ別 サイト表示率・認証率 (%)',
+            ['col' => 0, 'from' => 2, 'to' => count($contentRows)],
+            [['col' => 4, 'from' => 2, 'to' => count($contentRows), 'name' => 'サイト表示率 (%)'],
+             ['col' => 6, 'from' => 2, 'to' => count($contentRows), 'name' => '認証率 (認証/表示 %)'],
+             ['col' => 7, 'from' => 2, 'to' => count($contentRows), 'name' => '認証率 (認証/対象数 %)']],
+            ['fromCol' => 11, 'fromRow' => 1, 'toCol' => 21, 'toRow' => 18]);
+    }
 
     // ---- シート5: 日別タイムライン ----
     $tlRows = [['日付', 'サイト表示', '認証', '累積表示', '累積認証']];
