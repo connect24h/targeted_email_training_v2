@@ -65,9 +65,9 @@ $reportSrc = file_get_contents(__DIR__ . '/../api/report.php');
 check($reportSrc !== false, 'api/report.php を読める');
 preg_match_all("/\\\$xlsx->addSheet\('([^']+)'/", (string) $reportSrc, $m);
 $sheetNames = $m[1] ?? [];
-$expected = ['サマリー', '会社別', '役職別', 'コンテンツ別', '日別タイムライン', '訓練結果', '訓練結果ログ(明細)', '返信者'];
+$expected = ['サマリー', '概要グラフ', '会社別', '役職別', 'コンテンツ別', '日別タイムライン', '訓練結果', '訓練結果ログ(明細)', '返信者', 'ビーコン明細(ユーザ×コンテンツ)'];
 check($sheetNames === $expected,
-    'レポートExcel: 8シートが期待順で並ぶ (実際: ' . implode(' / ', $sheetNames) . ')');
+    'レポートExcel: 10シートが期待順で並ぶ (実際: ' . implode(' / ', $sheetNames) . ')');
 check(strpos((string) $reportSrc, "require_once __DIR__.\"/../lib/TrainingLogRows.php\"") !== false,
     'api/report.php が共有ライブラリを require している');
 check(strpos((string) $reportSrc, 'training_results_rows($tenantId)') !== false,
@@ -76,9 +76,14 @@ check(strpos((string) $reportSrc, 'training_log_detail_rows($tenantId)') !== fal
     'レポートExcel: 明細は共有関数で行生成する');
 
 // 認証/表示の既存列を維持したまま、認証/対象数の列を4シートへ追加する。
-preg_match_all('/認証率 \(認証\/対象数 %\)/u', (string) $reportSrc, $authTargetRateMatches);
-check(count($authTargetRateMatches[0] ?? []) === 4,
-    'レポートExcel: 認証/対象数の率がサマリーと3明細ヘッダにある');
+// 3明細シート(会社別/役職別/コンテンツ別)のヘッダでは「認証率(表示)」と「認証率(対象数)」が
+// 隣接する。この隣接の出現が3回あること(=3明細ヘッダ)で列の存在を固定する。
+// (グラフの系列名にも同じ文字列が出るため、ヘッダ文脈に限定して数える)
+check(substr_count((string) $reportSrc, "'認証率 (認証/表示 %)', '認証率 (認証/対象数 %)'") === 3,
+    'レポートExcel: 認証/対象数の率が3明細ヘッダにある');
+// サマリーシートにも縦持ちの行ラベルとして存在する。
+check(strpos((string) $reportSrc, "['認証率 (認証/対象数 %)', \$cnt > 0") !== false,
+    'レポートExcel: 認証/対象数の率がサマリーにもある');
 
 // 報告数/報告率はサマリーだけでなく、3明細シートの末尾にも出力する。
 check(substr_count((string) $reportSrc, "'報告数', '報告率 (%)'") === 3,

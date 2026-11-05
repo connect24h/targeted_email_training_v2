@@ -785,16 +785,17 @@ function report_handle_individuals(): never
  * tracking_id ごとに1行(対象者・コンテンツ番号・開封/クリック/認証の有無と日時)を返す。
  * テスト送信の全パターン確認が主用途なので is_test で絞らず全ビーコンを出す。
  */
-function report_handle_beacons(): never
+/**
+ * ビーコン(tracking_id)単位の明細行を返す。画面の beacons API と Excel 出力で共有する。
+ * tracking_id ごとに1行(対象者・コンテンツNo・開封/クリック/認証の有無と初回時刻)。
+ * テスト送信の全パターン確認が主用途なので is_test で絞らず全ビーコンを返す。
+ *
+ * @return list<array{tracking_id:string,content_no:?int,send_status:string,name:string,
+ *   email:string,company:string,department:string,position_category:?string,is_test:int,
+ *   opened:bool,clicked:bool,authed:bool,opened_at:?string,clicked_at:?string,authed_at:?string}>
+ */
+function report_beacon_rows(int $campaignId, int $tenantId): array
 {
-    $user = require_role('viewer');
-    $campaignId = report_query_int('campaign_id');
-    if ($campaignId === null) {
-        json_error('campaign_id は必須です', 400);
-    }
-    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
-    assert_campaign_owned($campaignId, $tenantId);
-
     // tracking_id 単位。events を event_type ごとに有無(MAX)と最初の発生時刻(MIN)で集約。
     $rows = Db::all(
         "SELECT ct.tracking_id, ct.content_no, ct.send_status,
@@ -840,6 +841,47 @@ function report_handle_beacons(): never
             'authed_at' => $r['authed_at'],
         ];
     }
+    return $beacons;
+}
+
+/** ビーコン明細 Excel シートのヘッダ(列順はシートと table rows で共有)。 */
+function report_beacon_sheet_headers(): array
+{
+    return ['氏名', 'メール', '会社', '部署', '役職区分', 'コンテンツNo', '送信状況',
+            '開封', 'クリック', '認証', '開封日時', 'クリック日時', '認証日時', 'テスト'];
+}
+
+/** ビーコン明細行を Excel シートの2次元配列に変換する(○/空の表記で有無を出す)。 */
+function report_beacon_sheet_rows(array $beacons): array
+{
+    $mark = static fn (bool $v): string => $v ? '○' : '';
+    $out = [];
+    foreach ($beacons as $b) {
+        $out[] = [
+            $b['name'], $b['email'], $b['company'], $b['department'],
+            (string) ($b['position_category'] ?? ''),
+            $b['content_no'] === null ? '' : (string) $b['content_no'],
+            $b['send_status'],
+            $mark($b['opened']), $mark($b['clicked']), $mark($b['authed']),
+            (string) ($b['opened_at'] ?? ''), (string) ($b['clicked_at'] ?? ''), (string) ($b['authed_at'] ?? ''),
+            $b['is_test'] === 1 ? 'テスト' : '',
+        ];
+    }
+    return $out;
+}
+
+function report_handle_beacons(): never
+{
+    $user = require_role('viewer');
+    $campaignId = report_query_int('campaign_id');
+    if ($campaignId === null) {
+        json_error('campaign_id は必須です', 400);
+    }
+    $tenantId = effective_tenant_id($user, isset($_GET['tenant_id']) ? (int) $_GET['tenant_id'] : null);
+    assert_campaign_owned($campaignId, $tenantId);
+
+    $beacons = report_beacon_rows($campaignId, $tenantId);
+
     // 集計サマリ(ビーコン単位): 全ビーコン数と、開封/クリック/認証されたビーコン数。
     $total = count($beacons);
     $openedCount = 0; $clickedCount = 0; $authedCount = 0;
@@ -1397,13 +1439,15 @@ function report_handle_risk_by_company(): never
 
 /**
  * レポートを Excel (.xlsx) でダウンロードする。
- * 8シート構成: サマリー / 会社別 / 役職別 / コンテンツ別 / 日別タイムライン /
- *              訓練結果 / 訓練結果ログ(明細) / 返信者。
- * 後半3シートはログ管理の同名タブと同じ内容で、lib/TrainingLogRows.php と
+ * シート構成: サマリー / 概要グラフ / 会社別 / 役職別 / コンテンツ別 / 日別タイムライン /
+ *              訓練結果 / 訓練結果ログ(明細) / 返信者 / ビーコン明細(ユーザ×コンテンツ)。
+ * 訓練結果・明細・返信者はログ管理の同名タブと同じ内容で、lib/TrainingLogRows.php と
  * lib/ReplyMaildir.php を共有する(2026-08-30/31 追加)。
  * 返信者だけは全テナントのメールが混在する superadmin 限定機能のため、
  * それ未満の権限ではシートを作るが中身を出さない(理由を1行入れる)。
- * ビーコン別明細はユーザー指示で除外。
+ * 概要グラフ/会社別/役職別/日別タイムラインには棒・折れ線グラフを埋め込む(2026-11-05 追加)。
+ * ビーコン明細は tracking_id 単位で、ユーザごとに受け取ったコンテンツと反応を出す
+ * (画面の beacons API と report_beacon_rows を共有。2026-11-05 追加)。
  */
 function report_handle_export_xlsx(): never
 {
@@ -1454,6 +1498,21 @@ function report_handle_export_xlsx(): never
     }
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
+    // ---- シート: 概要グラフ ----
+    // サマリーは縦持ち(項目/値)でグラフのカテゴリ軸に向かないため、率だけの横持ち表を
+    // 別シートに作り、そこに棒グラフを置く(概要の数値を視覚化する「概要のグラフ」)。
+    $sRate = [
+        ['指標', '率 (%)'],
+        ['サイト表示率', $cnt > 0 ? round($lc / $cnt * 100, 1) : 0],
+        ['認証率 (認証/対象数)', $cnt > 0 ? round($ac / $cnt * 100, 1) : 0],
+        ['報告率', (float) ($s['report_rate'] ?? 0)],
+    ];
+    $xlsx->addSheet('概要グラフ', $sRate, [0 => 24, 1 => 12]);
+    $xlsx->addChart('概要グラフ', 'bar', '概要: 表示率・認証率・報告率 (%)',
+        ['col' => 0, 'from' => 2, 'to' => 4],
+        [['col' => 1, 'from' => 2, 'to' => 4, 'name' => '率 (%)']],
+        ['fromCol' => 3, 'fromRow' => 1, 'toCol' => 12, 'toRow' => 18]);
+
     // ---- シート2: 会社別 ----
     $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
     foreach (($d['by_company'] ?? []) as $r) {
@@ -1473,6 +1532,14 @@ function report_handle_export_xlsx(): never
         ];
     }
     $xlsx->addSheet('会社別', $companyRows, [0 => 24, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20, 7 => 12, 8 => 14]);
+    if (count($companyRows) > 1) {
+        // カテゴリ=会社(A列), 系列=サイト表示率(D列)・認証率/対象数(G列)。右側(K列〜)に配置。
+        $xlsx->addChart('会社別', 'bar', '会社別 サイト表示率・認証率 (%)',
+            ['col' => 0, 'from' => 2, 'to' => count($companyRows)],
+            [['col' => 3, 'from' => 2, 'to' => count($companyRows), 'name' => 'サイト表示率 (%)'],
+             ['col' => 6, 'from' => 2, 'to' => count($companyRows), 'name' => '認証率 (認証/対象数 %)']],
+            ['fromCol' => 10, 'fromRow' => 1, 'toCol' => 20, 'toRow' => 18]);
+    }
 
     // ---- シート3: 役職別 ----
     $posRows = [['役職', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
@@ -1493,6 +1560,13 @@ function report_handle_export_xlsx(): never
         ];
     }
     $xlsx->addSheet('役職別', $posRows, [0 => 16, 1 => 10, 2 => 14, 3 => 16, 4 => 10, 5 => 20, 6 => 20, 7 => 12, 8 => 14]);
+    if (count($posRows) > 1) {
+        $xlsx->addChart('役職別', 'bar', '役職別 サイト表示率・認証率 (%)',
+            ['col' => 0, 'from' => 2, 'to' => count($posRows)],
+            [['col' => 3, 'from' => 2, 'to' => count($posRows), 'name' => 'サイト表示率 (%)'],
+             ['col' => 6, 'from' => 2, 'to' => count($posRows), 'name' => '認証率 (認証/対象数 %)']],
+            ['fromCol' => 10, 'fromRow' => 1, 'toCol' => 20, 'toRow' => 18]);
+    }
 
     // ---- シート4: コンテンツ別 ----
     $contentRows = [['コンテンツNo', '件名', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
@@ -1527,6 +1601,14 @@ function report_handle_export_xlsx(): never
         ];
     }
     $xlsx->addSheet('日別タイムライン', $tlRows, [0 => 14, 1 => 14, 2 => 10, 3 => 14, 4 => 14]);
+    if (count($tlRows) > 1) {
+        // カテゴリ=日付(A列), 系列=サイト表示(B列)・認証(C列)の折れ線(推移)。
+        $xlsx->addChart('日別タイムライン', 'line', '日別 サイト表示・認証の推移',
+            ['col' => 0, 'from' => 2, 'to' => count($tlRows)],
+            [['col' => 1, 'from' => 2, 'to' => count($tlRows), 'name' => 'サイト表示'],
+             ['col' => 2, 'from' => 2, 'to' => count($tlRows), 'name' => '認証']],
+            ['fromCol' => 6, 'fromRow' => 1, 'toCol' => 16, 'toRow' => 18]);
+    }
 
     // ---- シート6: 訓練結果 / シート7: 訓練結果ログ(明細) ----
     // ログ管理の同名タブと同じ内容。行生成は lib/TrainingLogRows.php で共有しており、
@@ -1559,6 +1641,15 @@ function report_handle_export_xlsx(): never
              . 'ログ管理 > 返信者 から superadmin で出力してください。']];
     }
     $xlsx->addSheet('返信者', $replyRows, [0 => 20, 1 => 18, 2 => 28, 3 => 20, 4 => 28, 5 => 28, 6 => 44, 7 => 8]);
+
+    // ---- シート: ビーコン明細(ユーザ×コンテンツ) ----
+    // お客様が「ユーザごとにどのコンテンツを受け取り、どう反応したか」を見たいという要望。
+    // 画面の beacons API と同じ行(report_beacon_rows)を共有し、tracking_id 単位で出す。
+    $beaconRows = array_merge([report_beacon_sheet_headers()],
+        report_beacon_sheet_rows(report_beacon_rows($campaignId, $tenantId)));
+    $xlsx->addSheet('ビーコン明細(ユーザ×コンテンツ)', $beaconRows,
+        [0 => 20, 1 => 28, 2 => 20, 3 => 20, 4 => 14, 5 => 12, 6 => 12,
+         7 => 8, 8 => 10, 9 => 8, 10 => 20, 11 => 20, 12 => 20, 13 => 8]);
 
     // ファイル名: キャンペーン名を安全にする
     $safeName = preg_replace('/[^\p{L}\p{N}_\-]/u', '_', $campaignName);
