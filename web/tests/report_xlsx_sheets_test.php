@@ -68,6 +68,16 @@ $sheetNames = $m[1] ?? [];
 $expected = ['サマリー', '概要グラフ', '会社別', '役職別', 'コンテンツ別', '日別タイムライン', '訓練結果', '訓練結果ログ(明細)', '返信者', 'ビーコン明細(ユーザ×コンテンツ)'];
 check($sheetNames === $expected,
     'レポートExcel: 10シートが期待順で並ぶ (実際: ' . implode(' / ', $sheetNames) . ')');
+
+// ---- 4b) 概要グラフシートが複数種のグラフ(棒/円/ドーナツ/折れ線)を addChart していること ----
+// 概要を「厚く」した結果(2026-11-06)。種別文字列が落ちると概要のグラフが減るので固定する。
+preg_match_all("/\\\$xlsx->addChart\('概要グラフ', '([a-z]+)'/", (string) $reportSrc, $om);
+$ovTypes = $om[1] ?? [];
+check(in_array('bar', $ovTypes, true), '概要グラフ: 棒(bar)がある');
+check(in_array('pie', $ovTypes, true), '概要グラフ: 円(pie)がある');
+check(in_array('doughnut', $ovTypes, true), '概要グラフ: ドーナツ(doughnut)がある');
+check(in_array('line', $ovTypes, true), '概要グラフ: 折れ線(line)がある');
+check(count($ovTypes) >= 5, '概要グラフ: グラフが5枚以上ある (実際: ' . count($ovTypes) . ')');
 check(strpos((string) $reportSrc, "require_once __DIR__.\"/../lib/TrainingLogRows.php\"") !== false,
     'api/report.php が共有ライブラリを require している');
 check(strpos((string) $reportSrc, 'training_results_rows($tenantId)') !== false,

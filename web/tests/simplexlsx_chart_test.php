@@ -37,6 +37,27 @@ $xlsx->addChart('日別', 'line', '日別 表示・認証の推移', ['col' => 0
     ['col' => 2, 'from' => 2, 'to' => 3, 'name' => '認証'],
 ], ['fromCol' => 4, 'fromRow' => 1, 'toCol' => 12, 'toRow' => 16]);
 
+// シート3: 円グラフ用(表示/未表示の内訳を模す)。
+$xlsx->addSheet('内訳円', [
+    ['区分', '件数'],
+    ['表示', 6],
+    ['未表示', 4],
+]);
+$xlsx->addChart('内訳円', 'pie', 'サイト表示の内訳', ['col' => 0, 'from' => 2, 'to' => 3], [
+    ['col' => 1, 'from' => 2, 'to' => 3, 'name' => '件数'],
+], ['fromCol' => 3, 'fromRow' => 1, 'toCol' => 11, 'toRow' => 16]);
+
+// シート4: ドーナツグラフ用(認証/未認証/未表示の多層割合を模す)。
+$xlsx->addSheet('内訳ドーナツ', [
+    ['区分', '件数'],
+    ['認証', 2],
+    ['未認証', 4],
+    ['未表示', 4],
+]);
+$xlsx->addChart('内訳ドーナツ', 'doughnut', '認証の内訳', ['col' => 0, 'from' => 2, 'to' => 4], [
+    ['col' => 1, 'from' => 2, 'to' => 4, 'name' => '件数'],
+], ['fromCol' => 3, 'fromRow' => 1, 'toCol' => 11, 'toRow' => 16]);
+
 // グラフ無しのシートも混ぜ、drawing 参照が付かないことを確認。
 $xlsx->addSheet('素データ', [['x', 'y'], [1, 2]]);
 
@@ -63,7 +84,7 @@ check($get('xl/worksheets/_rels/sheet1.xml.rels') !== '', 'sheet1 の rels が�
 $ct = $get('[Content_Types].xml');
 check(strpos($ct, '/xl/charts/chart1.xml') !== false, 'Content_Types に chart1 の Override');
 check(strpos($ct, '/xl/drawings/drawing1.xml') !== false, 'Content_Types に drawing1 の Override');
-check(substr_count($ct, 'drawingml.chart+xml') === 2, 'chart の Override が2つ(=グラフ2個)');
+check(substr_count($ct, 'drawingml.chart+xml') === 4, 'chart の Override が4つ(=グラフ4個: bar/line/pie/doughnut)');
 
 // --- chart XML の中身 ---
 $c1 = $get('xl/charts/chart1.xml');
@@ -76,11 +97,29 @@ check(strpos($c1, '$B$2:$B$4') !== false, 'chart1 の系列1の値範囲が $B$2
 $c2 = $get('xl/charts/chart2.xml');
 check(strpos($c2, '<c:lineChart>') !== false, 'chart2 は lineChart');
 
+// --- 円グラフ(chart3) ---
+$c3 = $get('xl/charts/chart3.xml');
+check($c3 !== '', 'chart3.xml が存在する(円)');
+check(strpos($c3, '<c:pieChart>') !== false, 'chart3 は pieChart');
+check(strpos($c3, '<c:catAx>') === false && strpos($c3, '<c:axId') === false,
+    'pie には軸(catAx/axId)が無い');
+check(strpos($c3, 'showPercent') !== false, 'pie に割合(showPercent)のデータラベルがある');
+check(strpos($c3, '内訳円!') !== false && strpos($c3, '$A$2:$A$3') !== false,
+    'pie がカテゴリ範囲 $A$2:$A$3 を参照する');
+
+// --- ドーナツ(chart4) ---
+$c4 = $get('xl/charts/chart4.xml');
+check($c4 !== '', 'chart4.xml が存在する(ドーナツ)');
+check(strpos($c4, '<c:doughnutChart>') !== false, 'chart4 は doughnutChart');
+check(strpos($c4, '<c:holeSize') !== false, 'doughnut に holeSize がある');
+check(strpos($c4, '<c:axId') === false, 'doughnut には軸(axId)が無い');
+
 // --- worksheet 側に drawing 参照がある/無い ---
 $ws1 = $get('xl/worksheets/sheet1.xml');
 check(strpos($ws1, '<drawing r:id="rIdDrawing"/>') !== false, 'グラフありシートに <drawing> 参照がある');
-$ws3 = $get('xl/worksheets/sheet3.xml');
-check(strpos($ws3, '<drawing') === false, 'グラフ無しシートには <drawing> 参照が無い');
+// 「素データ」は5枚目(会社別/日別/内訳円/内訳ドーナツ/素データ)。グラフが無いので drawing 参照は付かない。
+$wsPlain = $get('xl/worksheets/sheet5.xml');
+check(strpos($wsPlain, '<drawing') === false, 'グラフ無しシートには <drawing> 参照が無い');
 
 // --- drawing rels が chart を指す ---
 $dr1 = $get('xl/drawings/_rels/drawing1.xml.rels');

@@ -51,7 +51,7 @@ class SimpleXlsx
      * シートに棒グラフ/折れ線グラフを1つ差し込む。データはそのシート内のセル範囲を参照する。
      *
      * @param string $sheetName 追加先シート名(addSheet 済みのもの。31文字で切られた後の名前)
-     * @param 'bar'|'line' $type グラフ種別
+     * @param 'bar'|'line'|'pie'|'doughnut' $type グラフ種別(pie/doughnut は先頭系列のみ使い、軸は持たない)
      * @param string $title グラフタイトル
      * @param array{col:int,from:int,to:int} $cat カテゴリ軸(項目名)の列と行範囲(1-based 行、0-based 列)
      * @param list<array{col:int,from:int,to:int,name:string}> $series 系列ごとの値の列・行範囲・凡例名
@@ -66,7 +66,7 @@ class SimpleXlsx
         if (!isset($this->sheetIndexByName[$name])) {
             throw new \RuntimeException("addChart: シートが見つかりません: {$sheetName}");
         }
-        if ($type !== 'bar' && $type !== 'line') {
+        if (!in_array($type, ['bar', 'line', 'pie', 'doughnut'], true)) {
             throw new \RuntimeException("addChart: 未対応のグラフ種別: {$type}");
         }
         $idx = $this->sheetIndexByName[$name];
@@ -344,27 +344,60 @@ class SimpleXlsx
     private function chartXml(array $chart, string $sheetName): string
     {
         $type = $chart['type'];
-        $plotTag = $type === 'line' ? 'lineChart' : 'barChart';
+        $isPieLike = $type === 'pie' || $type === 'doughnut';
+        $plotTag = match ($type) {
+            'line' => 'lineChart',
+            'pie' => 'pieChart',
+            'doughnut' => 'doughnutChart',
+            default => 'barChart',
+        };
         $sheetRef = $this->sheetRangePrefix($sheetName);
 
         $cat = $chart['cat'];
         $catRange = $sheetRef . '!' . $this->absRange($cat['col'], $cat['from'], $cat['to']);
 
+        // pie/doughnut は1系列のみ(先頭系列)を使う。bar/line は全系列。
+        $seriesList = array_values($chart['series']);
+        if ($isPieLike) {
+            $seriesList = array_slice($seriesList, 0, 1);
+        }
+
         $seriesXml = '';
-        foreach (array_values($chart['series']) as $si => $ser) {
+        foreach ($seriesList as $si => $ser) {
             $valRange = $sheetRef . '!' . $this->absRange($ser['col'], $ser['from'], $ser['to']);
+            // pie/doughnut は割合(showPercent)のデータラベルを付けると「内訳」が読める。
+            $dLbls = $isPieLike
+                ? '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/></c:dLbls>'
+                : '';
             $seriesXml .= '<c:ser>'
                 . '<c:idx val="' . $si . '"/><c:order val="' . $si . '"/>'
                 . '<c:tx><c:strRef><c:f></c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>' . $this->xmlEscape((string) ($ser['name'] ?? ('系列' . ($si + 1)))) . '</c:v></c:pt></c:strCache></c:strRef></c:tx>'
+                . $dLbls
                 . '<c:cat><c:strRef><c:f>' . $this->xmlEscape($catRange) . '</c:f></c:strRef></c:cat>'
                 . '<c:val><c:numRef><c:f>' . $this->xmlEscape($valRange) . '</c:f></c:numRef></c:val>'
                 . ($type === 'line' ? '<c:smooth val="0"/>' : '')
                 . '</c:ser>';
         }
 
-        $plotExtra = $type === 'line'
-            ? '<c:marker val="1"/>'
-            : '<c:barDir val="col"/><c:grouping val="clustered"/>';
+        if ($isPieLike) {
+            // pie/doughnut は軸を持たない。varyColors で各要素を色分け、doughnut は holeSize を付ける。
+            $plotInner = '<c:' . $plotTag . '>'
+                . '<c:varyColors val="1"/>'
+                . $seriesXml
+                . ($type === 'doughnut' ? '<c:firstSliceAng val="0"/><c:holeSize val="50"/>' : '')
+                . '</c:' . $plotTag . '>';
+        } else {
+            $plotExtra = $type === 'line'
+                ? '<c:marker val="1"/>'
+                : '<c:barDir val="col"/><c:grouping val="clustered"/>';
+            $plotInner = '<c:' . $plotTag . '>'
+                . $plotExtra
+                . $seriesXml
+                . '<c:axId val="111111111"/><c:axId val="222222222"/>'
+                . '</c:' . $plotTag . '>'
+                . '<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222222222"/></c:catAx>'
+                . '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:crossAx val="111111111"/></c:valAx>';
+        }
 
         return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             . '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
@@ -372,13 +405,7 @@ class SimpleXlsx
             . '<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>' . $this->xmlEscape($chart['title']) . '</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>'
             . '<c:autoTitleDeleted val="0"/>'
             . '<c:plotArea><c:layout/>'
-            . '<c:' . $plotTag . '>'
-            . $plotExtra
-            . $seriesXml
-            . '<c:axId val="111111111"/><c:axId val="222222222"/>'
-            . '</c:' . $plotTag . '>'
-            . '<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222222222"/></c:catAx>'
-            . '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:crossAx val="111111111"/></c:valAx>'
+            . $plotInner
             . '</c:plotArea>'
             . '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>'
             . '<c:plotVisOnly val="1"/>'

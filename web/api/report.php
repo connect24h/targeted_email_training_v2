@@ -1499,20 +1499,79 @@ function report_handle_export_xlsx(): never
     $xlsx->addSheet('サマリー', $summaryRows, [0 => 28, 1 => 20]);
 
     // ---- シート: 概要グラフ ----
-    // サマリーは縦持ち(項目/値)でグラフのカテゴリ軸に向かないため、率だけの横持ち表を
-    // 別シートに作り、そこに棒グラフを置く(概要の数値を視覚化する「概要のグラフ」)。
-    $sRate = [
-        ['指標', '率 (%)'],
-        ['サイト表示率', $cnt > 0 ? round($lc / $cnt * 100, 1) : 0],
-        ['認証率 (認証/表示)', $lc > 0 ? round($ac / $lc * 100, 1) : 0],
-        ['認証率 (認証/対象数)', $cnt > 0 ? round($ac / $cnt * 100, 1) : 0],
-        ['報告率', (float) ($s['report_rate'] ?? 0)],
+    // サマリーは縦持ち(項目/値)でグラフのカテゴリ軸に向かないため、グラフ用の小表を
+    // 複数ブロックで同じシートに積み、1シートに概要の視点を複数のグラフで見せる。
+    // A:B 列にデータ、グラフは D 列以降に縦に積む。各ブロックの行位置をコメントで固定する。
+    $reportCount = (int) ($s['report_count'] ?? 0);
+    $reportRate = (float) ($s['report_rate'] ?? 0);
+    $notShown = max(0, $cnt - $lc);          // サイト未表示(対象数 - 表示)
+    $shownNoAuth = max(0, $lc - $ac);        // 表示したが未認証
+    $ovRows = [
+        // 行1: ヘッダ
+        ['指標', '値'],
+        // 行2-5: 主要率(%)
+        ['サイト表示率 (%)', $cnt > 0 ? round($lc / $cnt * 100, 1) : 0],
+        ['認証率 (認証/表示 %)', $lc > 0 ? round($ac / $lc * 100, 1) : 0],
+        ['認証率 (認証/対象数 %)', $cnt > 0 ? round($ac / $cnt * 100, 1) : 0],
+        ['報告率 (%)', $reportRate],
+        // 行6: 区切り(空)
+        ['', ''],
+        // 行7-10: 反応の件数
+        ['送信(対象数)', $cnt],
+        ['サイト表示', $lc],
+        ['認証', $ac],
+        ['報告', $reportCount],
+        // 行11: 区切り(空)
+        ['', ''],
+        // 行12-13: サイト表示の内訳
+        ['表示', $lc],
+        ['未表示', $notShown],
+        // 行14: 区切り(空)
+        ['', ''],
+        // 行15-17: 認証の内訳(表示→認証まで進んだか)
+        ['認証', $ac],
+        ['表示したが未認証', $shownNoAuth],
+        ['未表示', $notShown],
     ];
-    $xlsx->addSheet('概要グラフ', $sRate, [0 => 24, 1 => 12]);
-    $xlsx->addChart('概要グラフ', 'bar', '概要: 表示率・認証率・報告率 (%)',
+    // 行19以降: 日別の推移(日付 / サイト表示 / 認証)。ヘッダ1行＋データ。
+    $tlStart = count($ovRows) + 2;           // 空行を1つ挟んで日別表のヘッダ行(1-based)
+    $ovRows[] = ['', ''];                    // 行18: 区切り
+    $ovRows[] = ['日付', 'サイト表示', '認証'];  // 行19: 日別表ヘッダ
+    $tlFirst = $tlStart + 1;                 // 日別データの最初の行(1-based)
+    foreach (($d['timeline'] ?? []) as $t) {
+        $ovRows[] = [(string) ($t['date'] ?? ''), (int) ($t['beacon'] ?? 0), (int) ($t['auth'] ?? 0)];
+    }
+    $tlLast = count($ovRows);                 // 日別データの最後の行(1-based = 行数)
+    $xlsx->addSheet('概要グラフ', $ovRows, [0 => 22, 1 => 12, 2 => 10]);
+
+    // (1) 主要率の棒(行2-5, B列)
+    $xlsx->addChart('概要グラフ', 'bar', '主要率 (%)',
         ['col' => 0, 'from' => 2, 'to' => 5],
         [['col' => 1, 'from' => 2, 'to' => 5, 'name' => '率 (%)']],
-        ['fromCol' => 3, 'fromRow' => 1, 'toCol' => 12, 'toRow' => 18]);
+        ['fromCol' => 3, 'fromRow' => 0, 'toCol' => 11, 'toRow' => 15]);
+    // (2) 反応の件数の棒(行7-10, B列)
+    $xlsx->addChart('概要グラフ', 'bar', '反応の件数',
+        ['col' => 0, 'from' => 7, 'to' => 10],
+        [['col' => 1, 'from' => 7, 'to' => 10, 'name' => '件数']],
+        ['fromCol' => 12, 'fromRow' => 0, 'toCol' => 20, 'toRow' => 15]);
+    // (3) サイト表示の内訳 円(行12-13, B列)
+    $xlsx->addChart('概要グラフ', 'pie', 'サイト表示の内訳',
+        ['col' => 0, 'from' => 12, 'to' => 13],
+        [['col' => 1, 'from' => 12, 'to' => 13, 'name' => '件数']],
+        ['fromCol' => 3, 'fromRow' => 16, 'toCol' => 11, 'toRow' => 31]);
+    // (4) 認証の内訳 ドーナツ(行15-17, B列)
+    $xlsx->addChart('概要グラフ', 'doughnut', '認証の内訳',
+        ['col' => 0, 'from' => 15, 'to' => 17],
+        [['col' => 1, 'from' => 15, 'to' => 17, 'name' => '件数']],
+        ['fromCol' => 12, 'fromRow' => 16, 'toCol' => 20, 'toRow' => 31]);
+    // (5) 日別の推移 折れ線(行 $tlFirst..$tlLast, B列=サイト表示 / C列=認証)
+    if ($tlLast >= $tlFirst) {
+        $xlsx->addChart('概要グラフ', 'line', '日別の推移（サイト表示・認証）',
+            ['col' => 0, 'from' => $tlFirst, 'to' => $tlLast],
+            [['col' => 1, 'from' => $tlFirst, 'to' => $tlLast, 'name' => 'サイト表示'],
+             ['col' => 2, 'from' => $tlFirst, 'to' => $tlLast, 'name' => '認証']],
+            ['fromCol' => 3, 'fromRow' => 32, 'toCol' => 20, 'toRow' => 48]);
+    }
 
     // ---- シート2: 会社別 ----
     $companyRows = [['会社', '対象数', 'サイト表示数', 'サイト表示率 (%)', '認証数', '認証率 (認証/表示 %)', '認証率 (認証/対象数 %)', '報告数', '報告率 (%)']];
