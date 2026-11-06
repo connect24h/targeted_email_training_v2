@@ -915,7 +915,7 @@ async function clearSendAlerts() {
 }
 
 // クリアして履歴へ移したアラートを後から閲覧する。キャンペーン単位で絞り込める。
-// selectedId: 未指定=全部 / 数値=そのキャンペーン(0=全体/旧)
+// selectedId: 未指定=全部 / 数値=そのキャンペーン
 async function showSendAlertHistory(selectedId) {
   let d;
   const query = { action: 'alerts_history' };

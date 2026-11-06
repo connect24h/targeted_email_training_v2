@@ -35,10 +35,16 @@ function send_control_campaigns(int $tenantId): array
 }
 
 /**
- * アラートの集約・退避・履歴の対象ソース一覧。
- * 各キャンペーンの data_dir に加え、後方互換のグローバル(/opt/training/bin/data)も
- * 擬似ソース(id=0, name='(全体/旧)')として含める。これを含めないと、グローバルに溜まった
- * アラートが画面に出続けてクリアしても消えない。
+ * アラートの集約・退避・履歴の対象ソース一覧(キャンペーン別 data_dir のみ)。
+ *
+ * 後方互換のグローバル(/opt/training/bin/data/send_alerts.json)は集約対象に含めない。
+ * 理由(2026-11-06):
+ *  - グローバルは特定キャンペーンの data_dir(例 campaign_104)と同一内容になっており、
+ *    両方を集約すると同じアラートが二重計上される(実測: sha256 一致の100件)。
+ *  - グローバルは全テナント共通で、他テナント宛の送信失敗が混ざり得る(マルチテナント分離の
+ *    観点でもテナントスコープの画面から読むべきでない。セキュリティレビュー指摘)。
+ * 現在の送信ワーカーは各キャンペーンの data_dir に正規に書くため、グローバルを外しても
+ * 取りこぼしは生じない。
  * 返り値: [['id'=>int,'name'=>string,'dir'=>string], ...]
  */
 function send_control_sources(int $tenantId): array
@@ -51,8 +57,6 @@ function send_control_sources(int $tenantId): array
         }
         $sources[] = ['id' => (int) $c['id'], 'name' => (string) $c['name'], 'dir' => $dir];
     }
-    // グローバル(旧・全体)。dirname(SEND_GLOBAL_ALERTS) = /opt/training/bin/data
-    $sources[] = ['id' => 0, 'name' => '(全体/旧)', 'dir' => dirname(SEND_GLOBAL_ALERTS)];
     return $sources;
 }
 
@@ -278,7 +282,7 @@ try {
     // クリアして履歴へ移したアラートを後から見返す。全キャンペーンの send_alerts_history.json を
     // 集めて timestamp 降順で返す(キャンペーン毎に全件保持)。?limit で上限(既定なし=全件)。
     if ($action === 'alerts_history' && $method === 'GET') {
-        // ?id=<campaign_id> で特定キャンペーンに絞れる(0=全体/旧, 未指定=全ソース)。
+        // ?id=<campaign_id> で特定キャンペーンに絞れる(未指定=このテナントの全キャンペーン)。
         $filterId = isset($_GET['id']) && $_GET['id'] !== '' ? (int) $_GET['id'] : null;
         $sources = send_control_sources($tenantId);
         // 絞り込みUI用に、履歴を持つソースの一覧も返す。
@@ -324,18 +328,16 @@ try {
         }
 
         if ($id !== null && $id > 0) {
+            // 特定キャンペーンのみ退避(所有権を検証)。
             $c = assert_campaign_owned($id, $tenantId);
             $dir = rtrim((string) ($c['data_dir'] ?? ''), '/');
             if ($dir !== '') {
                 send_control_append_history($dir);
             }
             audit('send_control.clear_alerts', 'campaign_id=' . $id);
-        } elseif ($id === 0) {
-            // 全体/旧(グローバル)のみ退避。
-            send_control_append_history(dirname(SEND_GLOBAL_ALERTS));
-            audit('send_control.clear_alerts', 'global');
         } else {
-            // 未指定: このテナントの全キャンペーン＋グローバルを退避。
+            // 未指定(または id<=0): このテナントの全キャンペーンを退避。
+            // グローバル(bin/data)は集約対象外なので触らない(二重計上・他テナント混在の回避)。
             foreach (send_control_sources($tenantId) as $src) {
                 send_control_append_history($src['dir']);
             }
