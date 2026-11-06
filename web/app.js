@@ -857,12 +857,16 @@ async function renderSendControl() {
          <i class="bi bi-exclamation-triangle"></i> アラート ${alerts.length}
          <i class="bi bi-chevron-${sendControlAlertsOpen ? 'up' : 'down'}"></i>
        </button>`
-    : '<span class="small text-success"><i class="bi bi-check-circle"></i> アラートなし</span>';
+    : '<span class="small text-success"><i class="bi bi-check-circle"></i> アラートなし</span>'
+      + ' <button class="btn btn-sm btn-link text-muted p-0 ms-2 align-baseline" onclick="showSendAlertHistory()"><i class="bi bi-clock-history"></i> 履歴</button>';
 
   const alertList = (sendControlAlertsOpen && alerts.length) ? `
     <div class="border rounded p-2 mt-2" style="max-height:240px;overflow-y:auto">
-      ${roleAtLeast(State.user.role, 'operator')
-        ? `<div class="text-end mb-1"><button class="btn btn-sm btn-outline-secondary" onclick="clearSendAlerts()"><i class="bi bi-trash"></i> アラートをクリア</button></div>` : ''}
+      <div class="text-end mb-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="showSendAlertHistory()"><i class="bi bi-clock-history"></i> 履歴を見る</button>
+        ${roleAtLeast(State.user.role, 'operator')
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="clearSendAlerts()"><i class="bi bi-archive"></i> クリア（履歴に残す）</button>` : ''}
+      </div>
       ${alerts.map((a) => {
         const sev = ALERT_SEVERITY[a.type] || 'secondary';
         return `<div class="small border-start border-3 border-${sev} ps-2 mb-1">
@@ -901,12 +905,39 @@ function toggleSendAlerts() {
 }
 
 async function clearSendAlerts() {
-  if (!confirm('アラート履歴をクリアします。よろしいですか？')) return;
+  // クリアは削除ではなく履歴への退避。後から「履歴を見る」で参照できる。
+  if (!confirm('今のアラートを履歴へ移して一覧を空にします。履歴は「履歴を見る」から後で確認できます。よろしいですか？')) return;
   try {
     await api('api/send_control.php', { method: 'POST', query: { action: 'clear_alerts' }, body: {} });
-    toast('アラートをクリアしました', 'ok');
+    toast('アラートを履歴へ移しました', 'ok');
     renderSendControl();
   } catch (e) { toast(e.message, 'err'); }
+}
+
+// クリアして履歴へ移したアラートを後から閲覧する。新しい順の一覧をモーダルで出す。
+async function showSendAlertHistory() {
+  let d;
+  try {
+    d = await api('api/send_control.php', { query: { action: 'alerts_history' } });
+  } catch (e) { toast(e.message, 'err'); return; }
+  const list = d.data || [];
+  const body = list.length
+    ? `<div class="small text-muted mb-2">クリアして履歴へ移したアラート（新しい順・全件）: ${list.length} 件</div>
+       <div style="max-height:60vh;overflow-y:auto">
+         ${list.map((a) => {
+           const sev = ALERT_SEVERITY[a.type] || 'secondary';
+           return `<div class="small border-start border-3 border-${sev} ps-2 mb-1">
+             <span class="badge bg-${sev}">${esc(a.type)}</span>
+             <span>${esc(a.message)}</span>
+             ${a.to_email ? `<span class="text-muted">- ${esc(a.to_email)}</span>` : ''}
+             ${a.campaign_name ? `<span class="text-muted">[${esc(a.campaign_name)}]</span>` : ''}
+             <span class="text-muted float-end">${esc(a.timestamp || '')}</span>
+             ${a.cleared_at ? `<div class="text-muted" style="font-size:.8em">クリア日時: ${esc(a.cleared_at)}</div>` : ''}
+           </div>`;
+         }).join('')}
+       </div>`
+    : '<p class="text-muted mb-0">履歴はまだありません（アラートをクリアすると、ここに残ります）。</p>';
+  showInfoModal('アラート履歴', body, { size: 'lg' });
 }
 
 let campaignWorkspaceUi = null;

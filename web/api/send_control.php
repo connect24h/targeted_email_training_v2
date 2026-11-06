@@ -45,6 +45,61 @@ function send_control_read_json(string $path): mixed
 }
 
 /**
+ * data_dir の現役アラート(send_alerts.json)を履歴(send_alerts_history.json)へ退避し、
+ * 退避できたら現役を空にする。退避に失敗したら現役は消さない(履歴を失わないため)。
+ * 返り値は退避した件数。現役が空/不在なら 0 を返し、現役ファイルも触らない。
+ * 履歴はキャンペーン毎に全件保持(追記)。各要素に cleared_at を付ける。
+ */
+function send_control_append_history(string $dir): int
+{
+    $dir = rtrim($dir, '/');
+    if ($dir === '') {
+        return 0;
+    }
+    $alertsPath = $dir . '/send_alerts.json';
+    $histPath = $dir . '/send_alerts_history.json';
+
+    $current = send_control_read_json($alertsPath);
+    if (!is_array($current) || $current === []) {
+        return 0; // 退避するものが無い。現役ファイルは触らない。
+    }
+
+    $cleared_at = date('Y-m-d H:i:s');
+    $stamped = [];
+    foreach ($current as $a) {
+        if (!is_array($a)) {
+            continue;
+        }
+        if (!isset($a['cleared_at'])) {
+            $a['cleared_at'] = $cleared_at;
+        }
+        $stamped[] = $a;
+    }
+    if ($stamped === []) {
+        return 0;
+    }
+
+    $history = send_control_read_json($histPath);
+    if (!is_array($history)) {
+        $history = [];
+    }
+    // 新しくクリアした分を末尾に足す(全件保持)。表示時に timestamp 降順で並べる。
+    $merged = array_merge($history, $stamped);
+
+    $json = json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($json === false) {
+        return 0; // エンコード失敗時は現役を消さない。
+    }
+    $ok = @file_put_contents($histPath, $json, LOCK_EX);
+    if ($ok === false) {
+        return 0; // 履歴書き込み失敗。現役は温存。
+    }
+    // 退避成功。現役を空化([] を書く。unlink だと send_email.py が次に追記するとき作り直す手間が出るため空配列にする)。
+    @file_put_contents($alertsPath, '[]', LOCK_EX);
+    return count($stamped);
+}
+
+/**
  * キャンペーンの送信件数(total/sent)を返す。
  *
  * total は常に DB campaign_targets の件数(送信中に変わらないので食い違わない)。
@@ -196,6 +251,34 @@ try {
         json_out(['success' => true, 'data' => $all]);
     }
 
+    // クリアして履歴へ移したアラートを後から見返す。全キャンペーンの send_alerts_history.json を
+    // 集めて timestamp 降順で返す(キャンペーン毎に全件保持)。?limit で上限(既定なし=全件)。
+    if ($action === 'alerts_history' && $method === 'GET') {
+        $campaigns = send_control_campaigns($tenantId);
+        $all = [];
+        foreach ($campaigns as $c) {
+            $dir = rtrim((string) $c['data_dir'], '/');
+            $hist = send_control_read_json($dir . '/send_alerts_history.json');
+            if ($hist === null) {
+                continue;
+            }
+            foreach ($hist as $a) {
+                if (!is_array($a)) {
+                    continue;
+                }
+                $a['campaign_id']   = (int) $c['id'];
+                $a['campaign_name'] = (string) $c['name'];
+                $all[] = $a;
+            }
+        }
+        usort($all, static fn ($x, $y) => strcmp((string) ($y['timestamp'] ?? ''), (string) ($x['timestamp'] ?? '')));
+        $limit = isset($_GET['limit']) ? max(1, (int) $_GET['limit']) : 0;
+        if ($limit > 0) {
+            $all = array_slice($all, 0, $limit);
+        }
+        json_out(['success' => true, 'data' => $all]);
+    }
+
     if ($action === 'clear_alerts' && $method === 'POST') {
         tet2_require_csrf();
         // 対象キャンペーンの data_dir 配下 send_alerts.json を削除。
@@ -204,24 +287,26 @@ try {
         if ($id === 0 && isset($body['id']) && is_int($body['id'])) {
             $id = $body['id'];
         }
+        // クリア = 削除ではなく履歴(send_alerts_history.json)へ退避して現役を空にする。
+        // こうすることで、後から alerts_history で履歴を見返せる(2026-11-06 依頼)。
         if ($id > 0) {
             $c = assert_campaign_owned($id, $tenantId);
             $dir = rtrim((string) ($c['data_dir'] ?? ''), '/');
-            if ($dir !== '' && is_file($dir . '/send_alerts.json')) {
-                @unlink($dir . '/send_alerts.json');
+            if ($dir !== '') {
+                send_control_append_history($dir);
             }
             audit('send_control.clear_alerts', 'campaign_id=' . $id);
         } else {
-            // id 未指定: このテナントの全キャンペーン分 + グローバルをクリア。
+            // id 未指定: このテナントの全キャンペーン分を退避。
             foreach (send_control_campaigns($tenantId) as $c) {
                 $dir = rtrim((string) $c['data_dir'], '/');
-                if ($dir !== '' && is_file($dir . '/send_alerts.json')) {
-                    @unlink($dir . '/send_alerts.json');
+                if ($dir !== '') {
+                    send_control_append_history($dir);
                 }
             }
             audit('send_control.clear_alerts', 'all');
         }
-        json_out(['success' => true, 'message' => 'アラートをクリアしました']);
+        json_out(['success' => true, 'message' => 'アラートを履歴へ移しました']);
     }
 
     json_error('不正なアクションです', 400);
