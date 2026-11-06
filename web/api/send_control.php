@@ -109,7 +109,45 @@ function send_control_append_history(string $dir): int
     if (!is_array($history)) {
         $history = [];
     }
-    // 新しくクリアした分を末尾に足す(全件保持)。表示時に timestamp 降順で並べる。
+
+    // 重複排除: 同じアラートを複数回クリアしても履歴を膨らませない。
+    // 同一判定は cleared_at を除いた本体(timestamp+type+message+to_email)。
+    // (以前グローバルと data_dir が同一内容だった時期＋複数回クリアで、同じ100件が二重三重に
+    //  積まれた問題の再発防止。2026-11-06)
+    $alertKey = static function ($a): string {
+        if (!is_array($a)) {
+            return '';
+        }
+        return implode("\x1f", [
+            (string) ($a['timestamp'] ?? ''),
+            (string) ($a['type'] ?? ''),
+            (string) ($a['message'] ?? ''),
+            (string) ($a['to_email'] ?? ''),
+        ]);
+    };
+    $seen = [];
+    foreach ($history as $h) {
+        $seen[$alertKey($h)] = true;
+    }
+    $newOnly = [];
+    foreach ($stamped as $a) {
+        $k = $alertKey($a);
+        if (isset($seen[$k])) {
+            continue; // 既に履歴にある。積まない。
+        }
+        $seen[$k] = true;
+        $newOnly[] = $a;
+    }
+    $stamped = $newOnly;
+
+    // 新規が無ければ履歴は書き換えず、現役だけ空化して終わる(重複を積まない)。
+    if ($stamped === []) {
+        @unlink($alertsPath);
+        @file_put_contents($alertsPath, '[]', LOCK_EX);
+        return 0;
+    }
+
+    // 新しくクリアした分(重複を除いたもの)を末尾に足す。表示時に timestamp 降順で並べる。
     $merged = array_merge($history, $stamped);
 
     $json = json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

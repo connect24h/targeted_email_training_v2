@@ -64,4 +64,19 @@ check($moved3 === 0, '現役が空なら退避0件');
 $hist3 = json_decode((string) file_get_contents($histPath), true);
 check(count($hist3) === 5, '空退避で履歴は増えない(5件のまま)');
 
+// --- 重複排除: 既に履歴にある同一アラートは再退避しても追記されない ---
+// 既出の「失敗C」(timestamp 2026-11-06 11:00:00)と同じものを現役に置いて退避。
+file_put_contents($alertsPath, json_encode([
+    ['type' => 'send_failure', 'message' => '失敗C', 'timestamp' => '2026-11-06 11:00:00'], // 既出(重複)
+    ['type' => 'send_failure', 'message' => '失敗F', 'timestamp' => '2026-11-06 12:00:00'], // 新規
+], JSON_UNESCAPED_UNICODE));
+$moved4 = send_control_append_history($dir);
+check($moved4 === 1, '重複1・新規1 のうち新規1件だけ退避される (実際: ' . var_export($moved4, true) . ')');
+$hist4 = json_decode((string) file_get_contents($histPath), true);
+check(count($hist4) === 6, '履歴は6件(既存5＋新規1。重複は積まない)');
+// 「失敗F」が入り、「失敗C」は増えていない(1つのまま)。
+$countC = count(array_filter($hist4, static fn ($a) => ($a['message'] ?? '') === '失敗C'));
+$countF = count(array_filter($hist4, static fn ($a) => ($a['message'] ?? '') === '失敗F'));
+check($countC === 1 && $countF === 1, '失敗Cは1件のまま・失敗Fが1件追加');
+
 echo "\n✅ send_control_alert_history_test 完了\n";
