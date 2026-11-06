@@ -914,16 +914,30 @@ async function clearSendAlerts() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-// クリアして履歴へ移したアラートを後から閲覧する。新しい順の一覧をモーダルで出す。
-async function showSendAlertHistory() {
+// クリアして履歴へ移したアラートを後から閲覧する。キャンペーン単位で絞り込める。
+// selectedId: 未指定=全部 / 数値=そのキャンペーン(0=全体/旧)
+async function showSendAlertHistory(selectedId) {
   let d;
+  const query = { action: 'alerts_history' };
+  if (selectedId !== undefined && selectedId !== '' && selectedId !== 'all') query.id = selectedId;
   try {
-    d = await api('api/send_control.php', { query: { action: 'alerts_history' } });
+    d = await api('api/send_control.php', { query });
   } catch (e) { toast(e.message, 'err'); return; }
   const list = d.data || [];
-  const body = list.length
-    ? `<div class="small text-muted mb-2">クリアして履歴へ移したアラート（新しい順・全件）: ${list.length} 件</div>
-       <div style="max-height:60vh;overflow-y:auto">
+  const sources = d.sources || [];
+  // 絞り込みセレクト(履歴を持つソースのみ)。選択で再取得する。
+  const totalCount = sources.reduce((s, x) => s + (Number(x.count) || 0), 0);
+  const cur = (selectedId === undefined || selectedId === '') ? 'all' : String(selectedId);
+  const selector = `<div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+      <label class="small text-muted mb-0" for="sahSelect">キャンペーンで絞り込み</label>
+      <select class="form-select form-select-sm w-auto" id="sahSelect" onchange="showSendAlertHistory(this.value)">
+        <option value="all"${cur === 'all' ? ' selected' : ''}>すべて（${totalCount} 件）</option>
+        ${sources.map((s) => `<option value="${s.id}"${cur === String(s.id) ? ' selected' : ''}>${esc(s.name)}（${Number(s.count) || 0} 件）</option>`).join('')}
+      </select>
+    </div>`;
+  const rows = list.length
+    ? `<div class="small text-muted mb-2">新しい順・${list.length} 件</div>
+       <div style="max-height:55vh;overflow-y:auto">
          ${list.map((a) => {
            const sev = ALERT_SEVERITY[a.type] || 'secondary';
            return `<div class="small border-start border-3 border-${sev} ps-2 mb-1">
@@ -936,7 +950,8 @@ async function showSendAlertHistory() {
            </div>`;
          }).join('')}
        </div>`
-    : '<p class="text-muted mb-0">履歴はまだありません（アラートをクリアすると、ここに残ります）。</p>';
+    : '<p class="text-muted mb-0">この条件の履歴はありません（アラートをクリアすると、ここに残ります）。</p>';
+  const body = (sources.length ? selector : '') + rows;
   showInfoModal('アラート履歴', body, { size: 'lg' });
 }
 

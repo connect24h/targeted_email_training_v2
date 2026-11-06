@@ -41,8 +41,11 @@ $msgs = array_map(static fn ($a) => $a['message'] ?? '', $hist);
 check(in_array('遅延A', $msgs, true) && in_array('失敗B', $msgs, true), '履歴に元メッセージが残る');
 
 // 退避後、現役 send_alerts.json は空(=[] か不在)になる。
+// (空化は unlink→'[]'再作成方式。training所有で上書き不可なファイルでも効くようにした)
 $cur = is_file($alertsPath) ? json_decode((string) file_get_contents($alertsPath), true) : [];
 check($cur === [] || $cur === null, '退避後、現役アラートは空');
+check(is_file($alertsPath) && trim((string) file_get_contents($alertsPath)) === '[]',
+    '退避後、現役ファイルは [] に再作成される(unlink→再作成方式)');
 
 // 2回目: 新たな現役3件を置いて退避 → 履歴は 2+3=5 件に追記される(全件保持)。
 file_put_contents($alertsPath, json_encode([

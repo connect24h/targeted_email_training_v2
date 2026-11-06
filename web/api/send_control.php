@@ -34,6 +34,28 @@ function send_control_campaigns(int $tenantId): array
     );
 }
 
+/**
+ * アラートの集約・退避・履歴の対象ソース一覧。
+ * 各キャンペーンの data_dir に加え、後方互換のグローバル(/opt/training/bin/data)も
+ * 擬似ソース(id=0, name='(全体/旧)')として含める。これを含めないと、グローバルに溜まった
+ * アラートが画面に出続けてクリアしても消えない。
+ * 返り値: [['id'=>int,'name'=>string,'dir'=>string], ...]
+ */
+function send_control_sources(int $tenantId): array
+{
+    $sources = [];
+    foreach (send_control_campaigns($tenantId) as $c) {
+        $dir = rtrim((string) $c['data_dir'], '/');
+        if ($dir === '') {
+            continue;
+        }
+        $sources[] = ['id' => (int) $c['id'], 'name' => (string) $c['name'], 'dir' => $dir];
+    }
+    // グローバル(旧・全体)。dirname(SEND_GLOBAL_ALERTS) = /opt/training/bin/data
+    $sources[] = ['id' => 0, 'name' => '(全体/旧)', 'dir' => dirname(SEND_GLOBAL_ALERTS)];
+    return $sources;
+}
+
 /** JSON ファイルを配列で読む。無効/不在なら null。 */
 function send_control_read_json(string $path): mixed
 {
@@ -94,7 +116,11 @@ function send_control_append_history(string $dir): int
     if ($ok === false) {
         return 0; // 履歴書き込み失敗。現役は温存。
     }
-    // 退避成功。現役を空化([] を書く。unlink だと send_email.py が次に追記するとき作り直す手間が出るため空配列にする)。
+    // 退避成功。現役を空化する。
+    // send_alerts.json は送信ワーカー(training)所有で rw-r--r-- のことがあり、www-data(Apache)は
+    // 「上書き」できない。一方 data_dir は www-data 書込可なので、unlink してから '[]' を新規作成すれば
+    // 所有者差があっても空化できる(file_put_contents の上書きだけだと黙って失敗し、現役が消えない)。
+    @unlink($alertsPath);
     @file_put_contents($alertsPath, '[]', LOCK_EX);
     return count($stamped);
 }
@@ -228,11 +254,9 @@ try {
     }
 
     if ($action === 'alerts' && $method === 'GET') {
-        $campaigns = send_control_campaigns($tenantId);
         $all = [];
-        foreach ($campaigns as $c) {
-            $dir = rtrim((string) $c['data_dir'], '/');
-            $alerts = send_control_read_json($dir . '/send_alerts.json');
+        foreach (send_control_sources($tenantId) as $src) {
+            $alerts = send_control_read_json($src['dir'] . '/send_alerts.json');
             if ($alerts === null) {
                 continue;
             }
@@ -240,8 +264,8 @@ try {
                 if (!is_array($a)) {
                     continue;
                 }
-                $a['campaign_id']   = (int) $c['id'];
-                $a['campaign_name'] = (string) $c['name'];
+                $a['campaign_id']   = $src['id'];
+                $a['campaign_name'] = $src['name'];
                 $all[] = $a;
             }
         }
@@ -254,20 +278,27 @@ try {
     // クリアして履歴へ移したアラートを後から見返す。全キャンペーンの send_alerts_history.json を
     // 集めて timestamp 降順で返す(キャンペーン毎に全件保持)。?limit で上限(既定なし=全件)。
     if ($action === 'alerts_history' && $method === 'GET') {
-        $campaigns = send_control_campaigns($tenantId);
+        // ?id=<campaign_id> で特定キャンペーンに絞れる(0=全体/旧, 未指定=全ソース)。
+        $filterId = isset($_GET['id']) && $_GET['id'] !== '' ? (int) $_GET['id'] : null;
+        $sources = send_control_sources($tenantId);
+        // 絞り込みUI用に、履歴を持つソースの一覧も返す。
+        $sourceList = [];
         $all = [];
-        foreach ($campaigns as $c) {
-            $dir = rtrim((string) $c['data_dir'], '/');
-            $hist = send_control_read_json($dir . '/send_alerts_history.json');
-            if ($hist === null) {
+        foreach ($sources as $src) {
+            $hist = send_control_read_json($src['dir'] . '/send_alerts_history.json');
+            if ($hist === null || $hist === []) {
+                continue;
+            }
+            $sourceList[] = ['id' => $src['id'], 'name' => $src['name'], 'count' => count($hist)];
+            if ($filterId !== null && $src['id'] !== $filterId) {
                 continue;
             }
             foreach ($hist as $a) {
                 if (!is_array($a)) {
                     continue;
                 }
-                $a['campaign_id']   = (int) $c['id'];
-                $a['campaign_name'] = (string) $c['name'];
+                $a['campaign_id']   = $src['id'];
+                $a['campaign_name'] = $src['name'];
                 $all[] = $a;
             }
         }
@@ -276,33 +307,37 @@ try {
         if ($limit > 0) {
             $all = array_slice($all, 0, $limit);
         }
-        json_out(['success' => true, 'data' => $all]);
+        json_out(['success' => true, 'data' => $all, 'sources' => $sourceList]);
     }
 
     if ($action === 'clear_alerts' && $method === 'POST') {
         tet2_require_csrf();
-        // 対象キャンペーンの data_dir 配下 send_alerts.json を削除。
-        $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
-        $body = json_body();
-        if ($id === 0 && isset($body['id']) && is_int($body['id'])) {
-            $id = $body['id'];
-        }
         // クリア = 削除ではなく履歴(send_alerts_history.json)へ退避して現役を空にする。
         // こうすることで、後から alerts_history で履歴を見返せる(2026-11-06 依頼)。
-        if ($id > 0) {
+        // id の指定: GET/body の id。0=全体/旧(グローバル)のみ, >0=そのキャンペーンのみ,
+        //            未指定(キーなし)=全ソース(全キャンペーン＋グローバル)。
+        $body = json_body();
+        $hasId = isset($_GET['id']) && $_GET['id'] !== '';
+        $id = $hasId ? (int) $_GET['id'] : null;
+        if ($id === null && isset($body['id']) && is_int($body['id'])) {
+            $id = $body['id'];
+        }
+
+        if ($id !== null && $id > 0) {
             $c = assert_campaign_owned($id, $tenantId);
             $dir = rtrim((string) ($c['data_dir'] ?? ''), '/');
             if ($dir !== '') {
                 send_control_append_history($dir);
             }
             audit('send_control.clear_alerts', 'campaign_id=' . $id);
+        } elseif ($id === 0) {
+            // 全体/旧(グローバル)のみ退避。
+            send_control_append_history(dirname(SEND_GLOBAL_ALERTS));
+            audit('send_control.clear_alerts', 'global');
         } else {
-            // id 未指定: このテナントの全キャンペーン分を退避。
-            foreach (send_control_campaigns($tenantId) as $c) {
-                $dir = rtrim((string) $c['data_dir'], '/');
-                if ($dir !== '') {
-                    send_control_append_history($dir);
-                }
+            // 未指定: このテナントの全キャンペーン＋グローバルを退避。
+            foreach (send_control_sources($tenantId) as $src) {
+                send_control_append_history($src['dir']);
             }
             audit('send_control.clear_alerts', 'all');
         }
