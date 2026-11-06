@@ -9,6 +9,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/../lib/bootstrap.php';
+require_once __DIR__ . '/../lib/SimpleXlsx.php';
 
 // data_dir 内で閲覧を許可するファイル(CSVマスタ)
 const CAMPAIGN_DATA_FILES = ['list.csv', 'kenmei.csv', 'honbun.csv', 'Attachment.csv', 'URL.csv'];
@@ -29,6 +30,48 @@ function cf_query_int(string $key): ?int
     }
     $v = filter_var($_GET[$key], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
     return $v === false ? null : (int) $v;
+}
+
+/**
+ * data_dir 内の CSV マスタ(CAMPAIGN_DATA_FILES)を各1シートにした SimpleXlsx を組む。
+ * 存在するファイルだけをシートにし、1つもシートを作れなければ null を返す。
+ * (ハンドラと campaign_files_xlsx_test で共有し、二重実装を防ぐ)
+ */
+function cf_build_data_xlsx(string $dataDir): ?SimpleXlsx
+{
+    if ($dataDir === '') {
+        return null;
+    }
+    $xlsx = new SimpleXlsx();
+    $added = 0;
+    foreach (CAMPAIGN_DATA_FILES as $name) {
+        $path = rtrim($dataDir, '/') . '/' . $name;
+        if (!is_file($path)) {
+            continue;
+        }
+        $rows = [];
+        $handle = fopen($path, 'r');
+        if ($handle !== false) {
+            $headers = fgetcsv($handle);
+            if ($headers !== false) {
+                $rows[] = $headers;
+                $colN = count($headers);
+                while (($row = fgetcsv($handle)) !== false) {
+                    // 列数不一致に耐える(不足は空、超過は切り詰め)。content アクションと同方針。
+                    $rows[] = array_pad(array_slice($row, 0, $colN), $colN, '');
+                }
+            }
+            fclose($handle);
+        }
+        if ($rows === []) {
+            continue;
+        }
+        // シート名はファイル名から .csv を除く(SimpleXlsx が31文字・重複を処理)。
+        $sheetName = (string) preg_replace('/\.csv$/i', '', $name);
+        $xlsx->addSheet($sheetName, $rows);
+        $added++;
+    }
+    return $added > 0 ? $xlsx : null;
 }
 
 try {
@@ -111,6 +154,20 @@ try {
         // html: 生ソースを返す(表示側で esc する)
         $content = file_get_contents($path);
         json_out(['success' => true, 'type' => 'html', 'content' => $content === false ? '' : $content]);
+    }
+
+    // data_dir 内の CSV マスタ(5種)を、1ファイルの .xlsx に全部まとめてダウンロードする。
+    // 各 CSV を1シートに。認証マスタ HTML は Excel に向かないため含めない(個別DLは別UIにある)。
+    if ($action === 'export_xlsx') {
+        if ($dataDir === '') {
+            json_error('このキャンペーンにはまだデータがありません', 404);
+        }
+        $xlsx = cf_build_data_xlsx($dataDir);
+        if ($xlsx === null) {
+            json_error('ダウンロードできるデータがありません', 404);
+        }
+        $fname = 'campaign_' . $campaignId . '_data_' . date('Ymd') . '.xlsx';
+        $xlsx->download($fname); // Content-Type/Disposition を付けて exit する
     }
 
     json_error('不正なアクションです', 400);

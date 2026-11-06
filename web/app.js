@@ -2180,8 +2180,14 @@ async function showCampaignData(id) {
   const tabs = campaignDataCtx.files.map((f, i) =>
     `<button class="btn btn-sm ${i===0?'btn-primary':'btn-outline-secondary'} me-1 mb-1" ${f.exists?'':'disabled'}
        onclick="loadCampaignFile('${esc(f.file)}', this)">${esc(f.label)}${f.exists?'':'（無）'}</button>`).join('');
-  const body = `<div class="mb-2">${tabs}</div><div id="campaignFileView" class="small text-muted">ファイルを選択してください</div>`;
+  const hasCsv = campaignDataCtx.files.some((f) => f.kind === 'csv' && f.exists);
+  const dlBar = `<div class="d-flex justify-content-end mb-2">
+    <button type="button" class="btn btn-sm btn-outline-success" id="campaignDataXlsxBtn" ${hasCsv ? '' : 'disabled'}>
+      <i class="bi bi-file-earmark-excel me-1"></i>Excelで全部ダウンロード</button></div>`;
+  const body = `${dlBar}<div class="mb-2">${tabs}</div><div id="campaignFileView" class="small text-muted">ファイルを選択してください</div>`;
   showInfoModal('データビューア', body);
+  const xlsxBtn = document.getElementById('campaignDataXlsxBtn');
+  if (xlsxBtn) xlsxBtn.addEventListener('click', () => exportCampaignDataXlsx(id, xlsxBtn));
   const first = campaignDataCtx.files.find((f) => f.exists);
   if (first) loadCampaignFile(first.file, null);
 }
@@ -2201,6 +2207,36 @@ async function loadCampaignFile(file, btn) {
     view.innerHTML = `<div class="table-responsive" style="max-height:50vh;overflow:auto"><table class="table table-sm table-bordered">${thead}<tbody>${tbody || `<tr><td colspan="${headers.length||1}" class="text-muted">データなし</td></tr>`}</tbody></table></div>`;
   } else {
     view.innerHTML = `<pre class="border rounded p-2 bg-light" style="max-height:50vh;overflow:auto"><code>${esc(r.content || '')}</code></pre>`;
+  }
+}
+// データビューアの CSV マスタ(5種)を1ファイルの Excel(.xlsx)でまとめてダウンロードする。
+// サーバは各 CSV を1シートにし Content-Disposition: attachment で返す。404(データなし)は
+// ページ遷移せず toast で知らせたいので、fetch→blob で受ける(exportUsersCsv と同方式)。
+async function exportCampaignDataXlsx(id, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const tid = State.activeTenantId || State.user?.tenant_id;
+    const query = new URLSearchParams({ action: 'export_xlsx', id });
+    if (tid) query.set('tenant_id', tid);
+    const res = await fetch(`api/campaign_files.php?${query.toString()}`, { credentials: 'same-origin' });
+    if (!res.ok) {
+      // サーバは JSON でエラー理由を返す(404/403 等)。読めれば理由を出す。
+      let msg = `HTTP ${res.status}`;
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (_e) { /* JSON でなければ既定 */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `campaign_${id}_data_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    toast('Excel をダウンロードしました', 'ok');
+  } catch (e) {
+    toast(`ダウンロードに失敗しました（${e.message}）`, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
